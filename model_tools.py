@@ -27,9 +27,29 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple
 
 from tools.registry import registry
-from toolsets import resolve_toolset, validate_toolset
+from toolsets import MYNAH_RUNTIME_TOOLSET_NAMES, resolve_toolset, validate_toolset
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_mynah_production_mode() -> bool:
+    """Return True when Hermes should run in the locked-down MYNAH profile."""
+    return _env_flag("MYNAH_PRODUCTION_MODE", default=False)
+
+
+def _mynah_allows_mcp_discovery() -> bool:
+    return not is_mynah_production_mode()
+
+
+def _mynah_allows_plugin_discovery() -> bool:
+    return not is_mynah_production_mode()
 
 
 # =============================================================================
@@ -106,19 +126,27 @@ def _discover_tools():
 
 _discover_tools()
 
-# MCP tool discovery (external MCP servers from config)
-try:
-    from tools.mcp_tool import discover_mcp_tools
-    discover_mcp_tools()
-except Exception as e:
-    logger.debug("MCP tool discovery failed: %s", e)
+def _discover_dynamic_integrations() -> None:
+    if _mynah_allows_mcp_discovery():
+        try:
+            from tools.mcp_tool import discover_mcp_tools
+            discover_mcp_tools()
+        except Exception as e:
+            logger.debug("MCP tool discovery failed: %s", e)
+    else:
+        logger.info("MYNAH production mode enabled: skipping MCP discovery")
 
-# Plugin tool discovery (user/project/pip plugins)
-try:
-    from hermes_cli.plugins import discover_plugins
-    discover_plugins()
-except Exception as e:
-    logger.debug("Plugin discovery failed: %s", e)
+    if _mynah_allows_plugin_discovery():
+        try:
+            from hermes_cli.plugins import discover_plugins
+            discover_plugins()
+        except Exception as e:
+            logger.debug("Plugin discovery failed: %s", e)
+    else:
+        logger.info("MYNAH production mode enabled: skipping plugin discovery")
+
+
+_discover_dynamic_integrations()
 
 
 # =============================================================================
@@ -186,22 +214,46 @@ def get_tool_definitions(
     Returns:
         Filtered list of OpenAI-format tool definitions.
     """
+    production_mode = is_mynah_production_mode()
+
+    if production_mode:
+        if disabled_toolsets:
+            raise RuntimeError(
+                "MYNAH production mode requires explicit enabled_toolsets; disabled_toolsets are not supported"
+            )
+        if not enabled_toolsets:
+            raise RuntimeError(
+                "MYNAH production mode requires explicit enabled_toolsets"
+            )
+
     # Determine which tool names the caller wants
     tools_to_include: set = set()
 
     if enabled_toolsets:
         for toolset_name in enabled_toolsets:
+            if production_mode and toolset_name not in MYNAH_RUNTIME_TOOLSET_NAMES:
+                raise RuntimeError(
+                    f"Toolset '{toolset_name}' is not allowed in MYNAH production mode"
+                )
             if validate_toolset(toolset_name):
                 resolved = resolve_toolset(toolset_name)
                 tools_to_include.update(resolved)
                 if not quiet_mode:
                     print(f"✅ Enabled toolset '{toolset_name}': {', '.join(resolved) if resolved else 'no tools'}")
             elif toolset_name in _LEGACY_TOOLSET_MAP:
+                if production_mode:
+                    raise RuntimeError(
+                        f"Legacy toolset '{toolset_name}' is not allowed in MYNAH production mode"
+                    )
                 legacy_tools = _LEGACY_TOOLSET_MAP[toolset_name]
                 tools_to_include.update(legacy_tools)
                 if not quiet_mode:
                     print(f"✅ Enabled legacy toolset '{toolset_name}': {', '.join(legacy_tools)}")
             else:
+                if production_mode:
+                    raise RuntimeError(
+                        f"Unknown toolset '{toolset_name}' in MYNAH production mode"
+                    )
                 if not quiet_mode:
                     print(f"⚠️  Unknown toolset: {toolset_name}")
 
@@ -231,13 +283,14 @@ def get_tool_definitions(
 
     # Always include plugin-registered tools — they bypass the toolset filter
     # because their toolsets are dynamic (created at plugin load time).
-    try:
-        from hermes_cli.plugins import get_plugin_tool_names
-        plugin_tools = get_plugin_tool_names()
-        if plugin_tools:
-            tools_to_include.update(plugin_tools)
-    except Exception:
-        pass
+    if not production_mode:
+        try:
+            from hermes_cli.plugins import get_plugin_tool_names
+            plugin_tools = get_plugin_tool_names()
+            if plugin_tools:
+                tools_to_include.update(plugin_tools)
+        except Exception:
+            pass
 
     # Ask the registry for schemas (only returns tools whose check_fn passes)
     filtered_tools = registry.get_definitions(tools_to_include, quiet=quiet_mode)
