@@ -15,6 +15,7 @@ from hermes_cli.product_stack import (
     get_kanidm_compose_path,
     get_kanidm_data_root,
     get_kanidm_server_config_path,
+    get_oidc_client_bootstrap_status,
     initialize_product_stack,
     resolve_product_urls,
 )
@@ -102,6 +103,30 @@ def test_initialize_product_stack_reuses_existing_client_secret(tmp_path, monkey
     mock_save_env.assert_not_called()
 
 
+def test_get_oidc_client_bootstrap_status_blocks_localhost(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    config = load_product_config()
+    config["network"]["public_host"] = "localhost"
+
+    status = get_oidc_client_bootstrap_status(config)
+
+    assert status["status"] == "blocked"
+    assert "localhost" in status["reason"]
+
+
+def test_get_oidc_client_bootstrap_status_marks_non_localhost_pending(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    config = load_product_config()
+    config["network"]["public_host"] = "officebox.local"
+
+    status = get_oidc_client_bootstrap_status(config)
+
+    assert status["status"] == "pending"
+    assert "deferred" in status["reason"]
+
+
 def test_ensure_product_stack_started_uses_generated_compose_file(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
@@ -142,7 +167,7 @@ def test_ensure_kanidm_certificates_skips_when_files_exist(tmp_path, monkeypatch
     mock_run.assert_not_called()
 
 
-def test_bootstrap_first_admin_creates_person_and_stores_reset_link(tmp_path, monkeypatch):
+def test_bootstrap_first_admin_creates_person_and_stores_temporary_password(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     config = load_product_config()
@@ -167,7 +192,7 @@ def test_bootstrap_first_admin_creates_person_and_stores_reset_link(tmp_path, mo
         patch("hermes_cli.product_stack.subprocess.run", side_effect=_fake_run),
         patch(
             "hermes_cli.product_stack._bootstrap_first_admin_remote",
-            new=AsyncMock(return_value="https://localhost:8443/ui/reset?token=abc123"),
+            new=AsyncMock(return_value=None),
         ) as mock_remote_bootstrap,
     ):
         state = bootstrap_first_admin(config)

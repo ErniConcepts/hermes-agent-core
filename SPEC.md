@@ -85,6 +85,7 @@ The intended identity model is:
 - later users are created by an admin in the web UI
 - user recovery should use `Kanidm` native recovery actions rather than a product-owned password reset flow
 - the built-in `idm_admin` account remains an internal operator account and should not become the user-facing product admin
+- localhost development currently blocks final OIDC client registration in `Kanidm` because the current product auth flow is still confidential-client based while `localhost` needs the future public-client/PKCE path
 
 The bundled `Kanidm` service files should be generated under:
 
@@ -104,6 +105,7 @@ The first implementation should also treat these startup details as part of the 
 - service startup should use `docker compose up -d --wait --force-recreate` so changed container definitions are actually applied
 - the bundled container should run with the host uid/gid when available so the bind-mounted service directory remains accessible without loosening permissions
 - bundled admin bootstrap should use the official `kanidm` Python client for local provisioning rather than trying to automate the interactive CLI
+- setup should surface OIDC bootstrap status explicitly when the current local app origin is not yet compatible with the intended `Kanidm` client type
 
 The intended user-lifecycle flow is:
 

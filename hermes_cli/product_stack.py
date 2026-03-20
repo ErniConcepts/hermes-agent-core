@@ -112,6 +112,21 @@ def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]
     }
 
 
+def get_oidc_client_bootstrap_status(config: Dict[str, Any] | None = None) -> Dict[str, str]:
+    product_config = config or load_product_config()
+    urls = resolve_product_urls(product_config)
+    public_host = urls["public_host"]
+    if public_host == "localhost":
+        return {
+            "status": "blocked",
+            "reason": "localhost requires a Kanidm public client plus localhost redirects; the current product OIDC flow is still confidential-client based",
+        }
+    return {
+        "status": "pending",
+        "reason": "Kanidm OIDC client registration is deferred until the product app bootstrap supports the target client type and redirect contract",
+    }
+
+
 def _ensure_client_secret(config: Dict[str, Any]) -> str:
     env_key = str(config.get("auth", {}).get("client_secret_ref", "")).strip()
     if not env_key:

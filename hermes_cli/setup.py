@@ -3165,6 +3165,7 @@ def run_setup_wizard(args):
     from hermes_cli.product_stack import (
         bootstrap_first_admin,
         ensure_product_stack_started,
+        get_oidc_client_bootstrap_status,
         initialize_product_stack,
     )
 
@@ -3172,10 +3173,13 @@ def run_setup_wizard(args):
         try:
             ensure_product_stack_started()
             state = bootstrap_first_admin()
+            oidc_status = get_oidc_client_bootstrap_status()
             print_info("Bundled Kanidm service is up.")
             print_info(f"  First admin: {state['username']}")
             print_info(f"  First admin temporary password: {state['temporary_password']}")
             print_info(f"  Auth mode: {state['auth_mode']}")
+            if oidc_status["status"] != "ready":
+                print_warning(f"OIDC client bootstrap {oidc_status['status']}: {oidc_status['reason']}")
         except FileNotFoundError:
             print_warning("Docker was not found. The bundled Kanidm service was generated but not started.")
         except Exception as exc:

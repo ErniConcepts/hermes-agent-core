@@ -75,6 +75,7 @@ Do not mark work done early.
 - Use the official `kanidm` Python client for automated local provisioning; do not try to automate the interactive `kanidm` CLI for installer bootstrap.
 - Treat the built-in `idm_admin` account as an internal operator identity only. Do not promote the user-facing product admin into `idm_admins` during setup.
 - The current supported first-admin bootstrap flow is a one-time local temporary password issued via `recover-account`, not a setup-generated reset link.
+- Do not pretend the OIDC client is registered when the current app-origin/client-type combination is unsupported. Surface the bootstrap status explicitly instead.
 
 ## Local process hygiene
 
