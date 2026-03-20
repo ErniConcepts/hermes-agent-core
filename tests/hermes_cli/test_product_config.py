@@ -31,7 +31,7 @@ def test_load_product_config_returns_defaults_when_missing(tmp_path, monkeypatch
 
     config = load_product_config()
 
-    assert config["auth"]["provider"] == "kanidm"
+    assert config["auth"]["provider"] == "pocket-id"
     assert config["auth"]["mode"] == "passkey"
     assert config["runtime"]["default_toolset"] == DEFAULT_PRODUCT_CONFIG["runtime"]["default_toolset"]
 
@@ -47,7 +47,7 @@ def test_save_product_config_roundtrip_and_merge(tmp_path, monkeypatch):
     reloaded = load_product_config()
     assert reloaded["product"]["brand"]["name"] == "Erni Agent"
     assert reloaded["runtime"]["default_profile"] == "tier2"
-    assert reloaded["auth"]["provider"] == "kanidm"
+    assert reloaded["auth"]["provider"] == "pocket-id"
 
     saved = yaml.safe_load(get_product_config_path().read_text(encoding="utf-8"))
     assert saved["product"]["brand"]["name"] == "Erni Agent"

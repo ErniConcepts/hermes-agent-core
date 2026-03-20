@@ -28,7 +28,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         },
     },
     "auth": {
-        "provider": "kanidm",
+        "provider": "pocket-id",
         "mode": "passkey",
         "issuer_url": "",
         "client_id": "hermes-core",
@@ -38,7 +38,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         "bind_host": "0.0.0.0",
         "public_host": "localhost",
         "app_port": 8086,
-        "kanidm_port": 8443,
+        "pocket_id_port": 1411,
         "tailscale": {
             "enabled": False,
         },
@@ -65,12 +65,14 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
     "bootstrap": {
         "first_admin_username": "admin",
         "first_admin_display_name": "Administrator",
-        "first_admin_reset_ttl_seconds": 86400,
+        "first_admin_email": "",
     },
     "services": {
-        "kanidm": {
+        "pocket_id": {
             "mode": "docker",
-            "container_name": "hermes-kanidm",
+            "container_name": "hermes-pocket-id",
+            "static_api_key_ref": "HERMES_POCKET_ID_STATIC_API_KEY",
+            "encryption_key_ref": "HERMES_POCKET_ID_ENCRYPTION_KEY",
         },
     },
 }

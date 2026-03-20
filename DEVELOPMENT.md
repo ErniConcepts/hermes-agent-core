@@ -50,7 +50,8 @@ Do not mark work done early.
 
 - The fork is treated as a supplier-curated `hermes-core` distribution.
 - End-user branding should come from setup-owned product config, not hardcoded MYNAH branding.
-- `Kanidm` is the preferred auth direction for the product layer.
+- `Pocket ID` is the preferred auth direction for the product layer.
+- The preferred auth experience is passkey-first local onboarding without SMTP.
 - The setup CLI should be the source of truth for product-wide settings.
 - The browser admin UI should remain narrow and should not become a general product-config console in the first version.
 
@@ -63,19 +64,23 @@ Do not mark work done early.
 - SSH validation on the separate Linux laptop is part of the normal closed-loop workflow when auth, Docker stack generation, runtime isolation, or filesystem-mount behavior changes.
 - Temporary SSH validation workspaces, helper scripts, containers, and logs must be cleaned up after testing.
 
-## Kanidm-specific rules
+## Pocket ID-specific rules
 
 - `network.public_host` must be a hostname or domain, not a raw IP address.
 - Default local `public_host` is `localhost`.
 - Treat `bind_host` and `public_host` as separate concerns in setup and implementation.
-- For the bundled `Kanidm` stack, generate certificates before starting the compose service.
-- The generated `Kanidm` service should run `kanidmd` directly, not through a shell entrypoint assumption.
-- Start or restart the bundled `Kanidm` stack with `docker compose up -d --wait --force-recreate` so changed container definitions are actually applied.
-- When bind-mounting the service data directory, run the container with the host uid/gid when available so secure local permissions still work on Linux.
-- Use the official `kanidm` Python client for automated local provisioning; do not try to automate the interactive `kanidm` CLI for installer bootstrap.
-- Treat the built-in `idm_admin` account as an internal operator identity only. Do not promote the user-facing product admin into `idm_admins` during setup.
-- The current supported first-admin bootstrap flow is a one-time local temporary password issued via `recover-account`, not a setup-generated reset link.
-- Do not pretend the OIDC client is registered when the current app-origin/client-type combination is unsupported. Surface the bootstrap status explicitly instead.
+- Bundle `Pocket ID` as a product-managed local auth service rather than requiring external SMTP-backed identity infrastructure.
+- Prefer native `Pocket ID` onboarding primitives such as signup tokens or login codes over custom product-owned invite/reset flows.
+- Keep the product auth flow passkey-first by default. Password-first remains a supported setup choice only if the underlying `Pocket ID` flow supports it cleanly without product-side auth hacks.
+- Keep the product app as a standard OIDC client. Avoid provider-specific product logic unless the provider workflow genuinely requires it.
+- Start or restart the bundled auth stack with `docker compose up -d --wait --force-recreate` so changed container definitions are actually applied.
+- The bundled Pocket ID service contract currently relies on:
+  - `APP_URL`
+  - `ENCRYPTION_KEY`
+  - `STATIC_API_KEY`
+- The setup flow should use `STATIC_API_KEY` for setup-time admin API work such as OIDC client bootstrap. Do not shell into containers for provider mutations.
+- The first-admin setup contract is the native Pocket ID `/setup` flow. Do not recreate the old temporary-password bootstrap pattern in product code.
+- If the first-admin setup state is persisted locally, it should only contain non-secret enrollment metadata such as username, display name, email, setup URL, and client id.
 
 ## Local process hygiene
 

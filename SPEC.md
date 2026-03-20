@@ -54,9 +54,9 @@ The first implementation should distinguish:
 - `network.bind_host` for local service binding
 - `network.public_host` for generated local URLs and OIDC-facing origins
 
-For the `Kanidm`-backed product flow:
+For the product auth flow:
 
-- `network.public_host` must be a hostname or domain, not a raw IP address
+- `network.public_host` must still be treated as the user-facing host used in generated URLs
 - the default local value should be `localhost`
 - setup must ask for the user-facing hostname separately from the bind address
 
@@ -66,7 +66,7 @@ The first implementation should keep Hermes' existing `config.yaml` for generic 
 
 ## Authentication Direction
 
-The preferred identity system for this pivot is `Kanidm`.
+The preferred identity system for this pivot is `Pocket ID`.
 
 Reasons:
 
@@ -75,48 +75,46 @@ Reasons:
 - the product needs local-first user creation, activation, and recovery flows
 - the supplier must be able to bootstrap the first admin during setup
 - later admins must be able to create additional users from the web UI
+- passkey-first authentication is acceptable and now preferred if it materially simplifies local product auth
 
 The intended identity model is:
 
-- `Kanidm` provides identity, login, credential enrollment, and recovery flows
+- `Pocket ID` provides identity, login, passkey enrollment, signup-token/login-code onboarding, and OIDC
 - the product remains an OIDC client and still owns its own application session and authorization model
-- bundled `Kanidm` should run as a local Docker-managed service in the first implementation
+- bundled `Pocket ID` should run as a local Docker-managed service in the first implementation
 - the supplier bootstraps the first product admin during setup
 - later users are created by an admin in the web UI
-- user recovery should use `Kanidm` native recovery actions rather than a product-owned password reset flow
-- the built-in `idm_admin` account remains an internal operator account and should not become the user-facing product admin
-- localhost development currently blocks final OIDC client registration in `Kanidm` because the current product auth flow is still confidential-client based while `localhost` needs the future public-client/PKCE path
+- user onboarding and recovery should use native `Pocket ID` login-code/signup-token flows rather than a product-owned password reset flow
+- the first product admin should be able to enroll directly during setup without requiring an SMTP service or a separate identity admin account
 
-The bundled `Kanidm` service files should be generated under:
+The bundled `Pocket ID` service files should be generated under:
 
-- `HERMES_HOME/product/services/kanidm`
+- `HERMES_HOME/product/services/pocket-id`
 
 The first implementation should generate:
 
-- a Docker Compose file for the bundled `Kanidm` service
-- a local `server.toml` for the service
+- a Docker Compose file for the bundled `Pocket ID` service
+- a local `.env` file for the bundled service with `APP_URL`, `ENCRYPTION_KEY`, and `STATIC_API_KEY`
+- persistent storage bindings under `HERMES_HOME/product/services/pocket-id/data`
 - a local OIDC client secret reference stored outside `product.yaml`
-- local TLS material generated before service startup
 
 The first implementation should also treat these startup details as part of the contract:
 
-- `Kanidm` certificate generation must happen before `compose up`
-- the generated service should run `kanidmd` directly, not through a shell wrapper
-- service startup should use `docker compose up -d --wait --force-recreate` so changed container definitions are actually applied
-- the bundled container should run with the host uid/gid when available so the bind-mounted service directory remains accessible without loosening permissions
-- bundled admin bootstrap should use the official `kanidm` Python client for local provisioning rather than trying to automate the interactive CLI
-- setup should surface OIDC bootstrap status explicitly when the current local app origin is not yet compatible with the intended `Kanidm` client type
+- service startup should use a reproducible Docker path and should recreate changed container definitions cleanly
+- bundled auth bootstrap should use the supported `Pocket ID` admin/API surface rather than shelling into containers for identity mutations
+- setup should bootstrap the product's OIDC client through the `STATIC_API_KEY` admin surface
+- setup should surface the native `Pocket ID` `/setup` flow for first-admin enrollment instead of inventing a product-owned password bootstrap
+- localhost development should be a first-class supported path, not a degraded special case
 
 The intended user-lifecycle flow is:
 
-1. supplier setup creates the first product admin account in `Kanidm`
-2. setup issues a one-time local temporary password for that first product admin
-3. the first product admin signs into the authenticated local web app through `Kanidm`
+1. supplier setup bootstraps the bundled `Pocket ID` service and product OIDC client
+2. supplier setup surfaces the native `Pocket ID` setup URL for first-admin enrollment
+3. the first product admin signs into the authenticated local web app through `Pocket ID`
 4. admin creates additional users in the web UI
-5. the product service provisions those users into `Kanidm`
-6. admin issues a native `Kanidm` recovery or reset action for first access
-7. the user completes credential enrollment through `Kanidm`
-8. the product continues to treat `Kanidm` as the login authority and OIDC provider
+5. the product service issues native `Pocket ID` signup tokens or login codes for those users
+6. each user completes passkey enrollment through `Pocket ID`
+7. the product continues to treat `Pocket ID` as the login authority and OIDC provider
 
 The first setup flow should start the stack automatically after config generation and first-admin bootstrap.
 
@@ -131,7 +129,7 @@ The default should be:
 
 Hybrid auth mode should not be part of the first design.
 
-`Pocket ID` remains a possible later alternative if passkey-first simplicity becomes more valuable than the added depth of `Kanidm`.
+Password-first auth is no longer the preferred default. If a password mode ever returns, it should be justified as a separate product policy, not kept as silent compatibility baggage.
 
 ## Runtime and Tool Model
 
@@ -241,7 +239,6 @@ then it should not be implemented as a deep patch to Hermes core.
 
 This pivot still requires concrete design work in these areas:
 
-- exact `Kanidm` integration contract
 - exact tool execution metadata and broker model
 - exact live-mounted workspace lifecycle and isolation rules
 - exact separation between Hermes core, runtime wrapper, and product service

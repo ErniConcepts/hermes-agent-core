@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
-import re
 import secrets
 import subprocess
-from importlib import import_module
+import time
 from pathlib import Path
 from typing import Any, Dict
+
+import httpx
 
 from hermes_cli.config import _secure_dir, _secure_file, get_env_value, save_env_value_secure
 from hermes_cli.product_config import (
@@ -21,37 +23,36 @@ from hermes_cli.product_config import (
 from utils import atomic_json_write, atomic_yaml_write
 
 
-KANIDM_IMAGE = "kanidm/server:latest"
-IDM_ADMIN_NAME = "idm_admin"
-_RECOVER_PASSWORD_RE = re.compile(r'new_password:\s*"([^"]+)"')
+POCKET_ID_IMAGE = "ghcr.io/pocket-id/pocket-id:v2"
+_READY_TIMEOUT_SECONDS = 45.0
 
 
 def get_product_services_root() -> Path:
     return get_product_storage_root() / "services"
 
 
-def get_kanidm_service_root() -> Path:
-    return get_product_services_root() / "kanidm"
+def get_pocket_id_service_root() -> Path:
+    return get_product_services_root() / "pocket-id"
 
 
-def get_kanidm_data_root() -> Path:
-    return get_kanidm_service_root() / "data"
+def get_pocket_id_data_root() -> Path:
+    return get_pocket_id_service_root() / "data"
 
 
 def get_product_bootstrap_root() -> Path:
     return get_product_storage_root() / "bootstrap"
 
 
-def get_first_admin_state_path() -> Path:
-    return get_product_bootstrap_root() / "first_admin.json"
+def get_first_admin_enrollment_state_path() -> Path:
+    return get_product_bootstrap_root() / "first_admin_enrollment.json"
 
 
-def get_kanidm_compose_path() -> Path:
-    return get_kanidm_service_root() / "compose.yaml"
+def get_pocket_id_compose_path() -> Path:
+    return get_pocket_id_service_root() / "compose.yaml"
 
 
-def get_kanidm_server_config_path() -> Path:
-    return get_kanidm_data_root() / "server.toml"
+def get_pocket_id_env_path() -> Path:
+    return get_pocket_id_service_root() / ".env"
 
 
 def _secure_tree(*paths: Path) -> None:
@@ -101,36 +102,19 @@ def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]
     public_host = _public_host(product_config)
     _validate_public_host(public_host)
     app_port = int(network.get("app_port", 8086))
-    kanidm_port = int(network.get("kanidm_port", 8443))
+    pocket_id_port = int(network.get("pocket_id_port", 1411))
     app_base_url = f"http://{public_host}:{app_port}"
-    issuer_url = f"https://{public_host}:{kanidm_port}"
+    issuer_url = f"http://{public_host}:{pocket_id_port}"
     return {
         "public_host": public_host,
         "app_base_url": app_base_url,
         "issuer_url": issuer_url,
         "oidc_callback_url": f"{app_base_url}/api/auth/oidc/callback",
+        "pocket_id_setup_url": f"{issuer_url}/setup",
     }
 
 
-def get_oidc_client_bootstrap_status(config: Dict[str, Any] | None = None) -> Dict[str, str]:
-    product_config = config or load_product_config()
-    urls = resolve_product_urls(product_config)
-    public_host = urls["public_host"]
-    if public_host == "localhost":
-        return {
-            "status": "blocked",
-            "reason": "localhost requires a Kanidm public client plus localhost redirects; the current product OIDC flow is still confidential-client based",
-        }
-    return {
-        "status": "pending",
-        "reason": "Kanidm OIDC client registration is deferred until the product app bootstrap supports the target client type and redirect contract",
-    }
-
-
-def _ensure_client_secret(config: Dict[str, Any]) -> str:
-    env_key = str(config.get("auth", {}).get("client_secret_ref", "")).strip()
-    if not env_key:
-        raise ValueError("auth.client_secret_ref must be configured in product.yaml")
+def _required_secret(config: Dict[str, Any], env_key: str) -> str:
     current = (get_env_value(env_key) or "").strip()
     if current:
         return current
@@ -139,48 +123,81 @@ def _ensure_client_secret(config: Dict[str, Any]) -> str:
     return generated
 
 
-def _build_server_config(config: Dict[str, Any]) -> str:
-    urls = resolve_product_urls(config)
-    kanidm_port = int(config.get("network", {}).get("kanidm_port", 8443))
-    return (
-        'version = "2"\n'
-        f'domain = "{urls["public_host"]}"\n'
-        f'origin = "{urls["issuer_url"]}"\n'
-        f'bindaddress = "0.0.0.0:{kanidm_port}"\n'
-        'db_path = "/data/kanidm.db"\n'
-        'tls_chain = "/data/chain.pem"\n'
-        'tls_key = "/data/key.pem"\n'
+def _ensure_client_secret(config: Dict[str, Any]) -> str:
+    env_key = str(config.get("auth", {}).get("client_secret_ref", "")).strip()
+    if not env_key:
+        raise ValueError("auth.client_secret_ref must be configured in product.yaml")
+    return _required_secret(config, env_key)
+
+
+def _ensure_static_api_key(config: Dict[str, Any]) -> str:
+    env_key = str(
+        config.get("services", {}).get("pocket_id", {}).get("static_api_key_ref", "")
+    ).strip()
+    if not env_key:
+        raise ValueError("services.pocket_id.static_api_key_ref must be configured in product.yaml")
+    return _required_secret(config, env_key)
+
+
+def _ensure_encryption_key(config: Dict[str, Any]) -> str:
+    env_key = str(
+        config.get("services", {}).get("pocket_id", {}).get("encryption_key_ref", "")
+    ).strip()
+    if not env_key:
+        raise ValueError("services.pocket_id.encryption_key_ref must be configured in product.yaml")
+    current = (get_env_value(env_key) or "").strip()
+    if current:
+        return current
+    generated = secrets.token_urlsafe(32)
+    save_env_value_secure(env_key, generated)
+    return generated
+
+
+def _build_env_file(config: Dict[str, Any]) -> str:
+    network = config.get("network", {})
+    services_cfg = config.get("services", {}).get("pocket_id", {})
+    return "\n".join(
+        [
+            f"APP_URL={resolve_product_urls(config)['issuer_url']}",
+            f"ENCRYPTION_KEY={_ensure_encryption_key(config)}",
+            f"STATIC_API_KEY={_ensure_static_api_key(config)}",
+            f"PUID={services_cfg.get('puid', 1000)}",
+            f"PGID={services_cfg.get('pgid', 1000)}",
+            f"HOST={network.get('bind_host', '0.0.0.0')}",
+            "PORT=1411",
+            "",
+        ]
     )
 
 
 def _build_compose_spec(config: Dict[str, Any]) -> Dict[str, Any]:
     network = config.get("network", {})
-    services_cfg = config.get("services", {}).get("kanidm", {})
+    services_cfg = config.get("services", {}).get("pocket_id", {})
     bind_host = str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0"
-    kanidm_port = int(network.get("kanidm_port", 8443))
-    container_name = str(services_cfg.get("container_name", "hermes-kanidm")).strip() or "hermes-kanidm"
-    data_root = get_kanidm_data_root().as_posix()
+    pocket_id_port = int(network.get("pocket_id_port", 1411))
+    container_name = (
+        str(services_cfg.get("container_name", "hermes-pocket-id")).strip() or "hermes-pocket-id"
+    )
+    data_root = get_pocket_id_data_root().as_posix()
     service: Dict[str, Any] = {
-        "image": str(services_cfg.get("image", KANIDM_IMAGE) or KANIDM_IMAGE),
+        "image": str(services_cfg.get("image", POCKET_ID_IMAGE) or POCKET_ID_IMAGE),
         "container_name": container_name,
         "restart": "unless-stopped",
-        "ports": [f"{bind_host}:{kanidm_port}:8443"],
-        "volumes": [f"{data_root}:/data"],
-        "command": [
-            "/sbin/kanidmd",
-            "server",
-            "-c",
-            "/data/server.toml",
-        ],
+        "env_file": [get_pocket_id_env_path().as_posix()],
+        "ports": [f"{bind_host}:{pocket_id_port}:1411"],
+        "volumes": [f"{data_root}:/app/data"],
+        "healthcheck": {
+            "test": ["CMD", "/app/pocket-id", "healthcheck"],
+            "interval": "90s",
+            "timeout": "5s",
+            "retries": 2,
+            "start_period": "10s",
+        },
     }
     runtime_user = str(services_cfg.get("user", "")).strip()
     if runtime_user:
         service["user"] = runtime_user
-    return {
-        "services": {
-            "kanidm": service
-        }
-    }
+    return {"services": {"pocket-id": service}}
 
 
 def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -188,206 +205,180 @@ def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, 
     ensure_product_home()
     _secure_tree(
         get_product_services_root(),
-        get_kanidm_service_root(),
-        get_kanidm_data_root(),
+        get_pocket_id_service_root(),
+        get_pocket_id_data_root(),
         get_product_bootstrap_root(),
     )
 
     urls = resolve_product_urls(product_config)
     product_config.setdefault("network", {})["public_host"] = urls["public_host"]
-    product_config.setdefault("auth", {})["provider"] = "kanidm"
+    product_config.setdefault("auth", {})["provider"] = "pocket-id"
     product_config["auth"]["issuer_url"] = urls["issuer_url"]
-    product_config.setdefault("services", {}).setdefault("kanidm", {})
-    product_config["services"]["kanidm"].setdefault("mode", "docker")
-    product_config["services"]["kanidm"].setdefault("container_name", "hermes-kanidm")
-    product_config["services"]["kanidm"].setdefault("image", KANIDM_IMAGE)
+    product_config.setdefault("services", {}).setdefault("pocket_id", {})
+    product_config["services"]["pocket_id"].setdefault("mode", "docker")
+    product_config["services"]["pocket_id"].setdefault("container_name", "hermes-pocket-id")
+    product_config["services"]["pocket_id"].setdefault("image", POCKET_ID_IMAGE)
+    product_config["services"]["pocket_id"].setdefault("puid", 1000)
+    product_config["services"]["pocket_id"].setdefault("pgid", 1000)
     runtime_user = _runtime_user_spec()
     if runtime_user:
-        product_config["services"]["kanidm"].setdefault("user", runtime_user)
+        product_config["services"]["pocket_id"].setdefault("user", runtime_user)
 
     _ensure_client_secret(product_config)
 
-    server_config_path = get_kanidm_server_config_path()
-    server_config_path.write_text(_build_server_config(product_config), encoding="utf-8")
-    _secure_file(server_config_path)
+    env_path = get_pocket_id_env_path()
+    env_path.write_text(_build_env_file(product_config), encoding="utf-8")
+    _secure_file(env_path)
 
-    atomic_yaml_write(get_kanidm_compose_path(), _build_compose_spec(product_config))
-    _secure_file(get_kanidm_compose_path())
+    compose_path = get_pocket_id_compose_path()
+    atomic_yaml_write(compose_path, _build_compose_spec(product_config))
+    _secure_file(compose_path)
 
     save_product_config(product_config)
     return product_config
 
 
-def ensure_kanidm_certificates(config: Dict[str, Any] | None = None) -> None:
-    product_config = config or load_product_config()
-    data_root = get_kanidm_data_root()
-    key_path = data_root / "key.pem"
-    chain_path = data_root / "chain.pem"
-    if key_path.exists() and chain_path.exists():
-        return
-
-    image = str(product_config.get("services", {}).get("kanidm", {}).get("image", KANIDM_IMAGE) or KANIDM_IMAGE)
-    command = [
-        "docker",
-        "run",
-        "--rm",
-    ]
-    runtime_user = str(product_config.get("services", {}).get("kanidm", {}).get("user", "")).strip()
-    if runtime_user:
-        command.extend(["--user", runtime_user])
-    command.extend(
-        [
-            "-v",
-            f"{data_root.as_posix()}:/data",
-            image,
-            "/sbin/kanidmd",
-            "cert-generate",
-            "-c",
-            "/data/server.toml",
-        ]
-    )
-    subprocess.run(command, check=True, capture_output=True, text=True)
-    for path in (key_path, chain_path, data_root / "cert.pem", data_root / "ca.pem", data_root / "cakey.pem"):
-        if path.exists():
-            _secure_file(path)
-
-
-def _docker_exec_command(
-    config: Dict[str, Any],
-    *args: str,
-    exec_user: str | None = None,
-) -> list[str]:
-    container_name = str(
-        config.get("services", {}).get("kanidm", {}).get("container_name", "hermes-kanidm")
-    ).strip() or "hermes-kanidm"
-    command = ["docker", "exec", "-w", "/"]
-    runtime_user = str(config.get("services", {}).get("kanidm", {}).get("user", "")).strip()
-    selected_user = runtime_user if exec_user is None else exec_user
-    if selected_user:
-        command.extend(["-u", selected_user])
-    command.extend([container_name, *args])
-    return command
-
-
-def _recover_account_password(config: Dict[str, Any], account_name: str) -> str:
-    result = subprocess.run(
-        _docker_exec_command(
-            config,
-            "/sbin/kanidmd",
-            "-c",
-            "/data/server.toml",
-            "recover-account",
-            account_name,
-            exec_user="0:0",
-        ),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    match = _RECOVER_PASSWORD_RE.search(result.stdout + "\n" + result.stderr)
-    if not match:
-        raise RuntimeError(f"Could not parse recovery password for {account_name} from Kanidm output")
-    return match.group(1)
-
-
-def _kanidm_module():
-    try:
-        return import_module("kanidm")
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "The 'kanidm' Python package is required for bundled product bootstrap. "
-            "Install hermes-agent with the updated product dependencies."
-        ) from exc
-
-
-def _authenticated_kanidm_admin_client(config: Dict[str, Any]):
-    kanidm = _kanidm_module()
-    return kanidm, kanidm.KanidmClient(
-        uri=resolve_product_urls(config)["issuer_url"],
-        verify_hostnames=False,
-        ca_path=str(get_kanidm_data_root() / "ca.pem"),
-    )
-
-
-async def _bootstrap_first_admin_remote(
-    config: Dict[str, Any],
-    password: str,
-    username: str,
-    display_name: str,
-    ttl_seconds: int,
-) -> None:
-    kanidm, client = _authenticated_kanidm_admin_client(config)
-    try:
-        await client.authenticate_password(
-            username=IDM_ADMIN_NAME,
-            password=password,
-            update_internal_auth_token=True,
-        )
-        try:
-            existing_person = await client.person_account_get(username)
-        except (kanidm.NoMatchingEntries, AttributeError):
-            existing_person = None
-        if existing_person is None:
-            await client.person_account_create(username, display_name)
-    finally:
-        await client.openapi_client.close()
-
-
-def load_first_admin_state() -> Dict[str, Any] | None:
-    state_path = get_first_admin_state_path()
-    if not state_path.exists():
-        return None
-    import json
-
-    return json.loads(state_path.read_text(encoding="utf-8"))
-
-
-def bootstrap_first_admin(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    product_config = initialize_product_stack(config or load_product_config())
-    username = str(product_config.get("bootstrap", {}).get("first_admin_username", "admin")).strip() or "admin"
-    display_name = str(
-        product_config.get("bootstrap", {}).get("first_admin_display_name", "Administrator")
-    ).strip() or "Administrator"
-    ttl_seconds = int(product_config.get("bootstrap", {}).get("first_admin_reset_ttl_seconds", 86400))
-
-    existing_state = load_first_admin_state()
-    if existing_state and existing_state.get("username") == username and existing_state.get("temporary_password"):
-        return existing_state
-
-    ensure_product_stack_started(product_config)
-    password = _recover_account_password(product_config, IDM_ADMIN_NAME)
-    import asyncio
-
-    asyncio.run(
-        _bootstrap_first_admin_remote(
-            product_config,
-            password,
-            username,
-            display_name,
-            ttl_seconds,
-        )
-    )
-    temporary_password = _recover_account_password(product_config, username)
-
-    state = {
-        "username": username,
-        "display_name": display_name,
-        "temporary_password": temporary_password,
-        "auth_mode": str(product_config.get("auth", {}).get("mode", "passkey")).strip() or "passkey",
-    }
-    state_path = get_first_admin_state_path()
-    atomic_json_write(state_path, state)
-    _secure_file(state_path)
-    return state
-
-
 def ensure_product_stack_started(config: Dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     product_config = config or initialize_product_stack()
-    ensure_kanidm_certificates(product_config)
-    compose_path = get_kanidm_compose_path()
+    compose_path = get_pocket_id_compose_path()
     return subprocess.run(
         ["docker", "compose", "-f", str(compose_path), "up", "-d", "--wait", "--force-recreate"],
         check=True,
         capture_output=True,
         text=True,
     )
+
+
+def _wait_for_pocket_id_ready(config: Dict[str, Any], timeout_seconds: float = _READY_TIMEOUT_SECONDS) -> None:
+    health_url = resolve_product_urls(config)["issuer_url"] + "/api/healthz"
+    deadline = time.time() + timeout_seconds
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            response = httpx.get(health_url, timeout=5.0)
+            if response.status_code == 200:
+                return
+            last_error = RuntimeError(f"Pocket ID health endpoint returned {response.status_code}")
+        except Exception as exc:  # pragma: no cover - exercised via retry path
+            last_error = exc
+        time.sleep(1.0)
+    raise RuntimeError(f"Pocket ID did not become ready at {health_url}: {last_error}")
+
+
+def _api_headers(config: Dict[str, Any]) -> Dict[str, str]:
+    return {"X-API-Key": _ensure_static_api_key(config)}
+
+
+def _oidc_client_payload(config: Dict[str, Any]) -> Dict[str, Any]:
+    urls = resolve_product_urls(config)
+    brand_name = str(config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip() or "Hermes Core"
+    return {
+        "id": str(config.get("auth", {}).get("client_id", "hermes-core")).strip() or "hermes-core",
+        "name": brand_name,
+        "callbackURLs": [urls["oidc_callback_url"]],
+        "logoutCallbackURLs": [urls["app_base_url"]],
+        "isPublic": False,
+        "pkceEnabled": True,
+        "requiresReauthentication": False,
+        "credentials": {"federatedIdentities": []},
+        "launchURL": urls["app_base_url"],
+        "hasLogo": False,
+        "hasDarkLogo": False,
+        "isGroupRestricted": False,
+    }
+
+
+def _request_json(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    *,
+    expected_status: int,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    response = client.request(method, url, **kwargs)
+    if response.status_code != expected_status:
+        raise RuntimeError(f"{method} {url} failed with {response.status_code}: {response.text}")
+    return response.json() if response.content else {}
+
+
+def bootstrap_product_oidc_client(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    product_config = initialize_product_stack(config or load_product_config())
+    ensure_product_stack_started(product_config)
+    _wait_for_pocket_id_ready(product_config)
+
+    urls = resolve_product_urls(product_config)
+    client_payload = _oidc_client_payload(product_config)
+    client_id = client_payload["id"]
+    base_url = urls["issuer_url"]
+    headers = _api_headers(product_config)
+
+    with httpx.Client(base_url=base_url, headers=headers, timeout=10.0) as client:
+        get_response = client.get(f"/api/oidc/clients/{client_id}")
+        if get_response.status_code == 404:
+            _request_json(client, "POST", "/api/oidc/clients", expected_status=201, json=client_payload)
+        elif get_response.status_code == 200:
+            _request_json(
+                client,
+                "PUT",
+                f"/api/oidc/clients/{client_id}",
+                expected_status=200,
+                json={key: value for key, value in client_payload.items() if key != "id"},
+            )
+        else:
+            raise RuntimeError(
+                f"GET {base_url}/api/oidc/clients/{client_id} failed with "
+                f"{get_response.status_code}: {get_response.text}"
+            )
+
+        secret_response = _request_json(
+            client,
+            "POST",
+            f"/api/oidc/clients/{client_id}/secret",
+            expected_status=200,
+        )
+
+    client_secret = str(secret_response.get("secret", "")).strip()
+    if not client_secret:
+        raise RuntimeError("Pocket ID did not return an OIDC client secret")
+    save_env_value_secure(str(product_config["auth"]["client_secret_ref"]), client_secret)
+    return {
+        "client_id": client_id,
+        "issuer_url": urls["issuer_url"],
+        "callback_url": urls["oidc_callback_url"],
+    }
+
+
+def load_first_admin_enrollment_state() -> Dict[str, Any] | None:
+    state_path = get_first_admin_enrollment_state_path()
+    if not state_path.exists():
+        return None
+    return json.loads(state_path.read_text(encoding="utf-8"))
+
+
+def bootstrap_first_admin_enrollment(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    product_config = initialize_product_stack(config or load_product_config())
+    oidc_state = bootstrap_product_oidc_client(product_config)
+    existing_state = load_first_admin_enrollment_state()
+
+    username = str(product_config.get("bootstrap", {}).get("first_admin_username", "admin")).strip() or "admin"
+    display_name = str(
+        product_config.get("bootstrap", {}).get("first_admin_display_name", "Administrator")
+    ).strip() or "Administrator"
+    email = str(product_config.get("bootstrap", {}).get("first_admin_email", "")).strip()
+    state = {
+        "username": username,
+        "display_name": display_name,
+        "email": email,
+        "auth_mode": str(product_config.get("auth", {}).get("mode", "passkey")).strip() or "passkey",
+        "setup_url": resolve_product_urls(product_config)["pocket_id_setup_url"],
+        "oidc_client_id": oidc_state["client_id"],
+    }
+    if existing_state == state:
+        return existing_state
+
+    state_path = get_first_admin_enrollment_state_path()
+    atomic_json_write(state_path, state)
+    _secure_file(state_path)
+    return state
+

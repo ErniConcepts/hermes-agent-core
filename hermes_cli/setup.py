@@ -509,9 +509,9 @@ def setup_product_network() -> None:
 
     print_header("Product Network")
     print_info("Choose the hostname users will use to reach this machine.")
-    print_info("This hostname is used for local app URLs and Kanidm OIDC origins.")
+    print_info("This hostname is used for local app URLs and Pocket ID OIDC origins.")
     print_info("Use a hostname like localhost, officebox.local, or a DNS name.")
-    print_info("Raw IP addresses are not supported for the Kanidm public host.")
+    print_info("Raw IP addresses are not supported for the Pocket ID public host.")
 
     while True:
         public_host = (
@@ -527,7 +527,7 @@ def setup_product_network() -> None:
         product_config["network"]["public_host"] = public_host
         save_product_config(product_config)
         print_info(f"  App URL: {urls['app_base_url']}")
-        print_info(f"  Kanidm issuer: {urls['issuer_url']}")
+        print_info(f"  Pocket ID issuer: {urls['issuer_url']}")
         break
 
 
@@ -3163,27 +3163,26 @@ def run_setup_wizard(args):
     ensure_hermes_home()
     from hermes_cli.product_config import initialize_product_config_file
     from hermes_cli.product_stack import (
-        bootstrap_first_admin,
+        bootstrap_first_admin_enrollment,
         ensure_product_stack_started,
-        get_oidc_client_bootstrap_status,
         initialize_product_stack,
     )
 
     def _start_product_stack_best_effort() -> None:
         try:
             ensure_product_stack_started()
-            state = bootstrap_first_admin()
-            oidc_status = get_oidc_client_bootstrap_status()
-            print_info("Bundled Kanidm service is up.")
+            state = bootstrap_first_admin_enrollment()
+            print_info("Bundled Pocket ID service is up.")
             print_info(f"  First admin: {state['username']}")
-            print_info(f"  First admin temporary password: {state['temporary_password']}")
+            if state["email"]:
+                print_info(f"  First admin email: {state['email']}")
             print_info(f"  Auth mode: {state['auth_mode']}")
-            if oidc_status["status"] != "ready":
-                print_warning(f"OIDC client bootstrap {oidc_status['status']}: {oidc_status['reason']}")
+            print_info(f"  First admin setup URL: {state['setup_url']}")
+            print_info(f"  OIDC client: {state['oidc_client_id']}")
         except FileNotFoundError:
-            print_warning("Docker was not found. The bundled Kanidm service was generated but not started.")
+            print_warning("Docker was not found. The bundled Pocket ID service was generated but not started.")
         except Exception as exc:
-            print_warning(f"Could not start bundled Kanidm automatically: {exc}")
+            print_warning(f"Could not start bundled Pocket ID automatically: {exc}")
 
     config = load_config()
     initialize_product_config_file()
@@ -3355,7 +3354,7 @@ def run_setup_wizard(args):
     print()
     print_info("You can edit these files directly or use 'hermes config edit'")
 
-    # Product network host used by local URLs and Kanidm origins
+    # Product network host used by local URLs and Pocket ID origins
     setup_product_network()
 
     # Section 1: Model & Provider
