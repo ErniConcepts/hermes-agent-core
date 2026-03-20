@@ -9,6 +9,7 @@ product layer.
 from __future__ import annotations
 
 import copy
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -63,6 +64,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         "internal_port": 8091,
         "host_port_start": 18091,
         "host_port_end": 18150,
+        "host_access_host": "host.docker.internal",
     },
     "storage": {
         "root": "product",
@@ -165,3 +167,14 @@ def resolve_runtime_defaults(config: Dict[str, Any] | None = None) -> Dict[str, 
         "runtime_toolset": str(runtime_cfg.get("default_toolset", "mynah-tier1")),
         "inference_model": str(model_cfg.get("model", "qwen3.5-9b-local")),
     }
+
+
+def runtime_host_access_host(config: Dict[str, Any] | None = None) -> str:
+    product_config = config or load_product_config()
+    runtime_cfg = product_config.get("runtime", {})
+    configured = str(runtime_cfg.get("host_access_host", "")).strip()
+    if configured:
+        return configured
+    if os.name == "nt":
+        return "host.docker.internal"
+    return "host.docker.internal"

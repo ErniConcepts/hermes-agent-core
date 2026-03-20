@@ -2,6 +2,8 @@ from pathlib import Path
 
 from hermes_cli.product_runtime import (
     ProductRuntimeRecord,
+    _docker_run_command,
+    _resolve_runtime_model_base_url,
     get_product_runtime_session,
     product_runtime_session_id,
     stage_product_runtime,
@@ -82,3 +84,64 @@ def test_get_product_runtime_session_proxies_runtime(monkeypatch):
     payload = get_product_runtime_session({"preferred_username": "admin"})
     assert payload["session_id"] == "product_admin_123"
     assert payload["messages"][0]["content"] == "hello"
+
+
+def test_runtime_model_base_url_rewrites_loopback_for_container_access():
+    config = {"runtime": {"host_access_host": "host.docker.internal"}}
+
+    rewritten = _resolve_runtime_model_base_url(config, "http://127.0.0.1:8080/v1")
+
+    assert rewritten == "http://host.docker.internal:8080/v1"
+
+
+def test_runtime_model_base_url_keeps_non_loopback_hosts():
+    config = {"runtime": {"host_access_host": "host.docker.internal"}}
+
+    rewritten = _resolve_runtime_model_base_url(config, "https://llm.example.internal/v1")
+
+    assert rewritten == "https://llm.example.internal/v1"
+
+
+def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from hermes_cli.product_config import load_product_config, save_product_config
+
+    config = load_product_config()
+    config["models"]["default_route"]["base_url"] = "http://127.0.0.1:8080/v1"
+    config["runtime"]["host_access_host"] = "host.docker.internal"
+    save_product_config(config)
+
+    record = stage_product_runtime({"preferred_username": "admin"})
+    env_text = Path(record.env_file).read_text(encoding="utf-8")
+
+    assert "OPENAI_BASE_URL=http://host.docker.internal:8080/v1" in env_text
+
+
+def test_docker_run_command_adds_host_gateway_mapping():
+    config = {
+        "runtime": {
+            "internal_port": 8091,
+            "image": "hermes-product-local:dev",
+            "host_access_host": "host.docker.internal",
+        }
+    }
+    record = ProductRuntimeRecord(
+        user_id="admin",
+        display_name="Admin",
+        session_id="product_admin_123",
+        container_name="runtime-admin",
+        runtime="runc",
+        runtime_port=18091,
+        runtime_root="/tmp/runtime",
+        hermes_home="/tmp/runtime/hermes",
+        workspace_root="/tmp/workspace",
+        env_file="/tmp/runtime/runtime.env",
+        manifest_file="/tmp/runtime/launch-spec.json",
+        status="running",
+    )
+
+    command = _docker_run_command(record, config)
+
+    assert "--add-host" in command
+    assert "host.docker.internal:host-gateway" in command

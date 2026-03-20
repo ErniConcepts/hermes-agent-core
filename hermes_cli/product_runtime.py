@@ -7,12 +7,13 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from pydantic import BaseModel
 
 from hermes_cli.config import _secure_dir, _secure_file, ensure_hermes_home, get_hermes_home
-from hermes_cli.product_config import load_product_config
+from hermes_cli.product_config import load_product_config, runtime_host_access_host
 from hermes_cli.product_identity import render_product_soul
 from hermes_cli.runtime_provider import resolve_runtime_provider
 
@@ -125,6 +126,24 @@ def _runtime_internal_port(config: dict[str, Any]) -> int:
     return int(config.get("runtime", {}).get("internal_port", 8091))
 
 
+def _resolve_runtime_model_base_url(config: dict[str, Any], base_url: str) -> str:
+    normalized = str(base_url or "").strip()
+    if not normalized:
+        return normalized
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"}:
+        return normalized
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
+        return normalized.rstrip("/")
+    replacement_host = runtime_host_access_host(config)
+    netloc = replacement_host
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    rewritten = parsed._replace(netloc=netloc)
+    return urlunparse(rewritten).rstrip("/")
+
+
 def _resolve_runtime_port(config: dict[str, Any], user_id: str) -> int:
     existing = load_runtime_record(user_id, config=config)
     if existing is not None:
@@ -195,6 +214,7 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
         api_mode = str(resolved.get("api_mode") or api_mode).strip() or api_mode
     if not base_url:
         raise RuntimeError("Product runtime requires a resolved base URL for the configured model route")
+    base_url = _resolve_runtime_model_base_url(product_config, base_url)
     session_id = product_runtime_session_id(user_id)
     runtime_port = _resolve_runtime_port(product_config, user_id)
     container_name = f"hermes-product-runtime-{user_id}"
@@ -252,6 +272,8 @@ def _docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) ->
         f"127.0.0.1:{record.runtime_port}:{internal_port}",
         "--env-file",
         record.env_file,
+        "--add-host",
+        f"{runtime_host_access_host(config)}:host-gateway",
         "--mount",
         f"type=bind,src={Path(record.hermes_home).as_posix()},dst=/srv/hermes",
         "--mount",

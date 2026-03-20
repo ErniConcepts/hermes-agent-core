@@ -210,6 +210,8 @@ In the first implementation:
 - each runtime should keep its own Hermes session DB and file-backed memory state
 - browser chat APIs should proxy to runtime-local HTTP endpoints rather than calling `AIAgent` in-process
 - runtime control endpoints may be published only to host loopback for product-app proxying and must never be exposed on the LAN directly
+- if a configured model route points at host loopback such as `127.0.0.1` or `localhost`, the runtime launcher must rewrite that URL to a container-reachable host alias before injecting it into the runtime env
+- the default local host alias for containerized runtimes is `host.docker.internal`, and Docker launch should add an explicit `host-gateway` mapping for that alias
 
 The product should treat tools as product-managed capabilities with execution metadata.
 

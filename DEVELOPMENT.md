@@ -47,6 +47,8 @@ Do not mark work done early.
 - Preserve upstream compatibility by preferring config, wrappers, and narrow extension points over deep Hermes-core patches.
 - For product runtimes, derive model/tool/runtime settings on the host from `product.yaml` and pass them into containers as env. Do not assume a per-user runtime container can read the host product config directly.
 - Per-user runtime containers may bind their internal control port to host loopback for product-app proxying, but must never be exposed on the LAN directly.
+- If a configured model route uses host loopback such as `127.0.0.1` or `localhost`, rewrite it to a container-reachable alias before injecting it into a runtime container.
+- Default the local container-reachable alias to `host.docker.internal`, and include an explicit Docker `host-gateway` mapping when launching the runtime.
 - Each runtime must get its own `HERMES_HOME` and rendered `SOUL.md` under the product storage root.
 
 ## Current product-direction rules
