@@ -180,3 +180,33 @@ def exchange_product_oidc_code(
     finally:
         if owns_client:
             http_client.close()
+
+
+def fetch_product_oidc_userinfo(
+    access_token: str,
+    metadata: ProductOIDCProviderMetadata,
+    *,
+    client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    if not metadata.userinfo_endpoint:
+        raise ValueError("OIDC provider metadata does not include a userinfo endpoint")
+
+    owns_client = client is None
+    http_client = client or httpx.Client(timeout=10.0)
+    try:
+        response = http_client.get(
+            metadata.userinfo_endpoint,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+    finally:
+        if owns_client:
+            http_client.close()
+
+    if not isinstance(payload, dict):
+        raise ValueError("userinfo response must be a JSON object")
+    return payload

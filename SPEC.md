@@ -106,6 +106,11 @@ The first implementation should also treat these startup details as part of the 
 - setup should surface the native `Pocket ID` `/setup` flow for first-admin enrollment instead of inventing a product-owned password bootstrap
 - localhost development should be a first-class supported path, not a degraded special case
 - the product's own login flow should consume provider metadata through a provider-neutral OIDC helper layer with PKCE rather than Pocket-ID-specific redirect logic in the app
+- the first product app auth surface should provide:
+  - login start
+  - callback
+  - authenticated session inspection
+  - logout
 
 The intended user-lifecycle flow is:
 

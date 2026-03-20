@@ -82,6 +82,7 @@ Do not mark work done early.
 - The first-admin setup contract is the native Pocket ID `/setup` flow. Do not recreate the old temporary-password bootstrap pattern in product code.
 - If the first-admin setup state is persisted locally, it should only contain non-secret enrollment metadata such as username, display name, email, setup URL, and client id.
 - Keep product login logic provider-neutral. Discovery, PKCE, authorize URL generation, and code exchange should live in a reusable OIDC helper layer rather than being hardcoded inside future app routes.
+- The first product auth app surface should stay minimal: login, callback, session, and logout only. Do not grow browser-side auth features beyond that until the real product app exists.
 
 ## Local process hygiene
 

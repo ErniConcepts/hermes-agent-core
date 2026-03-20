@@ -18,6 +18,7 @@ dependencies = [
   "fire",
   "fastapi>=0.115",
   "httpx",
+  "itsdangerous",
   "rich",
   "tenacity",
   "pyyaml",
