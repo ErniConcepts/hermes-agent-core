@@ -13,6 +13,7 @@ from hermes_cli.product_stack import (
     initialize_product_stack,
     resolve_product_urls,
 )
+from hermes_cli.product_install import validate_product_host_prereqs
 from model_tools import get_available_toolsets
 from toolsets import validate_toolset
 from hermes_cli.setup import (
@@ -186,21 +187,16 @@ def _print_product_setup_summary() -> None:
     print_info(f"SOUL template:  {soul_template}")
 
 
-def _start_product_stack_best_effort() -> None:
-    try:
-        ensure_product_stack_started()
-        state = bootstrap_first_admin_enrollment()
-        print_info("Bundled Pocket ID service is up.")
-        print_info(f"  First admin: {state['username']}")
-        if state["email"]:
-            print_info(f"  First admin email: {state['email']}")
-        print_info(f"  Auth mode: {state['auth_mode']}")
-        print_info(f"  First admin setup URL: {state['setup_url']}")
-        print_info(f"  OIDC client: {state['oidc_client_id']}")
-    except FileNotFoundError:
-        print_warning("Docker was not found. The bundled Pocket ID service was generated but not started.")
-    except Exception as exc:
-        print_warning(f"Could not start bundled Pocket ID automatically: {exc}")
+def _start_product_stack() -> None:
+    ensure_product_stack_started()
+    state = bootstrap_first_admin_enrollment()
+    print_info("Bundled Pocket ID service is up.")
+    print_info(f"  First admin: {state['username']}")
+    if state["email"]:
+        print_info(f"  First admin email: {state['email']}")
+    print_info(f"  Auth mode: {state['auth_mode']}")
+    print_info(f"  First admin setup URL: {state['setup_url']}")
+    print_info(f"  OIDC client: {state['oidc_client_id']}")
 
 
 def _run_model_section() -> None:
@@ -222,8 +218,9 @@ def _run_tools_section() -> None:
 
 
 def _run_bootstrap_section() -> None:
+    validate_product_host_prereqs()
     initialize_product_stack()
-    _start_product_stack_best_effort()
+    _start_product_stack()
 
 
 def run_product_setup_wizard(args: Any) -> None:

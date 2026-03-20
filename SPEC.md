@@ -22,6 +22,8 @@ The product-owned setup flow should be exposed separately from generic upstream 
 The intended command shape is:
 
 - `hermes product setup` for product-layer installation and configuration
+- `hermes product install` for Linux host preparation plus product setup
+- `hermes product uninstall` for removing product traces while leaving generic Hermes install state intact
 - `hermes setup` remains generic Hermes setup and should stay upstream-compatible
 
 After installation, a guided setup CLI should configure:
@@ -101,6 +103,14 @@ The product should not maintain a second MYNAH-specific tier vocabulary for runt
 
 - `memory`
 - `session_search`
+
+On Linux, the product installer should also own host preparation needed for isolated runtimes:
+
+- verifying Docker and `docker compose`
+- verifying `runsc` is installed
+- registering the Docker `runsc` runtime if missing
+- restarting Docker only when required for that registration step
+- recording whether that Docker runtime registration was added by the product installer so product uninstall can later reverse only that change
 
 ## Authentication Direction
 
@@ -219,6 +229,7 @@ In the first implementation:
 - runtime control endpoints may be published only to host loopback for product-app proxying and must never be exposed on the LAN directly
 - if a configured model route points at host loopback such as `127.0.0.1` or `localhost`, the runtime launcher must rewrite that URL to a container-reachable host alias before injecting it into the runtime env
 - the default local host alias for containerized runtimes is `host.docker.internal`, and Docker launch should add an explicit `host-gateway` mapping for that alias
+- on Linux, product setup should fail hard if Docker, `docker compose`, `runsc`, or Docker `runsc` registration are missing or broken instead of silently continuing into a weaker runtime mode
 
 The product should treat tools as product-managed capabilities with execution metadata.
 

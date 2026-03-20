@@ -61,6 +61,7 @@ Do not mark work done early.
 - The preferred auth experience is passkey-first local onboarding without SMTP.
 - The setup CLI should be the source of truth for product-wide settings.
 - Product setup should live in a separate product-owned command path, not inside generic `hermes setup`.
+- Product install and uninstall should also live in separate product-owned command paths, not inside generic Hermes install or uninstall behavior.
 - Generic `hermes setup` should remain upstream-compatible and should not bootstrap Pocket ID or other product-only services.
 - Product setup may reuse the Hermes tool selection UI, but the canonical saved result for product chat runtimes must be the selected Hermes toolset names in `product.yaml`.
 - The browser admin UI should remain narrow and should not become a general product-config console in the first version.
@@ -74,6 +75,8 @@ Do not mark work done early.
 - SSH validation on the separate Linux laptop is part of the normal closed-loop workflow when auth, Docker stack generation, runtime isolation, or filesystem-mount behavior changes.
 - Temporary SSH validation workspaces, helper scripts, containers, and logs must be cleaned up after testing.
 - If the Linux validation host does not have `runsc`, call that out explicitly. You may use `runc` only for smoke validation of the control path, but do not treat that as proof of the target isolation model.
+- On Linux, the product installer owns Docker `runsc` registration for the product path and must record whether it made that host change so product uninstall can reverse only what the installer added.
+- Product setup should fail hard on Linux if Docker, `docker compose`, `runsc`, or Docker `runsc` registration are missing or broken.
 
 ## Pocket ID-specific rules
 

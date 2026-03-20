@@ -12,6 +12,9 @@ Usage:
     hermes gateway install     # Install gateway service
     hermes gateway uninstall   # Uninstall gateway service
     hermes setup               # Interactive setup wizard
+    hermes product install     # Prepare Linux host and run product setup
+    hermes product setup       # Product setup wizard
+    hermes product uninstall   # Remove product traces from the machine
     hermes logout              # Clear stored authentication
     hermes status              # Show status of all components
     hermes cron                # Manage cron jobs
@@ -748,6 +751,16 @@ def cmd_product(args):
         from hermes_cli.product_setup import run_product_setup_wizard
 
         run_product_setup_wizard(args)
+        return
+    if getattr(args, "product_command", None) == "install":
+        from hermes_cli.product_install import run_product_install
+
+        run_product_install(args)
+        return
+    if getattr(args, "product_command", None) == "uninstall":
+        from hermes_cli.product_install import run_product_uninstall
+
+        run_product_uninstall(args)
         return
     raise SystemExit("Unknown product subcommand")
 
@@ -3228,6 +3241,35 @@ For more help on a command:
         help="Non-interactive mode (prints guidance instead of running prompts)",
     )
     product_setup.set_defaults(func=cmd_product)
+
+    product_install = product_subparsers.add_parser(
+        "install",
+        help="Prepare a Linux host for the hermes-core product and run product setup",
+        description="Configure Linux host prerequisites such as Docker runsc registration, then run product setup",
+    )
+    product_install.add_argument(
+        "--skip-setup",
+        action="store_true",
+        help="Prepare the Linux host only and skip the interactive product setup wizard",
+    )
+    product_install.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Pass non-interactive mode through to product setup when it runs",
+    )
+    product_install.set_defaults(func=cmd_product)
+
+    product_uninstall = product_subparsers.add_parser(
+        "uninstall",
+        help="Remove hermes-core product traces from this machine",
+        description="Stop product services, remove product data, and optionally revert installer-managed host runtime registration",
+    )
+    product_uninstall.add_argument(
+        "--yes",
+        action="store_true",
+        help="Do not prompt for confirmation",
+    )
+    product_uninstall.set_defaults(func=cmd_product)
 
     # =========================================================================
     # whatsapp command

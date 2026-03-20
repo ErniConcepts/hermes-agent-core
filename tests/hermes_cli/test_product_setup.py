@@ -85,3 +85,17 @@ def test_product_setup_noninteractive_prints_guidance(tmp_path, capsys, monkeypa
 
     out = capsys.readouterr().out
     assert "hermes config set model.provider custom" in out
+
+
+def test_product_setup_bootstrap_section_validates_host_prereqs(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    with (
+        patch("hermes_cli.product_setup.is_interactive_stdin", return_value=True),
+        patch("hermes_cli.product_setup.validate_product_host_prereqs") as mock_validate,
+        patch("hermes_cli.product_setup.initialize_product_stack"),
+        patch("hermes_cli.product_setup._start_product_stack"),
+    ):
+        run_product_setup_wizard(_make_product_args(section="bootstrap"))
+
+    mock_validate.assert_called_once()
