@@ -15,6 +15,7 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 from pydantic import BaseModel
+import yaml
 
 from hermes_cli.config import _secure_dir, _secure_file, ensure_hermes_home, get_hermes_home
 from hermes_cli.product_config import load_product_config, runtime_host_access_host
@@ -106,6 +107,10 @@ def _manifest_path(config: dict[str, Any], user_id: str) -> Path:
 
 def _env_path(config: dict[str, Any], user_id: str) -> Path:
     return _runtime_root(config, user_id) / "runtime.env"
+
+
+def _runtime_config_path(config: dict[str, Any], user_id: str) -> Path:
+    return _hermes_home(config, user_id) / "config.yaml"
 
 
 def _runtime_toolsets(config: dict[str, Any]) -> list[str]:
@@ -204,6 +209,32 @@ def _write_runtime_record(record: ProductRuntimeRecord) -> None:
     _secure_file(manifest_path)
 
 
+def _write_runtime_cli_config(config: dict[str, Any], user_id: str, *, base_url: str, model: str) -> None:
+    route = config.get("models", {}).get("default_route", {})
+    config_path = _runtime_config_path(config, user_id)
+    context_length = route.get("context_length")
+    try:
+        normalized_context_length = int(context_length) if context_length is not None else None
+    except (TypeError, ValueError):
+        normalized_context_length = None
+
+    if normalized_context_length is None or normalized_context_length <= 0:
+        if config_path.exists():
+            config_path.unlink()
+        return
+
+    runtime_config = {
+        "model": {
+            "default": model,
+            "base_url": base_url,
+            "provider": str(route.get("provider") or "").strip() or "custom",
+            "context_length": normalized_context_length,
+        }
+    }
+    config_path.write_text(yaml.safe_dump(runtime_config, sort_keys=False), encoding="utf-8")
+    _secure_file(config_path)
+
+
 def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord:
     product_config = config or load_product_config()
     ensure_hermes_home()
@@ -239,6 +270,7 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
     if not base_url:
         raise RuntimeError("product models.default_route.base_url must be configured")
     base_url = _resolve_runtime_model_base_url(product_config, base_url)
+    _write_runtime_cli_config(product_config, user_id, base_url=base_url, model=model)
     session_id = product_runtime_session_id(user_id)
     runtime_port = _resolve_runtime_port(product_config, user_id)
     container_name = f"hermes-product-runtime-{user_id}"

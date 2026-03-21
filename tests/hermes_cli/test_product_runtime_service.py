@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from hermes_cli.product_runtime_service import create_product_runtime_app
+from hermes_cli.product_runtime_service import build_runtime_agent
 
 
 class FakeAgent:
@@ -99,3 +100,70 @@ def test_product_runtime_service_rejects_missing_runtime_token(monkeypatch, tmp_
     response = client.get("/runtime/session")
 
     assert response.status_code == 401
+
+
+def test_product_runtime_session_filters_blank_assistant_messages(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory,file")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr(
+        "hermes_cli.product_runtime_service._load_session_messages",
+        lambda db, session_id: [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "content": '{"ok": true}'},
+            {"role": "assistant", "content": "done"},
+        ],
+    )
+
+    client = TestClient(create_product_runtime_app())
+    response = client.get("/runtime/session", headers={"X-Hermes-Product-Runtime-Token": "runtime-token"})
+
+    assert response.status_code == 200
+    assert response.json()["messages"] == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "done"},
+    ]
+
+
+def test_build_runtime_agent_scopes_tools_to_workspace(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory,file")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            captured["agent_kwargs"] = kwargs
+
+    monkeypatch.setattr("run_agent.AIAgent", FakeAgent)
+    monkeypatch.setattr(
+        "tools.terminal_tool.register_task_env_overrides",
+        lambda task_id, overrides: captured.update({"task_id": task_id, "overrides": overrides}),
+    )
+
+    build_runtime_agent(object(), "product_admin_123")
+
+    assert captured["task_id"] == "product_admin_123"
+    assert captured["overrides"] == {"cwd": "/srv/workspace"}
+    assert captured["agent_kwargs"]["enabled_toolsets"] == ["memory", "file"]
+    assert captured["agent_kwargs"]["session_id"] == "product_admin_123"
+    assert captured["agent_kwargs"]["platform"] == "product-runtime"

@@ -40,6 +40,8 @@ Do not mark work done early.
 - Production target is Linux.
 - Windows development is fine, but runtime validation must follow Linux semantics.
 - Ubuntu WSL with its own Linux Docker daemon is the preferred local validation path on Windows.
+- Treat original upstream Hermes files as constrained. Do not modify them for fork-specific product behavior unless explicitly approved.
+- Product fixes should default to sidecar adaptation in `hermes_cli/product_*`, product config, product tests, and runtime-edge integration code.
 - Default to `gVisor` for per-user runtime isolation.
 - Treat plain containers as fallback, not the primary design.
 - Preserve Hermes memory semantics where practical, but always isolate them per user namespace.

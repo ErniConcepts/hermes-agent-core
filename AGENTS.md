@@ -98,6 +98,15 @@ Rules for this surface:
 - Do not expose generic Hermes CLI or gateway features through this service.
 - Keep the service focused on one turn in and one normalized response out.
 
+## Fork Boundary
+
+When working on the product fork:
+
+- Do not modify original upstream Hermes files unless the user explicitly approves an upstream-facing change.
+- Prefer adapting the fork through sidecar product files such as `hermes_cli/product_*`, product tests, config wrappers, and runtime-edge integration code.
+- If a possible fix appears to require touching upstream Hermes files, stop and surface that constraint before making the change.
+- If a behavior can be fixed either in upstream Hermes code or in fork-side product integration code, choose the fork-side integration path.
+
 ## AIAgent Class (run_agent.py)
 
 ```python

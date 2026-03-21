@@ -48,6 +48,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
             "provider": "custom",
             "base_url": "http://127.0.0.1:8080/v1",
             "model": "qwen3.5-9b-local",
+            "context_length": None,
         },
     },
     "tools": {

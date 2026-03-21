@@ -1,11 +1,13 @@
 from pathlib import Path
 import pytest
+import yaml
 
 from hermes_cli.product_runtime import (
     ProductRuntimeRecord,
     _docker_run_command,
     _normalize_runtime_session_payload,
     _resolve_runtime_model_base_url,
+    _runtime_config_path,
     _wait_for_runtime_health,
     get_product_runtime_session,
     product_runtime_session_id,
@@ -190,6 +192,28 @@ def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, mo
     env_text = Path(record.env_file).read_text(encoding="utf-8")
 
     assert "OPENAI_BASE_URL=http://host.docker.internal:8080/v1" in env_text
+
+
+def test_stage_product_runtime_writes_runtime_context_override_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from hermes_cli.product_config import load_product_config, save_product_config
+
+    config = load_product_config()
+    config["models"]["default_route"]["base_url"] = "http://127.0.0.1:8080/v1"
+    config["models"]["default_route"]["model"] = "qwen3.5-9b-local"
+    config["models"]["default_route"]["context_length"] = 32768
+    save_product_config(config)
+
+    stage_product_runtime({"preferred_username": "admin"})
+
+    runtime_config = _runtime_config_path(load_product_config(), "admin")
+    assert runtime_config.exists()
+    payload = yaml.safe_load(runtime_config.read_text(encoding="utf-8"))
+    assert payload["model"]["default"] == "qwen3.5-9b-local"
+    assert payload["model"]["base_url"] == "http://host.docker.internal:8080/v1"
+    assert payload["model"]["provider"] == "custom"
+    assert payload["model"]["context_length"] == 32768
 
 
 def test_docker_run_command_adds_host_gateway_mapping():

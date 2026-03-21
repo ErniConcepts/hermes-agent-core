@@ -102,7 +102,10 @@ def _visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         role = str(message.get("role", "")).strip()
         if role not in {"user", "assistant", "system"}:
             continue
-        visible.append({"role": role, "content": str(message.get("content") or "")})
+        content = str(message.get("content") or "")
+        if role != "user" and not content.strip():
+            continue
+        visible.append({"role": role, "content": content})
     return visible
 
 
@@ -133,12 +136,16 @@ def _load_session_messages(db: SessionDB, session_id: str) -> list[dict[str, Any
 
 def build_runtime_agent(db: SessionDB, session_id: str, *, reasoning_callback: Any = None):
     from run_agent import AIAgent
+    from tools.terminal_tool import register_task_env_overrides
 
     provider = _required_env("HERMES_PRODUCT_PROVIDER").lower()
     api_mode = _required_env("HERMES_PRODUCT_API_MODE").lower()
     model = _required_env("HERMES_PRODUCT_MODEL")
     base_url = _required_env("OPENAI_BASE_URL")
     api_key = _required_env("OPENAI_API_KEY")
+
+    # Scope local file/terminal-backed tools to the mounted per-user workspace.
+    register_task_env_overrides(session_id, {"cwd": "/srv/workspace"})
 
     return AIAgent(
         base_url=base_url,
