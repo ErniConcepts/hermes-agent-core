@@ -24,11 +24,53 @@ def _normalize_custom_provider_name(value: str) -> str:
     return value.strip().lower().replace(" ", "-")
 
 
+def _detect_api_mode_for_url(base_url: str) -> Optional[str]:
+    """Auto-detect api_mode from the resolved base URL.
+
+    Direct api.openai.com endpoints need the Responses API for GPT-5.x
+    tool calls with reasoning (chat/completions returns 400).
+    """
+    normalized = (base_url or "").strip().lower().rstrip("/")
+    if "api.openai.com" in normalized and "openrouter" not in normalized:
+        return "codex_responses"
+    return None
+
+
+def _auto_detect_local_model(base_url: str) -> str:
+    """Query a local server for its model name when only one model is loaded."""
+    if not base_url:
+        return ""
+    try:
+        import requests
+        url = base_url.rstrip("/")
+        if not url.endswith("/v1"):
+            url += "/v1"
+        resp = requests.get(url + "/models", timeout=5)
+        if resp.ok:
+            models = resp.json().get("data", [])
+            if len(models) == 1:
+                model_id = models[0].get("id", "")
+                if model_id:
+                    return model_id
+    except Exception:
+        pass
+    return ""
+
+
 def _get_model_config() -> Dict[str, Any]:
     config = load_config()
     model_cfg = config.get("model")
     if isinstance(model_cfg, dict):
-        return dict(model_cfg)
+        cfg = dict(model_cfg)
+        default = cfg.get("default", "").strip()
+        base_url = cfg.get("base_url", "").strip()
+        is_local = "localhost" in base_url or "127.0.0.1" in base_url
+        is_fallback = not default or default == "anthropic/claude-opus-4.6"
+        if is_local and is_fallback and base_url:
+            detected = _auto_detect_local_model(base_url)
+            if detected:
+                cfg["default"] = detected
+        return cfg
     if isinstance(model_cfg, str) and model_cfg.strip():
         return {"default": model_cfg.strip()}
     return {}
@@ -155,7 +197,9 @@ def _resolve_named_custom_runtime(
 
     return {
         "provider": "openrouter",
-        "api_mode": custom_provider.get("api_mode", "chat_completions"),
+        "api_mode": custom_provider.get("api_mode")
+        or _detect_api_mode_for_url(base_url)
+        or "chat_completions",
         "base_url": base_url,
         "api_key": api_key,
         "source": f"custom_provider:{custom_provider.get('name', requested_provider)}",
@@ -171,6 +215,12 @@ def _resolve_openrouter_runtime(
     model_cfg = _get_model_config()
     cfg_base_url = model_cfg.get("base_url") if isinstance(model_cfg.get("base_url"), str) else ""
     cfg_provider = model_cfg.get("provider") if isinstance(model_cfg.get("provider"), str) else ""
+    cfg_api_key = ""
+    for k in ("api_key", "api"):
+        v = model_cfg.get(k)
+        if isinstance(v, str) and v.strip():
+            cfg_api_key = v.strip()
+            break
     requested_norm = (requested_provider or "").strip().lower()
     cfg_provider = cfg_provider.strip().lower()
 
@@ -178,26 +228,24 @@ def _resolve_openrouter_runtime(
     env_openrouter_base_url = os.getenv("OPENROUTER_BASE_URL", "").strip()
 
     use_config_base_url = False
-    if cfg_base_url.strip() and not explicit_base_url and not env_openai_base_url:
+    if cfg_base_url.strip() and not explicit_base_url:
         if requested_norm == "auto":
-            if not cfg_provider or cfg_provider == "auto":
+            if (not cfg_provider or cfg_provider == "auto") and not env_openai_base_url:
                 use_config_base_url = True
-        elif requested_norm == "custom":
-            # Persisted custom endpoints store their base URL in config.yaml.
-            # If OPENAI_BASE_URL is not currently set in the environment, keep
-            # honoring that saved endpoint instead of falling back to OpenRouter.
-            if cfg_provider == "custom":
-                use_config_base_url = True
+        elif requested_norm == "custom" and cfg_provider == "custom":
+            # provider: custom — use base_url from config (Fixes #1760).
+            use_config_base_url = True
 
     # When the user explicitly requested the openrouter provider, skip
     # OPENAI_BASE_URL — it typically points to a custom / non-OpenRouter
     # endpoint and would prevent switching back to OpenRouter (#874).
     skip_openai_base = requested_norm == "openrouter"
 
+    # For custom, prefer config base_url over env so config.yaml is honored (#1760).
     base_url = (
         (explicit_base_url or "").strip()
-        or ("" if skip_openai_base else env_openai_base_url)
         or (cfg_base_url.strip() if use_config_base_url else "")
+        or ("" if skip_openai_base else env_openai_base_url)
         or env_openrouter_base_url
         or OPENROUTER_BASE_URL
     ).rstrip("/")
@@ -216,8 +264,10 @@ def _resolve_openrouter_runtime(
             or ""
         )
     else:
+        # Custom endpoint: use api_key from config when using config base_url (#1760).
         api_key = (
             explicit_api_key
+            or (cfg_api_key if use_config_base_url else "")
             or os.getenv("OPENAI_API_KEY")
             or os.getenv("OPENROUTER_API_KEY")
             or ""
@@ -227,7 +277,9 @@ def _resolve_openrouter_runtime(
 
     return {
         "provider": "openrouter",
-        "api_mode": _parse_api_mode(model_cfg.get("api_mode")) or "chat_completions",
+        "api_mode": _parse_api_mode(model_cfg.get("api_mode"))
+        or _detect_api_mode_for_url(base_url)
+        or "chat_completions",
         "base_url": base_url,
         "api_key": api_key,
         "source": source,
@@ -307,10 +359,14 @@ def resolve_runtime_provider(
                 "No Anthropic credentials found. Set ANTHROPIC_TOKEN or ANTHROPIC_API_KEY, "
                 "run 'claude setup-token', or authenticate with 'claude /login'."
             )
+        # Allow base URL override from config.yaml model.base_url
+        model_cfg = _get_model_config()
+        cfg_base_url = (model_cfg.get("base_url") or "").strip().rstrip("/")
+        base_url = cfg_base_url or "https://api.anthropic.com"
         return {
             "provider": "anthropic",
             "api_mode": "anthropic_messages",
-            "base_url": "https://api.anthropic.com",
+            "base_url": base_url,
             "api_key": token,
             "source": "env",
             "requested_provider": requested_provider,
@@ -334,13 +390,29 @@ def resolve_runtime_provider(
     if pconfig and pconfig.auth_type == "api_key":
         creds = resolve_api_key_provider_credentials(provider)
         model_cfg = _get_model_config()
+        base_url = creds.get("base_url", "").rstrip("/")
         api_mode = "chat_completions"
         if provider == "copilot":
             api_mode = _copilot_runtime_api_mode(model_cfg, creds.get("api_key", ""))
+        else:
+            # Check explicit api_mode from model config first
+            configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
+            if configured_mode:
+                api_mode = configured_mode
+            # Auto-detect Anthropic-compatible endpoints by URL convention
+            # (e.g. https://api.minimax.io/anthropic, https://dashscope.../anthropic)
+            elif base_url.rstrip("/").endswith("/anthropic"):
+                api_mode = "anthropic_messages"
+            # MiniMax providers always use Anthropic Messages API.
+            # Auto-correct stale /v1 URLs (from old .env or config) to /anthropic.
+            elif provider in ("minimax", "minimax-cn"):
+                api_mode = "anthropic_messages"
+                if base_url.rstrip("/").endswith("/v1"):
+                    base_url = base_url.rstrip("/")[:-3] + "/anthropic"
         return {
             "provider": provider,
             "api_mode": api_mode,
-            "base_url": creds.get("base_url", "").rstrip("/"),
+            "base_url": base_url,
             "api_key": creds.get("api_key", ""),
             "source": creds.get("source", "env"),
             "requested_provider": requested_provider,

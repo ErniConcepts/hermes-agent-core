@@ -222,6 +222,12 @@ from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageTyp
 
 logger = logging.getLogger(__name__)
 
+# Sentinel placed into _running_agents immediately when a session starts
+# processing, *before* any await.  Prevents a second message for the same
+# session from bypassing the "already running" guard during the async gap
+# between the guard check and actual agent creation.
+_AGENT_PENDING_SENTINEL = object()
+
 
 def _resolve_runtime_agent_kwargs() -> dict:
     """Resolve provider credentials for gateway-created AIAgent instances."""
@@ -1050,6 +1056,8 @@ class GatewayRunner:
         self._running = False
 
         for session_key, agent in list(self._running_agents.items()):
+            if agent is _AGENT_PENDING_SENTINEL:
+                continue
             try:
                 agent.interrupt("Gateway shutting down")
                 logger.debug("Interrupted running agent for session %s during shutdown", session_key[:20])
@@ -1183,6 +1191,15 @@ class GatewayRunner:
                 return None
             return APIServerAdapter(config)
 
+        elif platform == Platform.WEBHOOK:
+            from gateway.platforms.webhook import WebhookAdapter, check_webhook_requirements
+            if not check_webhook_requirements():
+                logger.warning("Webhook: aiohttp not installed")
+                return None
+            adapter = WebhookAdapter(config)
+            adapter.gateway_runner = self  # For cross-platform delivery
+            return adapter
+
         return None
     
     def _is_user_authorized(self, source: SessionSource) -> bool:
@@ -1199,7 +1216,9 @@ class GatewayRunner:
         # Home Assistant events are system-generated (state changes), not
         # user-initiated messages.  The HASS_TOKEN already authenticates the
         # connection, so HA events are always authorized.
-        if source.platform == Platform.HOMEASSISTANT:
+        # Webhook events are authenticated via HMAC signature validation in
+        # the adapter itself — no user allowlist applies.
+        if source.platform in (Platform.HOMEASSISTANT, Platform.WEBHOOK):
             return True
 
         user_id = source.user_id
@@ -1325,6 +1344,48 @@ class GatewayRunner:
             if event.get_command() == "status":
                 return await self._handle_status_command(event)
 
+            # /reset and /new must bypass the running-agent guard so they
+            # actually dispatch as commands instead of being queued as user
+            # text (which would be fed back to the agent with the same
+            # broken history — #2170).  Interrupt the agent first, then
+            # clear the adapter's pending queue so the stale "/reset" text
+            # doesn't get re-processed as a user message after the
+            # interrupt completes.
+            from hermes_cli.commands import resolve_command as _resolve_cmd_inner
+            _evt_cmd = event.get_command()
+            _cmd_def_inner = _resolve_cmd_inner(_evt_cmd) if _evt_cmd else None
+            if _cmd_def_inner and _cmd_def_inner.name == "new":
+                running_agent = self._running_agents.get(_quick_key)
+                if running_agent and running_agent is not _AGENT_PENDING_SENTINEL:
+                    running_agent.interrupt("Session reset requested")
+                # Clear any pending messages so the old text doesn't replay
+                adapter = self.adapters.get(source.platform)
+                if adapter and hasattr(adapter, 'get_pending_message'):
+                    adapter.get_pending_message(_quick_key)  # consume and discard
+                self._pending_messages.pop(_quick_key, None)
+                # Clean up the running agent entry so the reset handler
+                # doesn't think an agent is still active.
+                if _quick_key in self._running_agents:
+                    del self._running_agents[_quick_key]
+                return await self._handle_reset_command(event)
+
+            # /queue <prompt> — queue without interrupting
+            if event.get_command() in ("queue", "q"):
+                queued_text = event.get_command_args().strip()
+                if not queued_text:
+                    return "Usage: /queue <prompt>"
+                adapter = self.adapters.get(source.platform)
+                if adapter:
+                    from gateway.platforms.base import MessageEvent as _ME, MessageType as _MT
+                    queued_event = _ME(
+                        text=queued_text,
+                        message_type=_MT.TEXT,
+                        source=event.source,
+                        message_id=event.message_id,
+                    )
+                    adapter._pending_messages[_quick_key] = queued_event
+                return "Queued for the next turn."
+
             if event.message_type == MessageType.PHOTO:
                 logger.debug("PRIORITY photo follow-up for session %s — queueing without interrupt", _quick_key[:20])
                 adapter = self.adapters.get(source.platform)
@@ -1346,7 +1407,18 @@ class GatewayRunner:
                         adapter._pending_messages[_quick_key] = event
                 return None
 
-            running_agent = self._running_agents[_quick_key]
+            running_agent = self._running_agents.get(_quick_key)
+            if running_agent is _AGENT_PENDING_SENTINEL:
+                # Agent is being set up but not ready yet.
+                if event.get_command() == "stop":
+                    # Nothing to interrupt — agent hasn't started yet.
+                    return "⏳ The agent is still starting up — nothing to stop yet."
+                # Queue the message so it will be picked up after the
+                # agent starts.
+                adapter = self.adapters.get(source.platform)
+                if adapter:
+                    adapter._pending_messages[_quick_key] = event
+                return None
             logger.debug("PRIORITY interrupt for session %s", _quick_key[:20])
             running_agent.interrupt(event.text)
             if _quick_key in self._pending_messages:
@@ -1354,7 +1426,7 @@ class GatewayRunner:
             else:
                 self._pending_messages[_quick_key] = event.text
             return None
-        
+
         # Check for commands
         command = event.get_command()
         
@@ -1441,6 +1513,12 @@ class GatewayRunner:
         if canonical == "reload-mcp":
             return await self._handle_reload_mcp_command(event)
 
+        if canonical == "approve":
+            return await self._handle_approve_command(event)
+
+        if canonical == "deny":
+            return await self._handle_deny_command(event)
+
         if canonical == "update":
             return await self._handle_update_command(event)
 
@@ -1518,33 +1596,32 @@ class GatewayRunner:
             except Exception as e:
                 logger.debug("Skill command check failed (non-fatal): %s", e)
         
-        # Check for pending exec approval responses
-        session_key_preview = self._session_key_for_source(source)
-        if session_key_preview in self._pending_approvals:
-            user_text = event.text.strip().lower()
-            if user_text in ("yes", "y", "approve", "ok", "go", "do it"):
-                approval = self._pending_approvals.pop(session_key_preview)
-                cmd = approval["command"]
-                pattern_keys = approval.get("pattern_keys", [])
-                if not pattern_keys:
-                    pk = approval.get("pattern_key", "")
-                    pattern_keys = [pk] if pk else []
-                logger.info("User approved dangerous command: %s...", cmd[:60])
-                from tools.terminal_tool import terminal_tool
-                from tools.approval import approve_session
-                for pk in pattern_keys:
-                    approve_session(session_key_preview, pk)
-                result = terminal_tool(command=cmd, force=True)
-                return f"✅ Command approved and executed.\n\n```\n{result[:3500]}\n```"
-            elif user_text in ("no", "n", "deny", "cancel", "nope"):
-                self._pending_approvals.pop(session_key_preview)
-                return "❌ Command denied."
-            elif user_text in ("full", "show", "view", "show full", "view full"):
-                # Show full command without consuming the approval
-                cmd = self._pending_approvals[session_key_preview]["command"]
-                return f"Full command:\n\n```\n{cmd}\n```\n\nReply yes/no to approve or deny."
-            # If it's not clearly an approval/denial, fall through to normal processing
-        
+        # Pending exec approvals are handled by /approve and /deny commands above.
+        # No bare text matching — "yes" in normal conversation must not trigger
+        # execution of a dangerous command.
+
+        # ── Claim this session before any await ───────────────────────
+        # Between here and _run_agent registering the real AIAgent, there
+        # are numerous await points (hooks, vision enrichment, STT,
+        # session hygiene compression).  Without this sentinel a second
+        # message arriving during any of those yields would pass the
+        # "already running" guard and spin up a duplicate agent for the
+        # same session — corrupting the transcript.
+        self._running_agents[_quick_key] = _AGENT_PENDING_SENTINEL
+
+        try:
+            return await self._handle_message_with_agent(event, source, _quick_key)
+        finally:
+            # If _run_agent replaced the sentinel with a real agent and
+            # then cleaned it up, this is a no-op.  If we exited early
+            # (exception, command fallthrough, etc.) the sentinel must
+            # not linger or the session would be permanently locked out.
+            if self._running_agents.get(_quick_key) is _AGENT_PENDING_SENTINEL:
+                del self._running_agents[_quick_key]
+
+    async def _handle_message_with_agent(self, event, source, _quick_key: str):
+        """Inner handler that runs under the _running_agents sentinel guard."""
+
         # Get or create session
         session_entry = self.session_store.get_or_create_session(source)
         session_key = session_entry.session_key
@@ -2059,9 +2136,22 @@ class GatewayRunner:
             # Check if the agent encountered a dangerous command needing approval
             try:
                 from tools.approval import pop_pending
+                import time as _time
                 pending = pop_pending(session_key)
                 if pending:
+                    pending["timestamp"] = _time.time()
                     self._pending_approvals[session_key] = pending
+                    # Append structured instructions so the user knows how to respond
+                    cmd_preview = pending.get("command", "")
+                    if len(cmd_preview) > 200:
+                        cmd_preview = cmd_preview[:200] + "..."
+                    approval_hint = (
+                        f"\n\n⚠️ **Dangerous command requires approval:**\n"
+                        f"```\n{cmd_preview}\n```\n"
+                        f"Reply `/approve` to execute, `/approve session` to approve this pattern "
+                        f"for the session, or `/deny` to cancel."
+                    )
+                    response = (response or "") + approval_hint
             except Exception as e:
                 logger.debug("Failed to check pending approvals: %s", e)
             
@@ -2295,8 +2385,10 @@ class GatewayRunner:
         session_entry = self.session_store.get_or_create_session(source)
         session_key = session_entry.session_key
         
-        if session_key in self._running_agents:
-            agent = self._running_agents[session_key]
+        agent = self._running_agents.get(session_key)
+        if agent is _AGENT_PENDING_SENTINEL:
+            return "⏳ The agent is still starting up — nothing to stop yet."
+        if agent:
             agent.interrupt()
             return "⚡ Stopping the current task... The agent will finish its current step and respond."
         else:
@@ -2384,8 +2476,14 @@ class GatewayRunner:
             lines = [
                 f"🤖 **Current model:** `{current}`",
                 f"**Provider:** {provider_label}",
-                "",
             ]
+            # Show custom endpoint URL when using a custom provider
+            if current_provider == "custom":
+                from hermes_cli.models import _get_custom_base_url
+                custom_url = _get_custom_base_url() or os.getenv("OPENAI_BASE_URL", "")
+                if custom_url:
+                    lines.append(f"**Endpoint:** `{custom_url}`")
+            lines.append("")
             curated = curated_models_for_provider(current_provider)
             if curated:
                 lines.append(f"**Available models ({provider_label}):**")
@@ -2395,13 +2493,27 @@ class GatewayRunner:
                     lines.append(f"• `{mid}`{label}{marker}")
                 lines.append("")
             lines.append("To change: `/model model-name`")
-            lines.append("Switch provider: `/model provider:model-name`")
+            lines.append("Switch provider: `/model provider-name` or `/model provider:model-name`")
             return "\n".join(lines)
 
         # Parse provider:model syntax
         target_provider, new_model = parse_model_input(args, current_provider)
+
+        # Detect custom/local provider — skip auto-detection to prevent
+        # silently accepting an OpenRouter model name on a localhost endpoint.
+        # Users must use explicit provider:model syntax to switch away.
+        _resolved_base = ""
+        try:
+            from hermes_cli.runtime_provider import resolve_runtime_provider as _rtp
+            _resolved_base = _rtp(requested=current_provider).get("base_url", "")
+        except Exception:
+            pass
+        is_custom = current_provider == "custom" or (
+            "localhost" in _resolved_base or "127.0.0.1" in _resolved_base
+        )
+
         # Auto-detect provider when no explicit provider:model syntax was used
-        if target_provider == current_provider:
+        if target_provider == current_provider and not is_custom:
             from hermes_cli.models import detect_provider_for_model
             detected = detect_provider_for_model(new_model, current_provider)
             if detected:
@@ -2482,7 +2594,18 @@ class GatewayRunner:
         # Clear fallback state since user explicitly chose a model
         self._effective_model = None
         self._effective_provider = None
-        return f"🤖 Model changed to `{new_model}` ({persist_note}){provider_note}{warning}\n_(takes effect on next message)_"
+
+        # Helpful hint when staying on a custom/local endpoint
+        custom_hint = ""
+        if is_custom and not provider_changed:
+            endpoint = _resolved_base or "custom endpoint"
+            custom_hint = (
+                f"\n**Endpoint:** `{endpoint}`"
+                "\n_To switch providers, use_ `/model provider:model`"
+                "\n_e.g._ `/model openrouter:anthropic/claude-sonnet-4`"
+            )
+
+        return f"🤖 Model changed to `{new_model}` ({persist_note}){provider_note}{warning}{custom_hint}\n_(takes effect on next message)_"
 
     async def _handle_provider_command(self, event: MessageEvent) -> str:
         """Handle /provider command - show available providers."""
@@ -3696,6 +3819,78 @@ class GatewayRunner:
             logger.warning("MCP reload failed: %s", e)
             return f"❌ MCP reload failed: {e}"
 
+    # ------------------------------------------------------------------
+    # /approve & /deny — explicit dangerous-command approval
+    # ------------------------------------------------------------------
+
+    _APPROVAL_TIMEOUT_SECONDS = 300  # 5 minutes
+
+    async def _handle_approve_command(self, event: MessageEvent) -> str:
+        """Handle /approve command — execute a pending dangerous command.
+
+        Usage:
+            /approve          — approve and execute the pending command
+            /approve session  — approve and remember for this session
+            /approve always   — approve this pattern permanently
+        """
+        source = event.source
+        session_key = self._session_key_for_source(source)
+
+        if session_key not in self._pending_approvals:
+            return "No pending command to approve."
+
+        import time as _time
+        approval = self._pending_approvals[session_key]
+
+        # Check for timeout
+        ts = approval.get("timestamp", 0)
+        if _time.time() - ts > self._APPROVAL_TIMEOUT_SECONDS:
+            self._pending_approvals.pop(session_key, None)
+            return "⚠️ Approval expired (timed out after 5 minutes). Ask the agent to try again."
+
+        self._pending_approvals.pop(session_key)
+        cmd = approval["command"]
+        pattern_keys = approval.get("pattern_keys", [])
+        if not pattern_keys:
+            pk = approval.get("pattern_key", "")
+            pattern_keys = [pk] if pk else []
+
+        # Determine approval scope from args
+        args = event.get_command_args().strip().lower()
+        from tools.approval import approve_session, approve_permanent
+
+        if args in ("always", "permanent", "permanently"):
+            for pk in pattern_keys:
+                approve_permanent(pk)
+            scope_msg = " (pattern approved permanently)"
+        elif args in ("session", "ses"):
+            for pk in pattern_keys:
+                approve_session(session_key, pk)
+            scope_msg = " (pattern approved for this session)"
+        else:
+            # One-time approval — just approve for session so the immediate
+            # replay works, but don't advertise it as session-wide
+            for pk in pattern_keys:
+                approve_session(session_key, pk)
+            scope_msg = ""
+
+        logger.info("User approved dangerous command via /approve: %s...%s", cmd[:60], scope_msg)
+        from tools.terminal_tool import terminal_tool
+        result = terminal_tool(command=cmd, force=True)
+        return f"✅ Command approved and executed{scope_msg}.\n\n```\n{result[:3500]}\n```"
+
+    async def _handle_deny_command(self, event: MessageEvent) -> str:
+        """Handle /deny command — reject a pending dangerous command."""
+        source = event.source
+        session_key = self._session_key_for_source(source)
+
+        if session_key not in self._pending_approvals:
+            return "No pending command to deny."
+
+        self._pending_approvals.pop(session_key)
+        logger.info("User denied dangerous command via /deny")
+        return "❌ Command denied."
+
     async def _handle_update_command(self, event: MessageEvent) -> str:
         """Handle /update command — update Hermes Agent to the latest version.
 
@@ -4411,6 +4606,26 @@ class GatewayRunner:
             except Exception as _e:
                 logger.debug("agent:step hook error: %s", _e)
 
+        # Bridge sync status_callback → async adapter.send for context pressure
+        _status_adapter = self.adapters.get(source.platform)
+        _status_chat_id = source.chat_id
+        _status_thread_metadata = {"thread_id": source.thread_id} if source.thread_id else None
+
+        def _status_callback_sync(event_type: str, message: str) -> None:
+            if not _status_adapter:
+                return
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _status_adapter.send(
+                        _status_chat_id,
+                        message,
+                        metadata=_status_thread_metadata,
+                    ),
+                    _loop_for_step,
+                )
+            except Exception as _e:
+                logger.debug("status_callback error (%s): %s", event_type, _e)
+
         def run_sync():
             # Pass session_key to process registry via env var so background
             # processes can be mapped back to this gateway session
@@ -4503,6 +4718,7 @@ class GatewayRunner:
                 tool_progress_callback=progress_callback if tool_progress_enabled else None,
                 step_callback=_step_callback_sync if _hooks_ref.loaded_hooks else None,
                 stream_delta_callback=_stream_delta_cb,
+                status_callback=_status_callback_sync,
                 platform=platform_key,
                 honcho_session_key=session_key,
                 honcho_manager=honcho_manager,

@@ -654,10 +654,23 @@ def _try_anthropic() -> Tuple[Optional[Any], Optional[str]]:
     if not token:
         return None, None
 
+    # Allow base URL override from config.yaml model.base_url
+    base_url = _ANTHROPIC_DEFAULT_BASE_URL
+    try:
+        from hermes_cli.config import load_config
+        cfg = load_config()
+        model_cfg = cfg.get("model")
+        if isinstance(model_cfg, dict):
+            cfg_base_url = (model_cfg.get("base_url") or "").strip().rstrip("/")
+            if cfg_base_url:
+                base_url = cfg_base_url
+    except Exception:
+        pass
+
     model = _API_KEY_PROVIDER_AUX_MODELS.get("anthropic", "claude-haiku-4-5-20251001")
-    logger.debug("Auxiliary client: Anthropic native (%s)", model)
-    real_client = build_anthropic_client(token, _ANTHROPIC_DEFAULT_BASE_URL)
-    return AnthropicAuxiliaryClient(real_client, model, token, _ANTHROPIC_DEFAULT_BASE_URL), model
+    logger.debug("Auxiliary client: Anthropic native (%s) at %s", model, base_url)
+    real_client = build_anthropic_client(token, base_url)
+    return AnthropicAuxiliaryClient(real_client, model, token, base_url), model
 
 
 def _resolve_forced_provider(forced: str) -> Tuple[Optional[OpenAI], Optional[str]]:
@@ -1178,8 +1191,18 @@ def _get_cached_client(
     cache_key = (provider, async_mode, base_url or "", api_key or "")
     with _client_cache_lock:
         if cache_key in _client_cache:
-            cached_client, cached_default = _client_cache[cache_key]
-            return cached_client, model or cached_default
+            cached_client, cached_default, cached_loop = _client_cache[cache_key]
+            if async_mode:
+                # Async clients are bound to the event loop that created them.
+                # A cached async client whose loop has been closed will raise
+                # "Event loop is closed" when httpx tries to clean up its
+                # transport.  Discard the stale client and create a fresh one.
+                if cached_loop is not None and cached_loop.is_closed():
+                    del _client_cache[cache_key]
+                else:
+                    return cached_client, model or cached_default
+            else:
+                return cached_client, model or cached_default
     # Build outside the lock
     client, default_model = resolve_provider_client(
         provider,
@@ -1189,11 +1212,20 @@ def _get_cached_client(
         explicit_api_key=api_key,
     )
     if client is not None:
+        # For async clients, remember which loop they were created on so we
+        # can detect stale entries later.
+        bound_loop = None
+        if async_mode:
+            try:
+                import asyncio as _aio
+                bound_loop = _aio.get_event_loop()
+            except RuntimeError:
+                pass
         with _client_cache_lock:
             if cache_key not in _client_cache:
-                _client_cache[cache_key] = (client, default_model)
+                _client_cache[cache_key] = (client, default_model, bound_loop)
             else:
-                client, default_model = _client_cache[cache_key]
+                client, default_model, _ = _client_cache[cache_key]
     return client, model or default_model
 
 
