@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from pathlib import Path
 
-from hermes_cli.config import ensure_hermes_home, get_hermes_home, load_config
+from hermes_cli.config import ensure_hermes_home, get_hermes_home
 from hermes_cli.product_config import initialize_product_config_file, load_product_config, save_product_config
 from hermes_cli.product_stack import (
     bootstrap_first_admin_enrollment,
@@ -32,7 +32,6 @@ from hermes_cli.setup import (
     print_warning,
     prompt,
     prompt_choice,
-    save_config,
     setup_model_provider,
     setup_tools,
 )
@@ -134,19 +133,17 @@ def setup_product_storage() -> None:
         print_info(f"  Per-user workspace limit: {limit_mb / 1024:.1f} GB")
         return
 
-
-def _sync_model_route_from_hermes_config() -> None:
-    hermes_config = load_config()
-    model_cfg = hermes_config.get("model")
+def _sync_model_route_from_temp_config(temp_config: dict[str, Any]) -> None:
+    model_cfg = temp_config.get("model")
     if isinstance(model_cfg, str):
         model_cfg = {"default": model_cfg}
     if not isinstance(model_cfg, dict):
-        return
+        raise RuntimeError("Product model setup did not return a valid model configuration")
 
     provider = str(model_cfg.get("provider") or "").strip()
     model_name = str(model_cfg.get("default") or "").strip()
     if not provider or not model_name:
-        return
+        raise RuntimeError("Product model setup requires both provider and model")
 
     product_config = load_product_config()
     route = product_config.setdefault("models", {}).setdefault("default_route", {})
@@ -162,20 +159,21 @@ def _sync_model_route_from_hermes_config() -> None:
     base_url = str(model_cfg.get("base_url") or "").strip()
     if provider == "custom":
         base_url = base_url or str(get_env_value("OPENAI_BASE_URL") or "").strip()
+        if not base_url:
+            raise RuntimeError("Custom product model routes require a base URL")
     if base_url:
         route["base_url"] = base_url.rstrip("/")
-    elif provider == "custom":
-        print_warning("Hermes custom provider has no base URL; product route was not updated.")
+    else:
+        route.pop("base_url", None)
 
     save_product_config(product_config)
 
 
-def _sync_toolsets_from_hermes_config() -> None:
-    hermes_config = load_config()
-    platform_toolsets = hermes_config.get("platform_toolsets", {})
+def _sync_toolsets_from_temp_config(temp_config: dict[str, Any]) -> None:
+    platform_toolsets = temp_config.get("platform_toolsets", {})
     cli_toolsets = platform_toolsets.get("cli") if isinstance(platform_toolsets, dict) else None
     if not isinstance(cli_toolsets, list):
-        return
+        raise RuntimeError("Product tool setup did not return a valid CLI toolset selection")
 
     normalized = [str(toolset).strip() for toolset in cli_toolsets if str(toolset).strip()]
     available_toolsets = set(get_available_toolsets().keys())
@@ -187,7 +185,7 @@ def _sync_toolsets_from_hermes_config() -> None:
             + ", ".join(dropped)
         )
     if not filtered:
-        filtered = list(DEFAULT_PRODUCT_TOOLSETS)
+        raise RuntimeError("Product tools setup requires at least one valid Hermes toolset")
     product_config = load_product_config()
     product_config.setdefault("tools", {})["hermes_toolsets"] = filtered
     save_product_config(product_config)
@@ -229,21 +227,19 @@ def _start_product_stack() -> None:
 
 
 def _run_model_section() -> None:
-    config = load_config()
-    setup_model_provider(config)
-    save_config(config)
-    _sync_model_route_from_hermes_config()
+    temp_config: dict[str, Any] = {}
+    setup_model_provider(temp_config)
+    _sync_model_route_from_temp_config(temp_config)
 
 
 def _run_tools_section() -> None:
-    config = load_config()
+    temp_config: dict[str, Any] = {}
     product_config = load_product_config()
     selected_toolsets = product_config.get("tools", {}).get("hermes_toolsets", [])
     normalized = [str(toolset).strip() for toolset in selected_toolsets if str(toolset).strip()]
-    config.setdefault("platform_toolsets", {})["cli"] = normalized or list(DEFAULT_PRODUCT_TOOLSETS)
-    setup_tools(config, first_install=False)
-    save_config(config)
-    _sync_toolsets_from_hermes_config()
+    temp_config.setdefault("platform_toolsets", {})["cli"] = normalized or list(DEFAULT_PRODUCT_TOOLSETS)
+    setup_tools(temp_config, first_install=False)
+    _sync_toolsets_from_temp_config(temp_config)
 
 
 def _run_bootstrap_section() -> None:

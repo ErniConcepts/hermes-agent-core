@@ -1,4 +1,5 @@
 from pathlib import Path
+import pytest
 
 from hermes_cli.product_runtime import (
     ProductRuntimeRecord,
@@ -94,18 +95,16 @@ def test_get_product_runtime_session_proxies_runtime(monkeypatch):
     assert payload["messages"][0]["content"] == "hello"
 
 
-def test_normalize_runtime_session_payload_accepts_legacy_shape():
-    payload = _normalize_runtime_session_payload(
-        {
-            "session_id": "product_admin_123",
-            "messages": [],
-            "runtime_profile": "admin",
-            "runtime_toolset": "memory",
-        }
-    )
-
-    assert payload["runtime_mode"] == "admin"
-    assert payload["runtime_toolsets"] == ["memory"]
+def test_normalize_runtime_session_payload_requires_current_shape():
+    with pytest.raises(RuntimeError, match="runtime_mode"):
+        _normalize_runtime_session_payload(
+            {
+                "session_id": "product_admin_123",
+                "messages": [],
+                "runtime_profile": "admin",
+                "runtime_toolset": "memory",
+            }
+        )
 
 
 def test_wait_for_runtime_health_retries_until_ok(monkeypatch):
@@ -208,3 +207,16 @@ def test_docker_run_command_adds_host_gateway_mapping():
 
     assert "--add-host" in command
     assert "host.docker.internal:host-gateway" in command
+
+
+def test_stage_product_runtime_requires_explicit_model_base_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from hermes_cli.product_config import load_product_config, save_product_config
+
+    config = load_product_config()
+    config["models"]["default_route"]["base_url"] = ""
+    save_product_config(config)
+
+    with pytest.raises(RuntimeError, match="base_url"):
+        stage_product_runtime({"preferred_username": "admin"})

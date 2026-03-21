@@ -16,7 +16,6 @@ from pydantic import BaseModel
 from hermes_cli.config import _secure_dir, _secure_file, ensure_hermes_home, get_hermes_home
 from hermes_cli.product_config import load_product_config, runtime_host_access_host
 from hermes_cli.product_identity import render_product_soul
-from hermes_cli.runtime_provider import resolve_runtime_provider
 from toolsets import validate_toolset
 
 
@@ -93,15 +92,16 @@ def _env_path(config: dict[str, Any], user_id: str) -> Path:
 
 def _runtime_toolsets(config: dict[str, Any]) -> list[str]:
     configured = config.get("tools", {}).get("hermes_toolsets", [])
-    if isinstance(configured, list):
-        normalized = [
-            str(item).strip()
-            for item in configured
-            if str(item).strip() and validate_toolset(str(item).strip())
-        ]
-        if normalized:
-            return normalized
-    return ["memory", "session_search"]
+    if not isinstance(configured, list):
+        raise RuntimeError("product tools.hermes_toolsets must be a list")
+    normalized = [
+        str(item).strip()
+        for item in configured
+        if str(item).strip() and validate_toolset(str(item).strip())
+    ]
+    if not normalized:
+        raise RuntimeError("product tools.hermes_toolsets must contain at least one valid toolset")
+    return normalized
 
 
 def _runtime_port_range(config: dict[str, Any]) -> tuple[int, int]:
@@ -113,16 +113,25 @@ def _runtime_port_range(config: dict[str, Any]) -> tuple[int, int]:
 
 def _runtime_image(config: dict[str, Any]) -> str:
     runtime_config = config.get("runtime", {})
-    return str(runtime_config.get("image", "ghcr.io/erniconcepts/hermes-agent-core:main")).strip() or "ghcr.io/erniconcepts/hermes-agent-core:main"
+    image = str(runtime_config.get("image", "")).strip()
+    if not image:
+        raise RuntimeError("product runtime.image must be configured")
+    return image
 
 
 def _runtime_binary(config: dict[str, Any]) -> str:
     runtime_config = config.get("runtime", {})
-    return str(runtime_config.get("isolation_runtime", "runsc")).strip() or "runsc"
+    runtime = str(runtime_config.get("isolation_runtime", "")).strip()
+    if not runtime:
+        raise RuntimeError("product runtime.isolation_runtime must be configured")
+    return runtime
 
 
 def _runtime_internal_port(config: dict[str, Any]) -> int:
-    return int(config.get("runtime", {}).get("internal_port", 8091))
+    runtime_port = config.get("runtime", {}).get("internal_port")
+    if runtime_port is None:
+        raise RuntimeError("product runtime.internal_port must be configured")
+    return int(runtime_port)
 
 
 def _resolve_runtime_model_base_url(config: dict[str, Any], base_url: str) -> str:
@@ -201,18 +210,16 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
 
     route = product_config.get("models", {}).get("default_route", {})
     base_url = str(route.get("base_url") or "").strip()
-    provider = str(route.get("provider") or "custom").strip() or "custom"
+    provider = str(route.get("provider") or "").strip()
     api_mode = str(route.get("api_mode") or "chat_completions").strip() or "chat_completions"
-    model = str(route.get("model") or "qwen3.5-9b-local").strip() or "qwen3.5-9b-local"
+    model = str(route.get("model") or "").strip()
     api_key = "product-local-route"
+    if not provider:
+        raise RuntimeError("product models.default_route.provider must be configured")
+    if not model:
+        raise RuntimeError("product models.default_route.model must be configured")
     if not base_url:
-        resolved = resolve_runtime_provider(requested=provider)
-        base_url = str(resolved.get("base_url") or "").strip()
-        api_key = str(resolved.get("api_key") or "").strip() or api_key
-        provider = str(resolved.get("provider") or provider).strip() or provider
-        api_mode = str(resolved.get("api_mode") or api_mode).strip() or api_mode
-    if not base_url:
-        raise RuntimeError("Product runtime requires a resolved base URL for the configured model route")
+        raise RuntimeError("product models.default_route.base_url must be configured")
     base_url = _resolve_runtime_model_base_url(product_config, base_url)
     session_id = product_runtime_session_id(user_id)
     runtime_port = _resolve_runtime_port(product_config, user_id)
@@ -365,15 +372,13 @@ def _normalize_runtime_session_payload(payload: dict[str, Any]) -> dict[str, Any
     normalized = dict(payload)
     runtime_mode = str(normalized.get("runtime_mode") or "").strip()
     if not runtime_mode:
-        runtime_mode = str(normalized.get("runtime_profile") or "product").strip() or "product"
-        normalized["runtime_mode"] = runtime_mode
-
+        raise RuntimeError("Runtime session payload is missing runtime_mode")
+    normalized["runtime_mode"] = runtime_mode
     runtime_toolsets = normalized.get("runtime_toolsets")
     if isinstance(runtime_toolsets, list):
         normalized["runtime_toolsets"] = [str(item).strip() for item in runtime_toolsets if str(item).strip()]
     else:
-        legacy_toolset = str(normalized.get("runtime_toolset") or "").strip()
-        normalized["runtime_toolsets"] = [legacy_toolset] if legacy_toolset else []
+        raise RuntimeError("Runtime session payload is missing runtime_toolsets")
 
     return normalized
 

@@ -1,9 +1,7 @@
 """Product-layer configuration for the hermes-core distribution.
 
-This file is intentionally separate from ``config.yaml``.  Hermes' existing
-config remains the source of truth for generic Hermes behavior, while
-``product.yaml`` holds setup-owned deployment behavior for the local multi-user
-product layer.
+This file is intentionally separate from ``config.yaml``. ``product.yaml`` is
+the canonical source of truth for setup-owned product behavior.
 """
 
 from __future__ import annotations
@@ -87,23 +85,38 @@ def get_product_config_path() -> Path:
     return get_hermes_home() / "product.yaml"
 
 
-def get_product_storage_root(home: Path | None = None) -> Path:
-    hermes_home = home or get_hermes_home()
-    relative = DEFAULT_PRODUCT_CONFIG["storage"]["root"]
-    return hermes_home / relative
+def _storage_relative_path(config: Dict[str, Any], key: str) -> str:
+    relative = str(config.get("storage", {}).get(key, "")).strip()
+    if not relative:
+        raise ValueError(f"product storage.{key} must be configured")
+    return relative
 
 
-def get_product_users_root(home: Path | None = None) -> Path:
+def get_product_storage_root(
+    home: Path | None = None,
+    *,
+    config: Dict[str, Any] | None = None,
+) -> Path:
     hermes_home = home or get_hermes_home()
-    relative = DEFAULT_PRODUCT_CONFIG["storage"]["users_root"]
-    return hermes_home / relative
+    product_config = config or (DEFAULT_PRODUCT_CONFIG if home is not None else load_product_config())
+    return hermes_home / _storage_relative_path(product_config, "root")
+
+
+def get_product_users_root(
+    home: Path | None = None,
+    *,
+    config: Dict[str, Any] | None = None,
+) -> Path:
+    hermes_home = home or get_hermes_home()
+    product_config = config or (DEFAULT_PRODUCT_CONFIG if home is not None else load_product_config())
+    return hermes_home / _storage_relative_path(product_config, "users_root")
 
 
 def ensure_product_home() -> None:
     ensure_hermes_home()
     hermes_home = get_hermes_home()
-    product_root = get_product_storage_root(hermes_home)
-    users_root = get_product_users_root(hermes_home)
+    product_root = get_product_storage_root(hermes_home, config=DEFAULT_PRODUCT_CONFIG)
+    users_root = get_product_users_root(hermes_home, config=DEFAULT_PRODUCT_CONFIG)
     for path in (
         product_root,
         users_root,
@@ -161,13 +174,14 @@ def resolve_runtime_defaults(config: Dict[str, Any] | None = None) -> Dict[str, 
     toolsets = product_config.get("tools", {}).get("hermes_toolsets", [])
     normalized_toolsets = [str(item).strip() for item in toolsets if str(item).strip()]
     if not normalized_toolsets:
-        normalized_toolsets = ["memory", "session_search"]
+        raise ValueError("product tools.hermes_toolsets must contain at least one toolset")
+    inference_model = str(model_cfg.get("model", "")).strip()
+    if not inference_model:
+        raise ValueError("product models.default_route.model must be configured")
     return {
         "runtime_mode": "product",
         "runtime_toolsets": ",".join(normalized_toolsets),
-        "runtime_profile": "product",
-        "runtime_toolset": normalized_toolsets[0],
-        "inference_model": str(model_cfg.get("model", "qwen3.5-9b-local")),
+        "inference_model": inference_model,
     }
 
 
@@ -175,8 +189,6 @@ def runtime_host_access_host(config: Dict[str, Any] | None = None) -> str:
     product_config = config or load_product_config()
     runtime_cfg = product_config.get("runtime", {})
     configured = str(runtime_cfg.get("host_access_host", "")).strip()
-    if configured:
-        return configured
-    if os.name == "nt":
-        return "host.docker.internal"
-    return "host.docker.internal"
+    if not configured:
+        raise ValueError("product runtime.host_access_host must be configured")
+    return configured

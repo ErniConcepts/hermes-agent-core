@@ -147,7 +147,7 @@ def ensure_runsc_registered_with_docker() -> bool:
 
 def validate_product_host_prereqs() -> None:
     if not _is_linux():
-        return
+        raise RuntimeError("hermes-core product host prerequisites are only supported on Linux")
     if not _docker_available():
         raise RuntimeError("Docker is not available or the daemon is not running")
     if not _docker_compose_available():

@@ -16,29 +16,19 @@ import uvicorn
 from hermes_state import SessionDB
 
 
-def _env_or_default(name: str, default: str) -> str:
+def _required_env(name: str) -> str:
     value = os.getenv(name)
     if isinstance(value, str) and value.strip():
-        return value
-    return default
-
-
-def _runtime_defaults() -> dict[str, str]:
-    return {
-        "runtime_mode": "product",
-        "runtime_toolsets": "memory,session_search",
-        "inference_model": "qwen3.5-9b-local",
-    }
+        return value.strip()
+    raise RuntimeError(f"{name} must be configured for the product runtime")
 
 
 def _runtime_toolsets() -> list[str]:
-    raw_toolsets = str(os.getenv("HERMES_PRODUCT_TOOLSETS", "")).strip()
-    if raw_toolsets:
-        normalized = [item.strip() for item in raw_toolsets.split(",") if item.strip()]
-        if normalized:
-            return normalized
-    raw_default_toolsets = _runtime_defaults()["runtime_toolsets"]
-    return [item.strip() for item in raw_default_toolsets.split(",") if item.strip()]
+    raw_toolsets = _required_env("HERMES_PRODUCT_TOOLSETS")
+    normalized = [item.strip() for item in raw_toolsets.split(",") if item.strip()]
+    if not normalized:
+        raise RuntimeError("HERMES_PRODUCT_TOOLSETS must contain at least one toolset")
+    return normalized
 
 
 class RuntimeTurnRequest(BaseModel):
@@ -93,10 +83,7 @@ def _load_runtime_soul() -> str:
 
 
 def _session_id() -> str:
-    session_id = str(os.getenv("HERMES_PRODUCT_SESSION_ID", "")).strip()
-    if not session_id:
-        raise RuntimeError("HERMES_PRODUCT_SESSION_ID must be configured for the product runtime")
-    return session_id
+    return _required_env("HERMES_PRODUCT_SESSION_ID")
 
 
 def _visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -137,11 +124,11 @@ def _load_session_messages(db: SessionDB, session_id: str) -> list[dict[str, Any
 def build_runtime_agent(db: SessionDB, session_id: str, *, reasoning_callback: Any = None):
     from run_agent import AIAgent
 
-    provider = _env_or_default("HERMES_PRODUCT_PROVIDER", "custom").strip().lower() or "custom"
-    api_mode = _env_or_default("HERMES_PRODUCT_API_MODE", "chat_completions").strip().lower() or "chat_completions"
-    model = _env_or_default("HERMES_PRODUCT_MODEL", _runtime_defaults()["inference_model"]).strip()
-    base_url = str(os.getenv("OPENAI_BASE_URL", "")).strip() or None
-    api_key = str(os.getenv("OPENAI_API_KEY", "")).strip() or None
+    provider = _required_env("HERMES_PRODUCT_PROVIDER").lower()
+    api_mode = _required_env("HERMES_PRODUCT_API_MODE").lower()
+    model = _required_env("HERMES_PRODUCT_MODEL")
+    base_url = _required_env("OPENAI_BASE_URL")
+    api_key = _required_env("OPENAI_API_KEY")
 
     return AIAgent(
         base_url=base_url,
@@ -162,11 +149,10 @@ def build_runtime_agent(db: SessionDB, session_id: str, *, reasoning_callback: A
 
 
 def create_product_runtime_app() -> FastAPI:
-    defaults = _runtime_defaults()
-    runtime_mode = _env_or_default("HERMES_PRODUCT_RUNTIME_MODE", defaults["runtime_mode"])
+    runtime_mode = _required_env("HERMES_PRODUCT_RUNTIME_MODE")
     runtime_toolsets = _runtime_toolsets()
-    hermes_home = os.getenv("HERMES_HOME", "")
-    model = _env_or_default("HERMES_PRODUCT_MODEL", defaults["inference_model"])
+    hermes_home = _required_env("HERMES_HOME")
+    model = _required_env("HERMES_PRODUCT_MODEL")
     session_id = _session_id()
     _load_runtime_soul()
 
@@ -284,8 +270,8 @@ else:  # pragma: no cover
 
 
 def main() -> int:
-    host = _env_or_default("HERMES_RUNTIME_HOST", "0.0.0.0")
-    port = int(_env_or_default("HERMES_RUNTIME_PORT", "8091"))
+    host = _required_env("HERMES_RUNTIME_HOST")
+    port = int(_required_env("HERMES_RUNTIME_PORT"))
     uvicorn.run(create_product_runtime_app(), host=host, port=port, reload=False)
     return 0
 

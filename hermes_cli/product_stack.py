@@ -66,14 +66,10 @@ def _secure_tree(*paths: Path) -> None:
 
 
 def _public_host(config: Dict[str, Any]) -> str:
-    network = config.get("network", {})
-    host = str(network.get("public_host", "")).strip()
-    if host:
-        return host
-    bind_host = str(network.get("bind_host", "")).strip()
-    if bind_host and bind_host not in {"0.0.0.0", "::", "[::]"}:
-        return bind_host
-    return "localhost"
+    host = str(config.get("network", {}).get("public_host", "")).strip()
+    if not host:
+        raise ValueError("product network.public_host must be configured")
+    return host
 
 
 def _validate_public_host(host: str) -> None:
@@ -118,7 +114,7 @@ def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]
     }
 
 
-def _required_secret(config: Dict[str, Any], env_key: str) -> str:
+def _required_secret(env_key: str) -> str:
     current = (get_env_value(env_key) or "").strip()
     if current:
         return current
@@ -131,7 +127,7 @@ def _ensure_client_secret(config: Dict[str, Any]) -> str:
     env_key = str(config.get("auth", {}).get("client_secret_ref", "")).strip()
     if not env_key:
         raise ValueError("auth.client_secret_ref must be configured in product.yaml")
-    return _required_secret(config, env_key)
+    return _required_secret(env_key)
 
 
 def _ensure_static_api_key(config: Dict[str, Any]) -> str:
@@ -140,7 +136,7 @@ def _ensure_static_api_key(config: Dict[str, Any]) -> str:
     ).strip()
     if not env_key:
         raise ValueError("services.pocket_id.static_api_key_ref must be configured in product.yaml")
-    return _required_secret(config, env_key)
+    return _required_secret(env_key)
 
 
 def _ensure_encryption_key(config: Dict[str, Any]) -> str:
@@ -160,14 +156,21 @@ def _ensure_encryption_key(config: Dict[str, Any]) -> str:
 def _build_env_file(config: Dict[str, Any]) -> str:
     network = config.get("network", {})
     services_cfg = config.get("services", {}).get("pocket_id", {})
+    bind_host = str(network.get("bind_host", "")).strip()
+    if not bind_host:
+        raise ValueError("product network.bind_host must be configured")
+    puid = services_cfg.get("puid")
+    pgid = services_cfg.get("pgid")
+    if puid is None or pgid is None:
+        raise ValueError("services.pocket_id.puid and services.pocket_id.pgid must be configured")
     return "\n".join(
         [
             f"APP_URL={resolve_product_urls(config)['issuer_url']}",
             f"ENCRYPTION_KEY={_ensure_encryption_key(config)}",
             f"STATIC_API_KEY={_ensure_static_api_key(config)}",
-            f"PUID={services_cfg.get('puid', 1000)}",
-            f"PGID={services_cfg.get('pgid', 1000)}",
-            f"HOST={network.get('bind_host', '0.0.0.0')}",
+            f"PUID={puid}",
+            f"PGID={pgid}",
+            f"HOST={bind_host}",
             "PORT=1411",
             "",
         ]
@@ -177,14 +180,21 @@ def _build_env_file(config: Dict[str, Any]) -> str:
 def _build_compose_spec(config: Dict[str, Any]) -> Dict[str, Any]:
     network = config.get("network", {})
     services_cfg = config.get("services", {}).get("pocket_id", {})
-    bind_host = str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0"
-    pocket_id_port = int(network.get("pocket_id_port", 1411))
-    container_name = (
-        str(services_cfg.get("container_name", "hermes-pocket-id")).strip() or "hermes-pocket-id"
-    )
+    bind_host = str(network.get("bind_host", "")).strip()
+    if not bind_host:
+        raise ValueError("product network.bind_host must be configured")
+    pocket_id_port = network.get("pocket_id_port")
+    if pocket_id_port is None:
+        raise ValueError("product network.pocket_id_port must be configured")
+    container_name = str(services_cfg.get("container_name", "")).strip()
+    if not container_name:
+        raise ValueError("services.pocket_id.container_name must be configured")
     data_root = get_pocket_id_data_root().as_posix()
+    image = str(services_cfg.get("image", "")).strip()
+    if not image:
+        raise ValueError("services.pocket_id.image must be configured")
     service: Dict[str, Any] = {
-        "image": str(services_cfg.get("image", POCKET_ID_IMAGE) or POCKET_ID_IMAGE),
+        "image": image,
         "container_name": container_name,
         "restart": "unless-stopped",
         "env_file": [get_pocket_id_env_path().as_posix()],
@@ -215,18 +225,18 @@ def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, 
     )
 
     urls = resolve_product_urls(product_config)
-    product_config.setdefault("network", {})["public_host"] = urls["public_host"]
-    product_config.setdefault("auth", {})["provider"] = "pocket-id"
+    product_config["network"]["public_host"] = urls["public_host"]
+    product_config["auth"]["provider"] = "pocket-id"
     product_config["auth"]["issuer_url"] = urls["issuer_url"]
-    product_config.setdefault("services", {}).setdefault("pocket_id", {})
-    product_config["services"]["pocket_id"].setdefault("mode", "docker")
-    product_config["services"]["pocket_id"].setdefault("container_name", "hermes-pocket-id")
-    product_config["services"]["pocket_id"].setdefault("image", POCKET_ID_IMAGE)
-    product_config["services"]["pocket_id"].setdefault("puid", 1000)
-    product_config["services"]["pocket_id"].setdefault("pgid", 1000)
+    services_cfg = product_config.setdefault("services", {}).setdefault("pocket_id", {})
+    services_cfg["mode"] = str(services_cfg.get("mode", "docker")).strip() or "docker"
+    services_cfg["container_name"] = str(services_cfg.get("container_name", "hermes-pocket-id")).strip() or "hermes-pocket-id"
+    services_cfg["image"] = str(services_cfg.get("image", POCKET_ID_IMAGE)).strip() or POCKET_ID_IMAGE
+    services_cfg["puid"] = int(services_cfg.get("puid", 1000))
+    services_cfg["pgid"] = int(services_cfg.get("pgid", 1000))
     runtime_user = _runtime_user_spec()
     if runtime_user:
-        product_config["services"]["pocket_id"].setdefault("user", runtime_user)
+        services_cfg["user"] = runtime_user
 
     _ensure_client_secret(product_config)
 

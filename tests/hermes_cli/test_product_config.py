@@ -75,6 +75,16 @@ def test_resolve_runtime_defaults_reads_product_config(tmp_path, monkeypatch):
 
     assert defaults["runtime_mode"] == "product"
     assert defaults["runtime_toolsets"] == "memory,session_search"
-    assert defaults["runtime_profile"] == "product"
-    assert defaults["runtime_toolset"] == "memory"
     assert defaults["inference_model"] == "custom-model"
+
+
+def test_get_product_storage_root_respects_saved_config_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    config = load_product_config()
+    config["storage"]["root"] = "custom-product-root"
+    config["storage"]["users_root"] = "custom-product-users"
+    save_product_config(config)
+
+    assert get_product_storage_root() == tmp_path / "custom-product-root"
+    assert get_product_users_root() == tmp_path / "custom-product-users"

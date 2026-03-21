@@ -25,7 +25,7 @@ def _runtime_capability_overlay(config: dict | None = None) -> str:
     toolsets = product_config.get("tools", {}).get("hermes_toolsets", [])
     normalized = [str(item).strip() for item in toolsets if str(item).strip()]
     if not normalized:
-        normalized = ["memory", "session_search"]
+        raise ValueError("product tools.hermes_toolsets must contain at least one toolset")
     rendered_toolsets = ", ".join(normalized)
     runtime_tools = _runtime_tools_from_toolsets(normalized)
     rendered_tools = ", ".join(runtime_tools) if runtime_tools else "none"

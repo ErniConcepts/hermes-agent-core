@@ -45,7 +45,7 @@ def load_product_oidc_client_settings(config: Mapping[str, Any] | None = None) -
     product_config = dict(config or load_product_config())
     auth = dict(product_config.get("auth", {}))
     network = dict(product_config.get("network", {}))
-    public_host = str(network.get("public_host", "localhost")).strip() or "localhost"
+    public_host = _required_string(str(network.get("public_host", "")), "network.public_host")
     app_port = int(network.get("app_port", 8086))
 
     issuer_url = _required_string(str(auth.get("issuer_url", "")), "auth.issuer_url")

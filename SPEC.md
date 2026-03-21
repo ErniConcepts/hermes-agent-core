@@ -30,8 +30,7 @@ After installation, a guided setup CLI should configure:
 
 - visible product name and branding shown in the web app
 - agent personality seed content, derived from configurable markdown content
-- enabled user-facing tools
-- execution placement for tools that are allowed to run either inside or outside the runtime sandbox
+- enabled Hermes runtime toolsets for all product chat sessions
 - initial global model or API route
 - optional Tailscale exposure
 - local identity-provider integration
@@ -75,8 +74,7 @@ That product config should be the deployment source of truth for:
 
 - branding and product name
 - agent personality seed content
-- enabled tool profiles
-- placement for `selectable` tools
+- enabled Hermes runtime toolsets
 - initial model or API route
 - optional Tailscale exposure
 - identity-provider integration settings
@@ -93,11 +91,11 @@ For the product auth flow:
 - the default local value should be `localhost`
 - setup must ask for the user-facing hostname separately from the bind address
 
-The web app and runtime launcher should derive their behavior from this product config rather than becoming independent configuration authorities.
+The web app and runtime launcher should derive their behavior directly from this product config rather than becoming independent configuration authorities.
 
 The first implementation should keep Hermes' existing `config.yaml` for generic Hermes behavior and use `product.yaml` only for setup-owned product deployment behavior.
 
-If the product setup flow reuses generic Hermes setup helpers for model/provider or tool selection, that reuse should happen from the product-owned command path and the resulting product runtime settings should still be synchronized back into `product.yaml`.
+If the product setup flow reuses generic Hermes setup helpers for model/provider or tool selection, that reuse should happen only through the product-owned command path and must write directly into `product.yaml` rather than using Hermes config as an intermediate source of truth.
 
 The product should not maintain a second legacy tier vocabulary for runtime tools. Product setup should persist Hermes toolset names directly, with an initial safe default of:
 
@@ -231,37 +229,18 @@ In the first implementation:
 - the default local host alias for containerized runtimes is `host.docker.internal`, and Docker launch should add an explicit `host-gateway` mapping for that alias
 - on Linux, product setup should fail hard if Docker, `docker compose`, `runsc`, or Docker `runsc` registration are missing or broken instead of silently continuing into a weaker runtime mode
 
-The product should treat tools as product-managed capabilities with execution metadata.
+The product should treat tools as product-managed capabilities selected through Hermes toolsets.
 
-Each tool should eventually declare an execution policy such as:
+The active product path should not maintain a second placement vocabulary such as `inside_only`, `outside_only`, or `selectable`.
 
-- `inside_only`
-- `outside_only`
-- `selectable`
+The product web app remains outside the runtime and continues to own:
 
-The setup CLI should only expose placement choices for tools marked `selectable`.
+- user provisioning and recovery
+- model-route setup and deployment
+- Pocket ID and infrastructure integration
+- audit-aware control-plane operations
 
-The preferred execution split is:
-
-- file and workspace tools run inside the isolated user runtime
-- admin, auth, routing, and infrastructure tools run outside the runtime
-- selected product tools may be configurable at setup if they are safe to support in both placements
-
-The first product policy should treat these categories as fixed:
-
-- `inside_only`:
-  - workspace file read, write, patch, and search
-  - runtime-local reasoning helpers
-- `outside_only`:
-  - user provisioning and recovery
-  - model routing and provider orchestration
-  - Tailscale and network control
-  - audit-aware control-plane operations
-- `selectable`:
-  - web search
-  - browser automation
-  - image generation
-  - code-execution-style helper tools if they can be exposed safely in either placement
+The runtime continues to own the Hermes toolsets configured in product setup.
 
 The browser admin UI should remain narrow in the first version and only manage:
 

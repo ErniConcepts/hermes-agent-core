@@ -34,8 +34,10 @@ def workspace_limit_megabytes(config: dict[str, Any] | None = None) -> int:
     try:
         limit_mb = int(raw_value)
     except (TypeError, ValueError):
-        limit_mb = 2048
-    return max(1, limit_mb)
+        raise ValueError("product storage.user_workspace_limit_mb must be an integer")
+    if limit_mb < 1:
+        raise ValueError("product storage.user_workspace_limit_mb must be greater than zero")
+    return limit_mb
 
 
 def workspace_limit_bytes(config: dict[str, Any] | None = None) -> int:

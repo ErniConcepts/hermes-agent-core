@@ -1,3 +1,5 @@
+import pytest
+
 from hermes_cli.product_workspace import (
     ProductWorkspaceQuotaError,
     create_workspace_folder,
@@ -78,3 +80,21 @@ def test_workspace_rejects_uploads_over_quota(tmp_path, monkeypatch):
 def test_humanize_bytes_formats_small_and_large_values():
     assert humanize_bytes(999) == "999 B"
     assert humanize_bytes(1024 * 1024) == "1 MB"
+
+
+def test_workspace_rejects_invalid_quota_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    def _config():
+        return {
+            "storage": {
+                "root": "product",
+                "users_root": "product/users",
+                "user_workspace_limit_mb": "bad-value",
+            }
+        }
+
+    with monkeypatch.context() as context:
+        context.setattr("hermes_cli.product_workspace.load_product_config", _config)
+        with pytest.raises(ValueError, match="user_workspace_limit_mb"):
+            get_workspace_state(_user())

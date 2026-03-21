@@ -118,6 +118,19 @@ def test_initialize_product_stack_reuses_existing_secrets(tmp_path, monkeypatch)
     mock_save_env.assert_not_called()
 
 
+def test_initialize_product_stack_requires_public_host(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = load_product_config()
+    config["network"]["public_host"] = ""
+
+    try:
+        initialize_product_stack(config)
+    except ValueError as exc:
+        assert "public_host" in str(exc)
+    else:
+        raise AssertionError("Expected missing public_host to fail")
+
+
 def test_ensure_product_stack_started_uses_generated_compose_file(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 

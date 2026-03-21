@@ -22,9 +22,13 @@ The fork should stay as close to upstream as possible. Product-specific behavior
 
 The goal is to keep product-specific behavior concentrated in these places:
 
+- `hermes_cli/product_main.py`
+- `hermes_cli/product_setup.py`
+- `hermes_cli/product_install.py`
+- `hermes_cli/product_runtime.py`
 - `hermes_cli/product_runtime_service.py`
-- `toolsets.py`
-- `model_tools.py`
+- `hermes_cli/product_app.py`
+- `hermes_cli/product_stack.py`
 - runtime-facing tests such as `tests/hermes_cli/test_product_runtime_service.py`
 
 The fork should prefer:
@@ -42,10 +46,10 @@ The fork should avoid growing deeper changes in:
 
 These are the files most likely to conflict during upstream syncs:
 
-- `run_agent.py`
 - `tests/conftest.py`
-- `model_tools.py`
-- `toolsets.py`
+- `pyproject.toml`
+- `hermes_cli/product_main.py`
+- `hermes_cli/product_setup.py`
 - `hermes_cli/product_runtime_service.py`
 
 ## Current identity rule
@@ -76,15 +80,8 @@ git merge upstream/main
 Run at minimum:
 
 ```powershell
-python -m pytest tests/hermes_cli/test_product_runtime_service.py tests/agent/test_prompt_builder_identity.py -o addopts=
+python -m pytest tests/hermes_cli/test_product_main.py tests/hermes_cli/test_product_runtime_service.py tests/hermes_cli/test_product_setup.py -o addopts=
 python -m compileall hermes_cli run_agent.py
-```
-
-If the external product app changed runtime seeding or launch behavior, also run its focused validation there:
-
-```powershell
-python -m pytest tests/test_runtime_bootstrap.py tests/test_runtime_manager.py
-python -m compileall src
 ```
 
 ## Resolution guidance
@@ -99,5 +96,5 @@ A good sync keeps:
 
 - upstream core behavior largely intact
 - runtime identity via `SOUL.md`
-- runtime lockdown intact
-- product-specific code concentrated in a small, easy-to-review surface
+- product-specific code concentrated in `hermes_cli/product_*` and `hermes-core`
+- generic Hermes CLI and tool core as close to upstream as possible

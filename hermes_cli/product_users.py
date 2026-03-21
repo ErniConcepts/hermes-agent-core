@@ -251,10 +251,10 @@ def create_product_user_with_signup(
 ) -> ProductCreatedUser:
     user = ProductUser.model_validate(
         create_product_user(
-        username,
-        display_name,
-        email=email,
-        config=config,
+            username,
+            display_name,
+            email=email,
+            config=config,
         )
     )
     signup = ProductSignupToken.model_validate(create_product_signup_token(config=config))

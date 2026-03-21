@@ -84,12 +84,12 @@ PAGE_TEMPLATE = """<!doctype html>
 <section class="shell workspace-explorer-shell">
 <div class="workspace-toolbar">
 <div class="workspace-toolbar-left">
-<button class="workspace-round-button" id="workspaceUpButton" type="button" aria-label="Go up one folder">↑</button>
+<button class="workspace-round-button" id="workspaceUpButton" type="button" aria-label="Go up one folder">&#8593;</button>
 <code class="token-link workspace-path" id="workspacePathLabel">/</code>
 </div>
 <div class="workspace-toolbar-right">
-<button class="workspace-round-button" id="workspaceFolderButton" type="button" aria-label="Create folder">＋</button>
-<button class="workspace-round-button" id="workspaceUploadButton" type="button" aria-label="Upload files">⇪</button>
+<button class="workspace-round-button" id="workspaceFolderButton" type="button" aria-label="Create folder">&#65291;</button>
+<button class="workspace-round-button" id="workspaceUploadButton" type="button" aria-label="Upload files">&#8682;</button>
 </div>
 </div>
 <input id="workspaceFileInput" type="file" multiple hidden>
