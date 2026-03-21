@@ -32,6 +32,7 @@ def test_product_runtime_session_and_turn(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
     monkeypatch.setattr("hermes_cli.product_runtime_service.build_runtime_agent", lambda db, session_id, reasoning_callback=None: FakeAgent())
     monkeypatch.setattr(
         "hermes_cli.product_runtime_service._load_session_messages",
@@ -39,13 +40,13 @@ def test_product_runtime_session_and_turn(monkeypatch, tmp_path):
     )
 
     client = TestClient(create_product_runtime_app())
-    session = client.get("/runtime/session")
+    session = client.get("/runtime/session", headers={"X-Hermes-Product-Runtime-Token": "runtime-token"})
     assert session.status_code == 200
     assert session.json()["session_id"] == "product_admin_123"
     assert session.json()["runtime_mode"] == "product"
     assert session.json()["runtime_toolsets"] == ["memory", "session_search"]
 
-    turn = client.post("/runtime/turn", json={"user_message": "hello"})
+    turn = client.post("/runtime/turn", json={"user_message": "hello"}, headers={"X-Hermes-Product-Runtime-Token": "runtime-token"})
     assert turn.status_code == 200
     assert turn.json()["final_response"] == "done"
 
@@ -63,11 +64,12 @@ def test_product_runtime_stream_emits_reasoning_and_final(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
     monkeypatch.setattr("hermes_cli.product_runtime_service.build_runtime_agent", lambda db, session_id, reasoning_callback=None: FakeAgent())
     monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: [])
 
     client = TestClient(create_product_runtime_app())
-    with client.stream("POST", "/runtime/turn/stream", json={"user_message": "hello"}) as response:
+    with client.stream("POST", "/runtime/turn/stream", json={"user_message": "hello"}, headers={"X-Hermes-Product-Runtime-Token": "runtime-token"}) as response:
         assert response.status_code == 200
         payload = "\n".join(response.iter_text())
 
@@ -76,3 +78,24 @@ def test_product_runtime_stream_emits_reasoning_and_final(monkeypatch, tmp_path)
     assert "event: final" in payload
     assert "\"final_response\": \"done\"" in payload
     assert "\"runtime_toolsets\": [\"memory\", \"session_search\"]" in payload
+
+
+def test_product_runtime_service_rejects_missing_runtime_token(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+
+    client = TestClient(create_product_runtime_app())
+    response = client.get("/runtime/session")
+
+    assert response.status_code == 401

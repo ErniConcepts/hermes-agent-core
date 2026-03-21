@@ -86,7 +86,9 @@ The product integration uses a narrow HTTP runtime surface in:
 This service should stay intentionally small:
 
 - `GET /healthz`
+- `GET /runtime/session`
 - `POST /runtime/turn`
+- `POST /runtime/turn/stream`
 
 Rules for this surface:
 

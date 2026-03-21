@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import secrets
+import time
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -17,6 +20,7 @@ from hermes_cli.product_oidc import (
     exchange_product_oidc_code,
     fetch_product_oidc_userinfo,
     load_product_oidc_client_settings,
+    validate_product_oidc_id_token,
 )
 from hermes_cli.product_runtime import delete_product_runtime, get_product_runtime_session, stream_product_runtime_turn
 from hermes_cli.product_stack import resolve_product_urls
@@ -38,6 +42,7 @@ from hermes_cli.product_workspace import (
 )
 from hermes_cli.product_web import build_product_index_html
 
+logger = logging.getLogger(__name__)
 
 class ProductHealthResponse(BaseModel):
     status: str = "ok"
@@ -49,6 +54,7 @@ class ProductHealthResponse(BaseModel):
 class ProductSessionResponse(BaseModel):
     authenticated: bool
     user: dict[str, Any] | None = None
+    csrf_token: str | None = None
 
 
 class ProductAdminUsersResponse(BaseModel):
@@ -101,39 +107,70 @@ def _session_secret() -> str:
     return f"hermes-product-session-{digest}"
 
 
-def _session_user_payload(userinfo: dict[str, Any]) -> dict[str, Any]:
-    product_config = load_product_config()
-    bootstrap = product_config.get("bootstrap", {})
-    first_admin_username = (
-        str(bootstrap.get("first_admin_username", "admin")).strip() or "admin"
-    )
-    preferred_username = str(userinfo.get("preferred_username") or "").strip()
+def _csrf_token(request: Request) -> str:
+    existing = request.session.get("csrf_token")
+    if isinstance(existing, str) and existing.strip():
+        return existing
+    token = secrets.token_urlsafe(24)
+    request.session["csrf_token"] = token
+    return token
+
+
+def _require_csrf(request: Request) -> None:
+    session_token = _csrf_token(request)
+    header_token = request.headers.get("X-Hermes-CSRF-Token", "").strip()
+    if not header_token or header_token != session_token:
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
+
+
+def _session_user_payload(userinfo: dict[str, Any], provider_user: ProductUser | None = None) -> dict[str, Any]:
     email = userinfo.get("email")
     if isinstance(email, str) and email.endswith("@users.local.invalid"):
         email = None
+    provider_username = getattr(provider_user, "username", None) if provider_user is not None else None
+    provider_display_name = getattr(provider_user, "display_name", None) if provider_user is not None else None
+    provider_email = getattr(provider_user, "email", None) if provider_user is not None else None
+    provider_is_admin = bool(getattr(provider_user, "is_admin", False)) if provider_user is not None else False
+    provider_username = provider_username or userinfo.get("preferred_username")
+    provider_display_name = provider_display_name or (
+        userinfo.get("name") or userinfo.get("preferred_username") or userinfo.get("sub", "")
+    )
+    provider_email = provider_email or email
     return {
         "id": userinfo.get("sub", ""),
         "sub": userinfo.get("sub", ""),
-        "email": email,
-        "name": userinfo.get("name") or userinfo.get("preferred_username") or userinfo.get("sub", ""),
-        "preferred_username": userinfo.get("preferred_username"),
+        "email": provider_email,
+        "name": provider_display_name,
+        "preferred_username": provider_username,
         "email_verified": userinfo.get("email_verified"),
-        "is_admin": preferred_username == first_admin_username,
+        "is_admin": provider_is_admin,
     }
 
 
 def _refresh_session_user(user: dict[str, Any]) -> dict[str, Any] | None:
+    started = time.perf_counter()
     user_id = str(user.get("sub") or "").strip()
     if not user_id:
         return None
     provider_user = get_product_user_by_id(user_id)
-    if provider_user is None or provider_user.disabled:
+    if provider_user is None or bool(getattr(provider_user, "disabled", False)):
+        logger.info(
+            "product_app user refresh for %s completed in %.0fms (missing/disabled)",
+            user_id,
+            (time.perf_counter() - started) * 1000,
+        )
         return None
     refreshed = dict(user)
-    refreshed["id"] = provider_user.id
-    refreshed["email"] = provider_user.email
-    refreshed["name"] = provider_user.display_name or refreshed.get("name")
-    refreshed["preferred_username"] = provider_user.username
+    refreshed["id"] = getattr(provider_user, "id", user_id)
+    refreshed["email"] = getattr(provider_user, "email", refreshed.get("email"))
+    refreshed["name"] = getattr(provider_user, "display_name", None) or refreshed.get("name")
+    refreshed["preferred_username"] = getattr(provider_user, "username", None) or refreshed.get("preferred_username")
+    refreshed["is_admin"] = bool(getattr(provider_user, "is_admin", False))
+    logger.info(
+        "product_app user refresh for %s completed in %.0fms",
+        user_id,
+        (time.perf_counter() - started) * 1000,
+    )
     return refreshed
 
 
@@ -168,7 +205,7 @@ def create_product_app() -> FastAPI:
         secret_key=_session_secret(),
         session_cookie="hermes_product_session",
         same_site="lax",
-        https_only=False,
+        https_only=urls["app_base_url"].startswith("https://"),
     )
 
     @app.get("/", response_class=HTMLResponse)
@@ -194,6 +231,7 @@ def create_product_app() -> FastAPI:
 
     @app.get("/api/auth/login")
     def auth_login(request: Request) -> RedirectResponse:
+        _csrf_token(request)
         existing = request.session.get("user")
         if isinstance(existing, dict):
             refreshed = _refresh_session_user(existing)
@@ -231,30 +269,43 @@ def create_product_app() -> FastAPI:
         access_token = str(token_response.get("access_token", "")).strip()
         if not access_token:
             raise HTTPException(status_code=502, detail="OIDC token response missing access_token")
+        id_token = str(token_response.get("id_token", "")).strip()
+        if id_token:
+            validate_product_oidc_id_token(
+                id_token,
+                settings,
+                metadata,
+                nonce=str(pending.get("nonce", "")),
+            )
         userinfo = fetch_product_oidc_userinfo(access_token, metadata)
         request.session.pop("oidc_pending", None)
-        request.session["user"] = _session_user_payload(userinfo)
+        provider_user = get_product_user_by_id(str(userinfo.get("sub") or "").strip())
+        request.session["user"] = _session_user_payload(userinfo, provider_user)
+        _csrf_token(request)
         return RedirectResponse(urls["app_base_url"], status_code=303)
 
     @app.get("/api/auth/session", response_model=ProductSessionResponse)
     def auth_session(request: Request) -> ProductSessionResponse:
         user = request.session.get("user")
         if not isinstance(user, dict):
-            return ProductSessionResponse(authenticated=False)
+            return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
         refreshed = _refresh_session_user(user)
         if refreshed is None:
             request.session.clear()
-            return ProductSessionResponse(authenticated=False)
+            return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
         request.session["user"] = refreshed
-        return ProductSessionResponse(authenticated=True, user=refreshed)
+        return ProductSessionResponse(authenticated=True, user=refreshed, csrf_token=_csrf_token(request))
 
     @app.post("/api/auth/logout", response_model=ProductSessionResponse)
     def auth_logout(request: Request) -> ProductSessionResponse:
+        _require_csrf(request)
         request.session.clear()
-        return ProductSessionResponse(authenticated=False)
+        _csrf_token(request)
+        return ProductSessionResponse(authenticated=False, csrf_token=request.session.get("csrf_token"))
 
     @app.get("/api/chat/session", response_model=ProductChatSessionResponse)
     def chat_session(request: Request) -> ProductChatSessionResponse:
+        started = time.perf_counter()
         user = _require_product_user(request)
         try:
             payload = get_product_runtime_session(user)
@@ -262,11 +313,16 @@ def create_product_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=503, detail=str(exc) or "Runtime session unavailable") from exc
+        logger.info(
+            "product_app /api/chat/session completed in %.0fms",
+            (time.perf_counter() - started) * 1000,
+        )
         return ProductChatSessionResponse(**payload)
 
     @app.post("/api/chat/turn/stream")
     def chat_turn_stream(request: Request, payload: ProductChatTurnRequest) -> StreamingResponse:
         user = _require_product_user(request)
+        _require_csrf(request)
         try:
             event_stream = stream_product_runtime_turn(user, payload.user_message)
         except ValueError as exc:
@@ -282,11 +338,16 @@ def create_product_app() -> FastAPI:
 
     @app.get("/api/workspace", response_model=ProductWorkspaceResponse)
     def workspace_state(request: Request, path: str = "") -> ProductWorkspaceResponse:
+        started = time.perf_counter()
         user = _require_product_user(request)
         try:
             payload = get_workspace_state(user, path=path)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.info(
+            "product_app /api/workspace completed in %.0fms",
+            (time.perf_counter() - started) * 1000,
+        )
         return _workspace_response_payload(payload)
 
     @app.post("/api/workspace/folders", response_model=ProductWorkspaceResponse)
@@ -295,6 +356,7 @@ def create_product_app() -> FastAPI:
         payload: ProductCreateWorkspaceFolderRequest,
     ) -> ProductWorkspaceResponse:
         user = _require_product_user(request)
+        _require_csrf(request)
         try:
             state = create_workspace_folder(
                 user,
@@ -312,6 +374,7 @@ def create_product_app() -> FastAPI:
         files: list[UploadFile] = File(...),
     ) -> ProductWorkspaceResponse:
         user = _require_product_user(request)
+        _require_csrf(request)
         current_state = None
         try:
             for upload in files:
@@ -335,12 +398,19 @@ def create_product_app() -> FastAPI:
 
     @app.get("/api/admin/users", response_model=ProductAdminUsersResponse)
     def admin_list_users(request: Request) -> ProductAdminUsersResponse:
+        started = time.perf_counter()
         _require_admin_user(request)
-        return ProductAdminUsersResponse(users=list_product_users())
+        response = ProductAdminUsersResponse(users=list_product_users())
+        logger.info(
+            "product_app /api/admin/users completed in %.0fms",
+            (time.perf_counter() - started) * 1000,
+        )
+        return response
 
     @app.post("/api/admin/users", response_model=ProductCreatedUser)
     def admin_create_user(request: Request, payload: ProductCreateUserRequest) -> ProductCreatedUser:
         _require_admin_user(request)
+        _require_csrf(request)
         try:
             return create_product_user_with_signup(
                 payload.username,
@@ -355,6 +425,7 @@ def create_product_app() -> FastAPI:
     @app.post("/api/admin/users/{user_id}/deactivate", response_model=ProductUser)
     def admin_deactivate_user(request: Request, user_id: str) -> ProductUser:
         admin_user = _require_admin_user(request)
+        _require_csrf(request)
         if user_id == str(admin_user.get("sub") or ""):
             raise HTTPException(status_code=400, detail="Admins cannot deactivate their own account")
         try:

@@ -36,6 +36,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
     "network": {
         "bind_host": "0.0.0.0",
         "public_host": "localhost",
+        "url_scheme": "",
         "app_port": 8086,
         "pocket_id_port": 1411,
         "tailscale": {
@@ -59,6 +60,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         "host_port_start": 18091,
         "host_port_end": 18150,
         "host_access_host": "host.docker.internal",
+        "pids_limit": 256,
     },
     "storage": {
         "root": "product",

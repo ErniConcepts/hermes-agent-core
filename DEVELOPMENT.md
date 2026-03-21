@@ -97,7 +97,8 @@ Do not mark work done early.
 - The first-admin setup contract is the native Pocket ID `/setup` flow. Do not recreate the old temporary-password bootstrap pattern in product code.
 - If the first-admin setup state is persisted locally, it should only contain non-secret enrollment metadata such as username, display name, email, setup URL, and client id.
 - Keep product login logic provider-neutral. Discovery, PKCE, authorize URL generation, and code exchange should live in a reusable OIDC helper layer rather than being hardcoded inside future app routes.
-- The first product auth app surface should stay minimal: login, callback, session, and logout only. Do not grow browser-side auth features beyond that until the real product app exists.
+- Keep the auth-specific surface minimal and provider-neutral: login start, callback, session inspection, and logout should remain separate from product features such as chat, workspace, and admin user management.
+- The authenticated product web app may include chat, workspace, and narrow admin-user-management features, but it should not grow into a general product-config console.
 - If product setup reuses generic Hermes setup helpers for model or tool selection, that reuse should happen from the product-owned command path. Do not modify generic `hermes setup` semantics to fit the product.
 - `SOUL.md` customization is setup-owned. The product setup flow should persist the chosen template path in `product.yaml`, and runtime creation should render that content into each per-user runtime home.
 - Per-user workspace quota is also setup-owned. The product setup flow should persist it in `product.yaml`, runtime and API code should enforce it server-side, and the web UI should display current usage versus limit.

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import json
+import secrets
 
 from hermes_cli.product_web_script import PAGE_SCRIPT
 from hermes_cli.product_web_style import PAGE_STYLE
@@ -13,6 +15,8 @@ LIGHT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 
 def build_product_index_html(*, product_name: str, account_url: str) -> str:
     safe_name = product_name.strip() or "Hermes Core"
+    safe_name_html = html.escape(safe_name, quote=True)
+    nonce = secrets.token_urlsafe(16)
     script = (
         PAGE_SCRIPT.replace(
             "__PRODUCT_UI_CONFIG__",
@@ -22,8 +26,9 @@ def build_product_index_html(*, product_name: str, account_url: str) -> str:
         .replace("__LIGHT_ICON__", LIGHT_ICON)
     )
     return (
-        PAGE_TEMPLATE.replace("__PRODUCT_NAME__", safe_name)
+        PAGE_TEMPLATE.replace("__PRODUCT_NAME__", safe_name_html)
         .replace("__PAGE_STYLE__", PAGE_STYLE)
         .replace("__PAGE_SCRIPT__", script)
         .replace("__DARK_ICON__", DARK_ICON)
+        .replace("__NONCE__", nonce)
     )

@@ -72,6 +72,19 @@ def _public_host(config: Dict[str, Any]) -> str:
     return host
 
 
+def _url_scheme(config: Dict[str, Any]) -> str:
+    network = config.get("network", {})
+    configured = str(network.get("url_scheme", "")).strip().lower()
+    if configured:
+        if configured not in {"http", "https"}:
+            raise ValueError("product network.url_scheme must be http or https")
+        return configured
+    public_host = _public_host(config).lower()
+    if public_host in {"localhost", "127.0.0.1", "::1"}:
+        return "http"
+    return "https"
+
+
 def _validate_public_host(host: str) -> None:
     candidate = (host or "").strip()
     if not candidate:
@@ -101,12 +114,14 @@ def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]
     network = product_config.get("network", {})
     public_host = _public_host(product_config)
     _validate_public_host(public_host)
+    scheme = _url_scheme(product_config)
     app_port = int(network.get("app_port", 8086))
     pocket_id_port = int(network.get("pocket_id_port", 1411))
-    app_base_url = f"http://{public_host}:{app_port}"
-    issuer_url = f"http://{public_host}:{pocket_id_port}"
+    app_base_url = f"{scheme}://{public_host}:{app_port}"
+    issuer_url = f"{scheme}://{public_host}:{pocket_id_port}"
     return {
         "public_host": public_host,
+        "url_scheme": scheme,
         "app_base_url": app_base_url,
         "issuer_url": issuer_url,
         "oidc_callback_url": f"{app_base_url}/api/auth/oidc/callback",
@@ -207,6 +222,8 @@ def _build_compose_spec(config: Dict[str, Any]) -> Dict[str, Any]:
             "retries": 2,
             "start_period": "10s",
         },
+        "security_opt": ["no-new-privileges:true"],
+        "cap_drop": ["ALL"],
     }
     runtime_user = str(services_cfg.get("user", "")).strip()
     if runtime_user:

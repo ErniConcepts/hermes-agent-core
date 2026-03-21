@@ -5,8 +5,9 @@ PAGE_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'nonce-__NONCE__'; script-src 'self' 'nonce-__NONCE__'; connect-src 'self'; font-src 'self' data:; base-uri 'none'; frame-ancestors 'none'">
 <title>__PRODUCT_NAME__</title>
-<style>__PAGE_STYLE__</style>
+<style nonce="__NONCE__">__PAGE_STYLE__</style>
 </head>
 <body>
 <main>
@@ -175,6 +176,6 @@ PAGE_TEMPLATE = """<!doctype html>
 </section>
 </div>
 </main>
-<script>__PAGE_SCRIPT__</script>
+<script nonce="__NONCE__">__PAGE_SCRIPT__</script>
 </body>
 </html>"""

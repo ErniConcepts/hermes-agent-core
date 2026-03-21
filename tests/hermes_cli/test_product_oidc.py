@@ -15,17 +15,17 @@ from hermes_cli.product_oidc import (
 def test_load_product_oidc_client_settings_reads_product_config_and_secret(monkeypatch):
     config = load_product_config()
     config["network"]["public_host"] = "officebox.local"
-    config["auth"]["issuer_url"] = "http://officebox.local:1411"
+    config["auth"]["issuer_url"] = "https://officebox.local:1411"
     config["auth"]["client_id"] = "hermes-core"
 
     monkeypatch.setattr("hermes_cli.product_oidc.get_env_value", lambda key: "oidc-secret")
 
     settings = load_product_oidc_client_settings(config)
 
-    assert settings.issuer_url == "http://officebox.local:1411"
+    assert settings.issuer_url == "https://officebox.local:1411"
     assert settings.client_id == "hermes-core"
     assert settings.client_secret == "oidc-secret"
-    assert settings.redirect_uri == "http://officebox.local:8086/api/auth/oidc/callback"
+    assert settings.redirect_uri == "https://officebox.local:8086/api/auth/oidc/callback"
     assert settings.scopes == ("openid", "profile", "email")
 
 
@@ -33,15 +33,15 @@ def test_discover_product_oidc_provider_metadata_uses_well_known(monkeypatch):
     monkeypatch.setattr("hermes_cli.product_oidc.get_env_value", lambda key: "oidc-secret")
 
     def _handler(request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == "http://officebox.local:1411/.well-known/openid-configuration"
+        assert str(request.url) == "https://officebox.local:1411/.well-known/openid-configuration"
         return httpx.Response(
             200,
             json={
-                "issuer": "http://officebox.local:1411",
-                "authorization_endpoint": "http://officebox.local:1411/authorize",
-                "token_endpoint": "http://officebox.local:1411/token",
-                "userinfo_endpoint": "http://officebox.local:1411/userinfo",
-                "jwks_uri": "http://officebox.local:1411/jwks",
+                "issuer": "https://officebox.local:1411",
+                "authorization_endpoint": "https://officebox.local:1411/authorize",
+                "token_endpoint": "https://officebox.local:1411/token",
+                "userinfo_endpoint": "https://officebox.local:1411/userinfo",
+                "jwks_uri": "https://officebox.local:1411/jwks",
             },
         )
 
@@ -49,7 +49,7 @@ def test_discover_product_oidc_provider_metadata_uses_well_known(monkeypatch):
     settings = load_product_oidc_client_settings(
         {
             "auth": {
-                "issuer_url": "http://officebox.local:1411",
+                "issuer_url": "https://officebox.local:1411",
                 "client_id": "hermes-core",
                 "client_secret_ref": "HERMES_PRODUCT_OIDC_CLIENT_SECRET",
             },
@@ -59,10 +59,10 @@ def test_discover_product_oidc_provider_metadata_uses_well_known(monkeypatch):
 
     metadata = discover_product_oidc_provider_metadata(settings, client=client)
 
-    assert metadata.authorization_endpoint == "http://officebox.local:1411/authorize"
-    assert metadata.token_endpoint == "http://officebox.local:1411/token"
-    assert metadata.userinfo_endpoint == "http://officebox.local:1411/userinfo"
-    assert metadata.jwks_uri == "http://officebox.local:1411/jwks"
+    assert metadata.authorization_endpoint == "https://officebox.local:1411/authorize"
+    assert metadata.token_endpoint == "https://officebox.local:1411/token"
+    assert metadata.userinfo_endpoint == "https://officebox.local:1411/userinfo"
+    assert metadata.jwks_uri == "https://officebox.local:1411/jwks"
 
 
 def test_create_oidc_login_request_uses_pkce_and_standard_scopes(monkeypatch):
@@ -71,7 +71,7 @@ def test_create_oidc_login_request_uses_pkce_and_standard_scopes(monkeypatch):
     settings = load_product_oidc_client_settings(
         {
             "auth": {
-                "issuer_url": "http://officebox.local:1411",
+                "issuer_url": "https://officebox.local:1411",
                 "client_id": "hermes-core",
                 "client_secret_ref": "HERMES_PRODUCT_OIDC_CLIENT_SECRET",
             },
@@ -85,9 +85,9 @@ def test_create_oidc_login_request_uses_pkce_and_standard_scopes(monkeypatch):
                 lambda request: httpx.Response(
                     200,
                     json={
-                        "issuer": "http://officebox.local:1411",
-                        "authorization_endpoint": "http://officebox.local:1411/authorize",
-                        "token_endpoint": "http://officebox.local:1411/token",
+                        "issuer": "https://officebox.local:1411",
+                        "authorization_endpoint": "https://officebox.local:1411/authorize",
+                        "token_endpoint": "https://officebox.local:1411/token",
                     },
                 )
             )
@@ -130,7 +130,7 @@ def test_exchange_product_oidc_code_posts_expected_token_request(monkeypatch):
     settings = load_product_oidc_client_settings(
         {
             "auth": {
-                "issuer_url": "http://officebox.local:1411",
+                "issuer_url": "https://officebox.local:1411",
                 "client_id": "hermes-core",
                 "client_secret_ref": "HERMES_PRODUCT_OIDC_CLIENT_SECRET",
             },
@@ -144,9 +144,9 @@ def test_exchange_product_oidc_code_posts_expected_token_request(monkeypatch):
                 lambda request: httpx.Response(
                     200,
                     json={
-                        "issuer": "http://officebox.local:1411",
-                        "authorization_endpoint": "http://officebox.local:1411/authorize",
-                        "token_endpoint": "http://officebox.local:1411/token",
+                        "issuer": "https://officebox.local:1411",
+                        "authorization_endpoint": "https://officebox.local:1411/authorize",
+                        "token_endpoint": "https://officebox.local:1411/token",
                     },
                 )
             )
@@ -161,7 +161,7 @@ def test_exchange_product_oidc_code_posts_expected_token_request(monkeypatch):
         client=client,
     )
 
-    assert seen["url"] == "http://officebox.local:1411/token"
+    assert seen["url"] == "https://officebox.local:1411/token"
     assert "grant_type=authorization_code" in seen["body"]
     assert "code=auth-code" in seen["body"]
     assert "code_verifier=verifier-123" in seen["body"]

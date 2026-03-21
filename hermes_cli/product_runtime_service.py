@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi import Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 import uvicorn
@@ -86,6 +87,15 @@ def _session_id() -> str:
     return _required_env("HERMES_PRODUCT_SESSION_ID")
 
 
+def _runtime_token() -> str:
+    return _required_env("HERMES_PRODUCT_RUNTIME_TOKEN")
+
+
+def _require_runtime_token(header_value: str | None, expected: str) -> None:
+    if header_value != expected:
+        raise HTTPException(status_code=401, detail="Unauthorized runtime request")
+
+
 def _visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     visible: list[dict[str, str]] = []
     for message in messages:
@@ -154,6 +164,7 @@ def create_product_runtime_app() -> FastAPI:
     hermes_home = _required_env("HERMES_HOME")
     model = _required_env("HERMES_PRODUCT_MODEL")
     session_id = _session_id()
+    runtime_token = _runtime_token()
     _load_runtime_soul()
 
     app = FastAPI(title="Hermes Core Product Runtime", version="0.1.0")
@@ -169,7 +180,8 @@ def create_product_runtime_app() -> FastAPI:
         )
 
     @app.get("/runtime/session", response_model=RuntimeSessionResponse)
-    def runtime_session() -> RuntimeSessionResponse:
+    def runtime_session(x_hermes_product_runtime_token: str | None = Header(default=None)) -> RuntimeSessionResponse:
+        _require_runtime_token(x_hermes_product_runtime_token, runtime_token)
         db = SessionDB()
         try:
             messages = _load_session_messages(db, session_id)
@@ -183,7 +195,11 @@ def create_product_runtime_app() -> FastAPI:
         )
 
     @app.post("/runtime/turn", response_model=RuntimeTurnResponse)
-    def runtime_turn(request: RuntimeTurnRequest) -> RuntimeTurnResponse:
+    def runtime_turn(
+        request: RuntimeTurnRequest,
+        x_hermes_product_runtime_token: str | None = Header(default=None),
+    ) -> RuntimeTurnResponse:
+        _require_runtime_token(x_hermes_product_runtime_token, runtime_token)
         db = SessionDB()
         try:
             agent = build_runtime_agent(db, session_id)
@@ -206,7 +222,11 @@ def create_product_runtime_app() -> FastAPI:
         )
 
     @app.post("/runtime/turn/stream")
-    def runtime_turn_stream(request: RuntimeTurnRequest) -> StreamingResponse:
+    def runtime_turn_stream(
+        request: RuntimeTurnRequest,
+        x_hermes_product_runtime_token: str | None = Header(default=None),
+    ) -> StreamingResponse:
+        _require_runtime_token(x_hermes_product_runtime_token, runtime_token)
         event_queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
 
         def _run() -> None:
@@ -243,8 +263,8 @@ def create_product_runtime_app() -> FastAPI:
                         ).model_dump(mode="json"),
                     )
                 )
-            except Exception as exc:
-                event_queue.put(("error", {"detail": str(exc)}))
+            except Exception:
+                event_queue.put(("error", {"detail": "Runtime request failed"}))
             finally:
                 db.close()
                 event_queue.put(("done", {}))

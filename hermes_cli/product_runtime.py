@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
+import secrets
 import shutil
 import subprocess
 import time
@@ -18,9 +21,13 @@ from hermes_cli.product_config import load_product_config, runtime_host_access_h
 from hermes_cli.product_identity import render_product_soul
 from toolsets import validate_toolset
 
+logger = logging.getLogger(__name__)
+_RUNTIME_HEALTH_TTL_SECONDS = 10.0
+_RUNTIME_HEALTH_CACHE: dict[str, float] = {}
 
 class ProductRuntimeRecord(BaseModel):
     user_id: str
+    runtime_key: str | None = None
     display_name: str | None = None
     session_id: str
     container_name: str
@@ -31,6 +38,7 @@ class ProductRuntimeRecord(BaseModel):
     workspace_root: str
     env_file: str
     manifest_file: str
+    auth_token: str | None = None
     status: str = "staged"
 
 
@@ -57,9 +65,19 @@ def _user_id(user: dict[str, Any]) -> str:
     return username
 
 
+def _runtime_key(user_id: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9._-]+", "_", user_id).strip("._-")
+    if not normalized:
+        normalized = "user"
+    normalized = normalized[:48]
+    digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:12]
+    return f"{normalized}-{digest}"
+
+
 def product_runtime_session_id(user_id: str) -> str:
-    digest = hashlib.sha1(user_id.encode("utf-8")).hexdigest()[:12]
-    return f"product_{user_id}_{digest}"
+    runtime_key = _runtime_key(user_id).replace("-", "_")
+    digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:12]
+    return f"product_{runtime_key}_{digest}"
 
 
 def _product_storage_root(config: dict[str, Any]) -> Path:
@@ -71,11 +89,11 @@ def _product_users_root(config: dict[str, Any]) -> Path:
 
 
 def _runtime_root(config: dict[str, Any], user_id: str) -> Path:
-    return _product_users_root(config) / user_id / "runtime"
+    return _product_users_root(config) / _runtime_key(user_id) / "runtime"
 
 
 def _workspace_root(config: dict[str, Any], user_id: str) -> Path:
-    return _product_users_root(config) / user_id / "workspace"
+    return _product_users_root(config) / _runtime_key(user_id) / "workspace"
 
 
 def _hermes_home(config: dict[str, Any], user_id: str) -> Path:
@@ -224,7 +242,10 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
     session_id = product_runtime_session_id(user_id)
     runtime_port = _resolve_runtime_port(product_config, user_id)
     container_name = f"hermes-product-runtime-{user_id}"
+    runtime_key = _runtime_key(user_id)
+    container_name = f"hermes-product-runtime-{runtime_key}"
     toolsets = _runtime_toolsets(product_config)
+    auth_token = secrets.token_urlsafe(32)
 
     env = {
         "HERMES_HOME": "/srv/hermes",
@@ -238,6 +259,7 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
         "HERMES_PRODUCT_PROVIDER": provider,
         "HERMES_PRODUCT_API_MODE": api_mode,
         "HERMES_PRODUCT_MODEL": model,
+        "HERMES_PRODUCT_RUNTIME_TOKEN": auth_token,
     }
     env_path = _env_path(product_config, user_id)
     env_path.write_text("".join(f"{key}={value}\n" for key, value in sorted(env.items())), encoding="utf-8")
@@ -245,6 +267,7 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
 
     record = ProductRuntimeRecord(
         user_id=user_id,
+        runtime_key=runtime_key,
         display_name=str(user.get("name") or user.get("preferred_username") or "").strip() or None,
         session_id=session_id,
         container_name=container_name,
@@ -255,6 +278,7 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
         workspace_root=str(workspace_root),
         env_file=str(env_path),
         manifest_file=str(_manifest_path(product_config, user_id)),
+        auth_token=auth_token,
         status="staged",
     )
     _write_runtime_record(record)
@@ -275,6 +299,16 @@ def _docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) ->
         record.container_name,
         "--publish",
         f"127.0.0.1:{record.runtime_port}:{internal_port}",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--pids-limit",
+        str(int(config.get("runtime", {}).get("pids_limit", 256))),
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=64m",
+        "--tmpfs",
+        "/var/tmp:rw,noexec,nosuid,size=32m",
         "--env-file",
         record.env_file,
         "--add-host",
@@ -325,6 +359,7 @@ def _wait_for_runtime_health(
     timeout_seconds: float = 20.0,
     interval_seconds: float = 0.25,
 ) -> None:
+    started = time.perf_counter()
     deadline = time.monotonic() + timeout_seconds
     last_error: str | None = None
     while time.monotonic() < deadline:
@@ -333,6 +368,12 @@ def _wait_for_runtime_health(
             response.raise_for_status()
             payload = response.json()
             if str(payload.get("status", "")).strip().lower() == "ok":
+                _RUNTIME_HEALTH_CACHE[record.container_name] = time.monotonic()
+                logger.info(
+                    "product_runtime health check for %s completed in %.0fms",
+                    record.container_name,
+                    (time.perf_counter() - started) * 1000,
+                )
                 return
             last_error = "runtime health endpoint did not report ok"
         except Exception as exc:
@@ -342,12 +383,20 @@ def _wait_for_runtime_health(
 
 
 def ensure_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord:
+    started = time.perf_counter()
     product_config = config or load_product_config()
     record = stage_product_runtime(user, config=product_config)
     container_state = _docker_inspect_state(record.container_name)
     if container_state and bool(container_state.get("State", {}).get("Running")):
         running = ProductRuntimeRecord(**{**record.model_dump(), "status": "running"})
-        _wait_for_runtime_health(running)
+        last_healthy_at = _RUNTIME_HEALTH_CACHE.get(running.container_name, 0.0)
+        if time.monotonic() - last_healthy_at > _RUNTIME_HEALTH_TTL_SECONDS:
+            _wait_for_runtime_health(running)
+        logger.info(
+            "product_runtime ensure for %s reused running container in %.0fms",
+            running.container_name,
+            (time.perf_counter() - started) * 1000,
+        )
         return running
 
     _remove_container_if_exists(record.container_name)
@@ -361,6 +410,11 @@ def ensure_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | Non
         raise RuntimeError((result.stderr or result.stdout).strip() or "docker run failed")
     running = ProductRuntimeRecord(**{**record.model_dump(), "status": "running"})
     _wait_for_runtime_health(running)
+    logger.info(
+        "product_runtime ensure for %s started container in %.0fms",
+        running.container_name,
+        (time.perf_counter() - started) * 1000,
+    )
     return running
 
 
@@ -384,10 +438,20 @@ def _normalize_runtime_session_payload(payload: dict[str, Any]) -> dict[str, Any
 
 
 def get_product_runtime_session(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    started = time.perf_counter()
     record = ensure_product_runtime(user, config=config)
-    response = httpx.get(f"{runtime_base_url(record)}/runtime/session", timeout=60.0)
+    response = httpx.get(
+        f"{runtime_base_url(record)}/runtime/session",
+        timeout=10.0,
+        headers={"X-Hermes-Product-Runtime-Token": record.auth_token},
+    )
     response.raise_for_status()
     payload = _normalize_runtime_session_payload(response.json())
+    logger.info(
+        "product_runtime session fetch for %s completed in %.0fms",
+        record.container_name,
+        (time.perf_counter() - started) * 1000,
+    )
     return ProductRuntimeSession.model_validate(payload).model_dump(mode="json")
 
 
@@ -406,7 +470,10 @@ def stream_product_runtime_turn(
             "POST",
             f"{runtime_base_url(record)}/runtime/turn/stream",
             json=ProductRuntimeTurnRequest(user_message=message).model_dump(),
-            headers={"Accept": "text/event-stream"},
+            headers={
+                "Accept": "text/event-stream",
+                "X-Hermes-Product-Runtime-Token": record.auth_token,
+            },
         ) as response:
             response.raise_for_status()
             for chunk in response.iter_text():

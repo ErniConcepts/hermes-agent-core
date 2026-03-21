@@ -36,6 +36,8 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     assert manifest.exists()
     loaded = ProductRuntimeRecord.model_validate_json(manifest.read_text(encoding="utf-8"))
     assert loaded.user_id == "admin"
+    assert loaded.runtime_key
+    assert loaded.auth_token
     assert loaded.runtime == "runsc"
 
 
@@ -61,6 +63,7 @@ def test_stage_product_runtime_uses_custom_soul_template(tmp_path, monkeypatch):
 def test_get_product_runtime_session_proxies_runtime(monkeypatch):
     record = ProductRuntimeRecord(
         user_id="admin",
+        runtime_key="admin-deadbeef0000",
         display_name="Admin",
         session_id="product_admin_123",
         container_name="runtime-admin",
@@ -71,10 +74,12 @@ def test_get_product_runtime_session_proxies_runtime(monkeypatch):
         workspace_root="/tmp/workspace",
         env_file="/tmp/runtime/runtime.env",
         manifest_file="/tmp/runtime/launch-spec.json",
+        auth_token="runtime-token",
         status="running",
     )
 
     monkeypatch.setattr("hermes_cli.product_runtime.ensure_product_runtime", lambda user, config=None: record)
+    seen = {}
 
     class _Response:
         def raise_for_status(self):
@@ -88,11 +93,16 @@ def test_get_product_runtime_session_proxies_runtime(monkeypatch):
                 "runtime_toolsets": ["memory", "session_search"],
             }
 
-    monkeypatch.setattr("hermes_cli.product_runtime.httpx.get", lambda *args, **kwargs: _Response())
+    def _fake_get(*args, **kwargs):
+        seen["headers"] = kwargs.get("headers", {})
+        return _Response()
+
+    monkeypatch.setattr("hermes_cli.product_runtime.httpx.get", _fake_get)
 
     payload = get_product_runtime_session({"preferred_username": "admin"})
     assert payload["session_id"] == "product_admin_123"
     assert payload["messages"][0]["content"] == "hello"
+    assert seen["headers"]["X-Hermes-Product-Runtime-Token"] == "runtime-token"
 
 
 def test_normalize_runtime_session_payload_requires_current_shape():
@@ -110,6 +120,7 @@ def test_normalize_runtime_session_payload_requires_current_shape():
 def test_wait_for_runtime_health_retries_until_ok(monkeypatch):
     record = ProductRuntimeRecord(
         user_id="admin",
+        runtime_key="admin-deadbeef0000",
         display_name="Admin",
         session_id="product_admin_123",
         container_name="runtime-admin",
@@ -120,6 +131,7 @@ def test_wait_for_runtime_health_retries_until_ok(monkeypatch):
         workspace_root="/tmp/workspace",
         env_file="/tmp/runtime/runtime.env",
         manifest_file="/tmp/runtime/launch-spec.json",
+        auth_token="runtime-token",
         status="running",
     )
     calls = {"count": 0}
@@ -190,6 +202,7 @@ def test_docker_run_command_adds_host_gateway_mapping():
     }
     record = ProductRuntimeRecord(
         user_id="admin",
+        runtime_key="admin-deadbeef0000",
         display_name="Admin",
         session_id="product_admin_123",
         container_name="runtime-admin",
@@ -200,6 +213,7 @@ def test_docker_run_command_adds_host_gateway_mapping():
         workspace_root="/tmp/workspace",
         env_file="/tmp/runtime/runtime.env",
         manifest_file="/tmp/runtime/launch-spec.json",
+        auth_token="runtime-token",
         status="running",
     )
 
@@ -207,6 +221,9 @@ def test_docker_run_command_adds_host_gateway_mapping():
 
     assert "--add-host" in command
     assert "host.docker.internal:host-gateway" in command
+    assert "--read-only" in command
+    assert "--cap-drop=ALL" in command
+    assert "no-new-privileges" in command
 
 
 def test_stage_product_runtime_requires_explicit_model_base_url(tmp_path, monkeypatch):

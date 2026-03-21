@@ -10,6 +10,8 @@ from typing import Any, Mapping
 from urllib.parse import urlencode
 
 import httpx
+import jwt
+from jwt import PyJWKClient
 
 from hermes_cli.config import get_env_value
 from hermes_cli.product_config import load_product_config
@@ -42,11 +44,11 @@ def _required_string(value: str, field_name: str) -> str:
 
 
 def load_product_oidc_client_settings(config: Mapping[str, Any] | None = None) -> ProductOIDCClientSettings:
+    from hermes_cli.product_stack import resolve_product_urls
+
     product_config = dict(config or load_product_config())
     auth = dict(product_config.get("auth", {}))
-    network = dict(product_config.get("network", {}))
-    public_host = _required_string(str(network.get("public_host", "")), "network.public_host")
-    app_port = int(network.get("app_port", 8086))
+    urls = resolve_product_urls(product_config)
 
     issuer_url = _required_string(str(auth.get("issuer_url", "")), "auth.issuer_url")
     client_id = _required_string(str(auth.get("client_id", "")), "auth.client_id")
@@ -62,7 +64,7 @@ def load_product_oidc_client_settings(config: Mapping[str, Any] | None = None) -
         issuer_url=issuer_url.rstrip("/"),
         client_id=client_id,
         client_secret=client_secret,
-        redirect_uri=f"http://{public_host}:{app_port}/api/auth/oidc/callback",
+        redirect_uri=urls["oidc_callback_url"],
         scopes=("openid", "profile", "email"),
     )
 
@@ -210,3 +212,24 @@ def fetch_product_oidc_userinfo(
     if not isinstance(payload, dict):
         raise ValueError("userinfo response must be a JSON object")
     return payload
+
+
+def validate_product_oidc_id_token(
+    id_token: str,
+    settings: ProductOIDCClientSettings,
+    metadata: ProductOIDCProviderMetadata,
+    *,
+    nonce: str,
+) -> dict[str, Any]:
+    if not metadata.jwks_uri:
+        raise ValueError("OIDC provider metadata does not include jwks_uri")
+    signing_key = PyJWKClient(metadata.jwks_uri).get_signing_key_from_jwt(id_token)
+    return jwt.decode(
+        id_token,
+        signing_key.key,
+        algorithms=["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
+        audience=settings.client_id,
+        issuer=metadata.issuer,
+        options={"require": ["exp", "iat", "iss", "aud", "sub", "nonce"]},
+        nonce=nonce,
+    )

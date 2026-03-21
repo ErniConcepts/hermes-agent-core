@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 import re
 from typing import Any
 
@@ -9,6 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from hermes_cli.product_stack import _api_headers, resolve_product_urls
 from hermes_cli.product_config import load_product_config
 
+logger = logging.getLogger(__name__)
+_READ_TIMEOUT_SECONDS = 5.0
+_WRITE_TIMEOUT_SECONDS = 10.0
+_CLIENT_CACHE: dict[tuple[str, str, float], httpx.Client] = {}
 
 _PLACEHOLDER_EMAIL_DOMAIN = "users.local.invalid"
 _DEFAULT_SIGNUP_TOKEN_TTL = 7 * 24 * 60 * 60
@@ -60,11 +66,19 @@ class PocketIdUserRecord(BaseModel):
 def _client(config: dict[str, Any] | None = None) -> httpx.Client:
     product_config = config or load_product_config()
     base_url = resolve_product_urls(product_config)["issuer_url"]
-    return httpx.Client(
-        base_url=base_url,
-        headers=_api_headers(product_config),
-        timeout=15.0,
-    )
+    headers = _api_headers(product_config)
+    timeout = _WRITE_TIMEOUT_SECONDS
+    cache_key = (base_url, headers.get("X-API-Key", ""), timeout)
+    client = _CLIENT_CACHE.get(cache_key)
+    if client is None:
+        client = httpx.Client(
+            base_url=base_url,
+            headers=headers,
+            timeout=timeout,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+        )
+        _CLIENT_CACHE[cache_key] = client
+    return client
 
 
 def _request_json(
@@ -75,6 +89,7 @@ def _request_json(
     expected_status: int | tuple[int, ...],
     **kwargs: Any,
 ) -> dict[str, Any]:
+    started = time.perf_counter()
     response = client.request(method, path, **kwargs)
     expected = (
         expected_status
@@ -83,6 +98,12 @@ def _request_json(
     )
     if response.status_code not in expected:
         raise RuntimeError(f"{method} {path} failed with {response.status_code}: {response.text}")
+    logger.info(
+        "product_users request %s %s completed in %.0fms",
+        method,
+        path,
+        (time.perf_counter() - started) * 1000,
+    )
     return response.json() if response.content else {}
 
 
@@ -146,8 +167,13 @@ def _validate_optional_email(email: str | None) -> str | None:
 
 
 def list_product_users(config: dict[str, Any] | None = None) -> list[ProductUser]:
-    with _client(config) as client:
+    client = _client(config)
+    previous_timeout = client.timeout
+    client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
+    try:
         payload = _request_json(client, "GET", "/api/users", expected_status=200)
+    finally:
+        client.timeout = previous_timeout
     records = [
         PocketIdUserRecord.model_validate(item)
         for item in payload.get("data", [])
@@ -157,8 +183,19 @@ def list_product_users(config: dict[str, Any] | None = None) -> list[ProductUser
 
 
 def get_product_user_by_id(user_id: str, config: dict[str, Any] | None = None) -> ProductUser | None:
-    with _client(config) as client:
+    client = _client(config)
+    previous_timeout = client.timeout
+    client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
+    started = time.perf_counter()
+    try:
         response = client.get(f"/api/users/{user_id}")
+    finally:
+        client.timeout = previous_timeout
+    logger.info(
+        "product_users request GET /api/users/%s completed in %.0fms",
+        user_id,
+        (time.perf_counter() - started) * 1000,
+    )
     if response.status_code == 404:
         return None
     if response.status_code != 200:
@@ -190,34 +227,45 @@ def create_product_user(
         "isAdmin": False,
         "disabled": False,
     }
-    with _client(config) as client:
-        response = _request_json(client, "POST", "/api/users", expected_status=(200, 201), json=payload)
+    client = _client(config)
+    response = _request_json(client, "POST", "/api/users", expected_status=(200, 201), json=payload)
     return _normalize_user(PocketIdUserRecord.model_validate(response))
 
 
 def deactivate_product_user(user_id: str, config: dict[str, Any] | None = None) -> ProductUser:
-    with _client(config) as client:
+    client = _client(config)
+    previous_timeout = client.timeout
+    client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
+    started = time.perf_counter()
+    try:
         get_response = client.get(f"/api/users/{user_id}")
-        if get_response.status_code == 404:
-            raise ValueError("User not found")
-        if get_response.status_code != 200:
-            raise RuntimeError(
-                f"GET /api/users/{user_id} failed with {get_response.status_code}: {get_response.text}"
-            )
-        record = PocketIdUserRecord.model_validate(get_response.json())
-        if _is_internal_user(record):
-            raise ValueError("Internal service users cannot be managed from the product UI")
-        payload = {
-            "username": record.username,
-            "email": record.email,
-            "firstName": record.first_name,
-            "lastName": record.last_name,
-            "displayName": record.display_name,
-            "isAdmin": record.is_admin,
-            "disabled": True,
-            "locale": record.locale,
-        }
-        response = _request_json(client, "PUT", f"/api/users/{user_id}", expected_status=200, json=payload)
+    finally:
+        client.timeout = previous_timeout
+    logger.info(
+        "product_users request GET /api/users/%s completed in %.0fms",
+        user_id,
+        (time.perf_counter() - started) * 1000,
+    )
+    if get_response.status_code == 404:
+        raise ValueError("User not found")
+    if get_response.status_code != 200:
+        raise RuntimeError(
+            f"GET /api/users/{user_id} failed with {get_response.status_code}: {get_response.text}"
+        )
+    record = PocketIdUserRecord.model_validate(get_response.json())
+    if _is_internal_user(record):
+        raise ValueError("Internal service users cannot be managed from the product UI")
+    payload = {
+        "username": record.username,
+        "email": record.email,
+        "firstName": record.first_name,
+        "lastName": record.last_name,
+        "displayName": record.display_name,
+        "isAdmin": record.is_admin,
+        "disabled": True,
+        "locale": record.locale,
+    }
+    response = _request_json(client, "PUT", f"/api/users/{user_id}", expected_status=200, json=payload)
     return _normalize_user(PocketIdUserRecord.model_validate(response))
 
 
@@ -228,8 +276,8 @@ def create_product_signup_token(config: dict[str, Any] | None = None) -> Product
         "usageLimit": _DEFAULT_SIGNUP_TOKEN_USAGE_LIMIT,
         "userGroupIds": [],
     }
-    with _client(product_config) as client:
-        response = _request_json(client, "POST", "/api/signup-tokens", expected_status=(200, 201), json=payload)
+    client = _client(product_config)
+    response = _request_json(client, "POST", "/api/signup-tokens", expected_status=(200, 201), json=payload)
     token = str(response.get("token", "")).strip()
     if not token:
         raise RuntimeError("Pocket ID did not return a signup token")
