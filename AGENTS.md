@@ -77,12 +77,11 @@ run_agent.py, cli.py, batch_runner.py, environments/
 
 ---
 
-## MYNAH Runtime Service
+## Product Runtime Service
 
-The MYNAH integration uses a narrow HTTP runtime surface in:
+The product integration uses a narrow HTTP runtime surface in:
 
-- `mynah_runtime/service.py`
-- `mynah_runtime/__main__.py`
+- `hermes_cli/product_runtime_service.py`
 
 This service should stay intentionally small:
 
@@ -92,7 +91,7 @@ This service should stay intentionally small:
 Rules for this surface:
 
 - Reuse `AIAgent` rather than creating a second agent loop.
-- Respect `MYNAH_PRODUCTION_MODE` and `MYNAH_RUNTIME_TOOLSET`.
+- Respect the configured runtime env and selected Hermes toolsets.
 - Do not expose generic Hermes CLI or gateway features through this service.
 - Keep the service focused on one turn in and one normalized response out.
 

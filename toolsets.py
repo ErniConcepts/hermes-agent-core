@@ -178,36 +178,6 @@ TOOLSETS = {
         "includes": []
     },
 
-    "mynah-memory": {
-        "description": "MYNAH runtime-local persistent memory only",
-        "tools": ["memory"],
-        "includes": []
-    },
-
-    "mynah-recall": {
-        "description": "MYNAH runtime-local session recall only",
-        "tools": ["session_search"],
-        "includes": []
-    },
-
-    "mynah-tier1": {
-        "description": "MYNAH Tier 1 runtime profile (memory + recall only)",
-        "tools": [],
-        "includes": ["mynah-memory", "mynah-recall"]
-    },
-
-    "mynah-tier2": {
-        "description": "MYNAH Tier 2 runtime profile (same runtime-local tools as Tier 1)",
-        "tools": [],
-        "includes": ["mynah-tier1"]
-    },
-
-    "mynah-admin-readonly": {
-        "description": "MYNAH runtime-local read-only profile",
-        "tools": [],
-        "includes": ["mynah-recall"]
-    },
-    
     "clarify": {
         "description": "Ask the user clarifying questions (multiple-choice or open-ended)",
         "tools": ["clarify"],
@@ -340,16 +310,6 @@ TOOLSETS = {
         "includes": ["hermes-telegram", "hermes-discord", "hermes-whatsapp", "hermes-slack", "hermes-signal", "hermes-homeassistant", "hermes-email", "hermes-sms"]
     }
 }
-
-
-MYNAH_RUNTIME_TOOLSET_NAMES = {
-    "mynah-memory",
-    "mynah-recall",
-    "mynah-tier1",
-    "mynah-tier2",
-    "mynah-admin-readonly",
-}
-
 
 
 def get_toolset(name: str) -> Optional[Dict[str, Any]]:

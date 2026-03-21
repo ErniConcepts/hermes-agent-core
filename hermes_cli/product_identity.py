@@ -4,10 +4,20 @@ from pathlib import Path
 
 from hermes_cli.default_soul import DEFAULT_SOUL_MD
 from hermes_cli.product_config import load_product_config
+from toolsets import resolve_toolset
 
 
 def default_product_soul() -> str:
     return DEFAULT_SOUL_MD.strip() + "\n"
+
+
+def _runtime_tools_from_toolsets(toolsets: list[str]) -> list[str]:
+    resolved: list[str] = []
+    for toolset in toolsets:
+        for tool_name in resolve_toolset(toolset):
+            if tool_name not in resolved:
+                resolved.append(tool_name)
+    return resolved
 
 
 def _runtime_capability_overlay(config: dict | None = None) -> str:
@@ -17,12 +27,16 @@ def _runtime_capability_overlay(config: dict | None = None) -> str:
     if not normalized:
         normalized = ["memory", "session_search"]
     rendered_toolsets = ", ".join(normalized)
+    runtime_tools = _runtime_tools_from_toolsets(normalized)
+    rendered_tools = ", ".join(runtime_tools) if runtime_tools else "none"
     return (
         "\n## Product Runtime Contract\n\n"
         "You are running inside a Hermes Core product runtime.\n\n"
         f"Your currently enabled Hermes toolsets are: {rendered_toolsets}.\n\n"
-        "If someone asks what tools or capabilities you have, answer only from the toolsets enabled in this runtime.\n"
-        "Do not describe the full Hermes tool universe unless those toolsets are actually enabled here.\n"
+        f"The concrete tools currently available in this runtime are: {rendered_tools}.\n\n"
+        "If someone asks what tools or capabilities you have, answer only from the concrete tools enabled in this runtime.\n"
+        "Do not describe the full Hermes tool universe unless those tools are actually enabled here.\n"
+        "If a capability is not in that concrete tool list, say you do not have it in this runtime.\n"
         "Admin permissions in the web app do not grant extra runtime tools.\n"
     )
 

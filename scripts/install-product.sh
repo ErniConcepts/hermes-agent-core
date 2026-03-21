@@ -1,18 +1,21 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
-INSTALL_DIR="${HERMES_INSTALL_DIR:-$HERMES_HOME/hermes-agent}"
-export HERMES_REPO_URL_SSH="${HERMES_REPO_URL_SSH:-git@github.com:ErniConcepts/hermes-agent-core.git}"
-export HERMES_REPO_URL_HTTPS="${HERMES_REPO_URL_HTTPS:-https://github.com/ErniConcepts/hermes-agent-core.git}"
+INSTALL_DIR="${HERMES_INSTALL_DIR:-$HERMES_HOME/hermes-core}"
+VENV_DIR="$INSTALL_DIR/.venv"
 
-"$SCRIPT_DIR/install.sh" --skip-setup "$@"
+mkdir -p "$INSTALL_DIR"
 
-PYTHON_BIN="$INSTALL_DIR/.venv/bin/python"
-if [ ! -x "$PYTHON_BIN" ]; then
-  echo "Could not find installed Hermes Core Python at $PYTHON_BIN" >&2
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required to install hermes-core" >&2
   exit 1
 fi
 
-"$PYTHON_BIN" -m hermes_cli.main product install
+python3 -m venv "$VENV_DIR"
+"$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
+"$VENV_DIR/bin/pip" install "$REPO_ROOT"
+
+"$VENV_DIR/bin/hermes-core" install "$@"

@@ -238,13 +238,13 @@ def run_product_install(args: Any) -> None:
     from hermes_cli.product_setup import run_product_setup_wizard
 
     if not _is_linux():
-        raise SystemExit("hermes product install currently supports Linux host setup only")
+        raise SystemExit("hermes-core install currently supports Linux host setup only")
     if not _docker_available():
         raise SystemExit("Docker is not available or the daemon is not running")
     if not _docker_compose_available():
         raise SystemExit("docker compose is not available")
     if not _runsc_available():
-        raise SystemExit("runsc is not installed; install it before running hermes product install")
+        raise SystemExit("runsc is not installed; install it before running hermes-core install")
 
     changed = ensure_runsc_registered_with_docker()
     state = _product_install_state()

@@ -93,9 +93,9 @@ def _load_runtime_soul() -> str:
 
 
 def _session_id() -> str:
-    session_id = str(os.getenv("MYNAH_PRODUCT_SESSION_ID", "")).strip()
+    session_id = str(os.getenv("HERMES_PRODUCT_SESSION_ID", "")).strip()
     if not session_id:
-        raise RuntimeError("MYNAH_PRODUCT_SESSION_ID must be configured for the product runtime")
+        raise RuntimeError("HERMES_PRODUCT_SESSION_ID must be configured for the product runtime")
     return session_id
 
 
@@ -277,15 +277,15 @@ def create_product_runtime_app() -> FastAPI:
     return app
 
 
-if os.getenv("MYNAH_PRODUCT_SESSION_ID"):
+if os.getenv("HERMES_PRODUCT_SESSION_ID"):
     app = create_product_runtime_app()
 else:  # pragma: no cover
     app = FastAPI(title="Hermes Core Product Runtime", version="0.1.0")
 
 
 def main() -> int:
-    host = _env_or_default("MYNAH_RUNTIME_HOST", "0.0.0.0")
-    port = int(_env_or_default("MYNAH_RUNTIME_PORT", "8091"))
+    host = _env_or_default("HERMES_RUNTIME_HOST", "0.0.0.0")
+    port = int(_env_or_default("HERMES_RUNTIME_PORT", "8091"))
     uvicorn.run(create_product_runtime_app(), host=host, port=port, reload=False)
     return 0
 

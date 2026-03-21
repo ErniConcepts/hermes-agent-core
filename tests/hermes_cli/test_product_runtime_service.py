@@ -24,7 +24,7 @@ def test_product_runtime_session_and_turn(monkeypatch, tmp_path):
     hermes_home.mkdir(parents=True)
     (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-    monkeypatch.setenv("MYNAH_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setattr("hermes_cli.product_runtime_service.build_runtime_agent", lambda db, session_id, reasoning_callback=None: FakeAgent())
     monkeypatch.setattr(
         "hermes_cli.product_runtime_service._load_session_messages",
@@ -48,7 +48,7 @@ def test_product_runtime_stream_emits_reasoning_and_final(monkeypatch, tmp_path)
     hermes_home.mkdir(parents=True)
     (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-    monkeypatch.setenv("MYNAH_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setattr("hermes_cli.product_runtime_service.build_runtime_agent", lambda db, session_id, reasoning_callback=None: FakeAgent())
     monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: [])
 

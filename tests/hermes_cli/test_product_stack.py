@@ -56,6 +56,12 @@ def test_resolve_product_urls_rejects_raw_ip_public_host(tmp_path, monkeypatch):
 
 def test_initialize_product_stack_generates_files_and_bootstraps_product_yaml(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    for key in (
+        "HERMES_PRODUCT_OIDC_CLIENT_SECRET",
+        "HERMES_POCKET_ID_STATIC_API_KEY",
+        "HERMES_POCKET_ID_ENCRYPTION_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
     config = load_product_config()
     config["network"]["public_host"] = "hermes.local"

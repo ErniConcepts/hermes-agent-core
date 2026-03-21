@@ -4,14 +4,14 @@
 
 This document captures the current product pivot direction for the `hermes-core` fork.
 
-The fork is no longer treated as just a lightly customized runtime dependency for a separate MYNAH product. Instead, the target is a supplier-curated `hermes-core` distribution that can be installed, configured, and operated as a real local multi-user product.
+The fork is no longer treated as just a lightly customized runtime dependency for a separate external product. Instead, the target is a supplier-curated `hermes-core` distribution that can be installed, configured, and operated as a real local multi-user product.
 
 In this model:
 
 - the primary codebase is the Hermes fork
-- end users do not see MYNAH as the product brand by default
+- end users do not see any legacy maintainer brand by default
 - visible branding comes from setup-time product configuration
-- MYNAH remains the maintainer and integration layer around the fork
+- the maintainer remains an integration layer around the fork rather than the end-user product brand
 
 ## Product Direction
 
@@ -21,9 +21,9 @@ The product-owned setup flow should be exposed separately from generic upstream 
 
 The intended command shape is:
 
-- `hermes product setup` for product-layer installation and configuration
-- `hermes product install` for Linux host preparation plus product setup
-- `hermes product uninstall` for removing product traces while leaving generic Hermes install state intact
+- `hermes-core setup` for product-layer installation and configuration
+- `hermes-core install` for Linux host preparation plus product setup
+- `hermes-core uninstall` for removing product traces while leaving generic Hermes install state intact
 - `hermes setup` remains generic Hermes setup and should stay upstream-compatible
 
 After installation, a guided setup CLI should configure:
@@ -59,7 +59,7 @@ The intended primary surfaces are:
 
 The old development-style multi-panel control plane should not be the model for this forked product UI.
 
-The product should reuse the existing MYNAH visual language where it helps:
+The product should reuse the existing visual language from the earlier prototype where it helps:
 
 - the styling system
 - the dark-mode light-mode sun and moon toggle
@@ -99,7 +99,7 @@ The first implementation should keep Hermes' existing `config.yaml` for generic 
 
 If the product setup flow reuses generic Hermes setup helpers for model/provider or tool selection, that reuse should happen from the product-owned command path and the resulting product runtime settings should still be synchronized back into `product.yaml`.
 
-The product should not maintain a second MYNAH-specific tier vocabulary for runtime tools. Product setup should persist Hermes toolset names directly, with an initial safe default of:
+The product should not maintain a second legacy tier vocabulary for runtime tools. Product setup should persist Hermes toolset names directly, with an initial safe default of:
 
 - `memory`
 - `session_search`
@@ -210,7 +210,7 @@ Password-first auth is no longer the preferred default. If a password mode ever 
 
 Hermes should remain the runtime core.
 
-MYNAH-specific behavior should stay concentrated near the runtime edge rather than spreading through Hermes core.
+Product-specific behavior should stay concentrated near the runtime edge rather than spreading through Hermes core.
 
 Runtime identity should continue to come from `SOUL.md`.
 
@@ -224,7 +224,7 @@ In the first implementation:
 - per-user runtimes should remain separate isolated containers managed by the product app
 - each runtime should get its own `HERMES_HOME` under the product storage root
 - each runtime should keep its own Hermes session DB and file-backed memory state
-- runtime tools should come directly from Hermes toolset names selected in product setup rather than from a separate MYNAH tier or profile layer
+- runtime tools should come directly from Hermes toolset names selected in product setup rather than from a separate legacy tier or profile layer
 - browser chat APIs should proxy to runtime-local HTTP endpoints rather than calling `AIAgent` in-process
 - runtime control endpoints may be published only to host loopback for product-app proxying and must never be exposed on the LAN directly
 - if a configured model route points at host loopback such as `127.0.0.1` or `localhost`, the runtime launcher must rewrite that URL to a container-reachable host alias before injecting it into the runtime env
@@ -269,7 +269,7 @@ The browser admin UI should remain narrow in the first version and only manage:
 - activation and reset actions
 - runtime visibility and status
 
-The browser UI should also preserve the live-chat feel of the MYNAH prototype where it adds real value:
+The browser UI should also preserve the live-chat feel of the earlier prototype where it adds real value:
 
 - reasoning should stream live
 - answer text should stream live
@@ -334,7 +334,7 @@ This fork should preserve upstream compatibility as much as possible by preferri
 
 - setup-driven product configuration
 - runtime-edge wrappers
-- MYNAH-specific toolsets and env-controlled behavior
+- product-specific env-controlled behavior
 - narrow product services outside the Hermes core
 
 This fork should avoid deep product-specific changes in generic Hermes internals unless there is no reasonable configuration or wrapper-based alternative.

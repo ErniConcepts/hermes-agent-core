@@ -12,9 +12,6 @@ Usage:
     hermes gateway install     # Install gateway service
     hermes gateway uninstall   # Uninstall gateway service
     hermes setup               # Interactive setup wizard
-    hermes product install     # Prepare Linux host and run product setup
-    hermes product setup       # Product setup wizard
-    hermes product uninstall   # Remove product traces from the machine
     hermes logout              # Clear stored authentication
     hermes status              # Show status of all components
     hermes cron                # Manage cron jobs
@@ -743,26 +740,6 @@ def cmd_setup(args):
     """Interactive setup wizard."""
     from hermes_cli.setup import run_setup_wizard
     run_setup_wizard(args)
-
-
-def cmd_product(args):
-    """Product-layer CLI entrypoints."""
-    if getattr(args, "product_command", None) == "setup":
-        from hermes_cli.product_setup import run_product_setup_wizard
-
-        run_product_setup_wizard(args)
-        return
-    if getattr(args, "product_command", None) == "install":
-        from hermes_cli.product_install import run_product_install
-
-        run_product_install(args)
-        return
-    if getattr(args, "product_command", None) == "uninstall":
-        from hermes_cli.product_install import run_product_uninstall
-
-        run_product_uninstall(args)
-        return
-    raise SystemExit("Unknown product subcommand")
 
 
 def cmd_model(args):
@@ -3212,64 +3189,6 @@ For more help on a command:
         help="Reset configuration to defaults"
     )
     setup_parser.set_defaults(func=cmd_setup)
-
-    # =========================================================================
-    # product command
-    # =========================================================================
-    product_parser = subparsers.add_parser(
-        "product",
-        help="Product-layer commands for the hermes-core distribution",
-        description="Supplier-curated product setup and management commands",
-    )
-    product_subparsers = product_parser.add_subparsers(dest="product_command")
-
-    product_setup = product_subparsers.add_parser(
-        "setup",
-        help="Interactive setup wizard for the hermes-core product layer",
-        description="Configure product-owned settings such as Pocket ID, public host, model route, and tools",
-    )
-    product_setup.add_argument(
-        "section",
-        nargs="?",
-        choices=["network", "identity", "storage", "model", "tools", "bootstrap"],
-        default=None,
-        help="Run a specific product setup section instead of the full product wizard",
-    )
-    product_setup.add_argument(
-        "--non-interactive",
-        action="store_true",
-        help="Non-interactive mode (prints guidance instead of running prompts)",
-    )
-    product_setup.set_defaults(func=cmd_product)
-
-    product_install = product_subparsers.add_parser(
-        "install",
-        help="Prepare a Linux host for the hermes-core product and run product setup",
-        description="Configure Linux host prerequisites such as Docker runsc registration, then run product setup",
-    )
-    product_install.add_argument(
-        "--skip-setup",
-        action="store_true",
-        help="Prepare the Linux host only and skip the interactive product setup wizard",
-    )
-    product_install.add_argument(
-        "--non-interactive",
-        action="store_true",
-        help="Pass non-interactive mode through to product setup when it runs",
-    )
-    product_install.set_defaults(func=cmd_product)
-
-    product_uninstall = product_subparsers.add_parser(
-        "uninstall",
-        help="Remove hermes-core product traces from this machine",
-        description="Stop product services, remove product data, and optionally revert installer-managed host runtime registration",
-    )
-    product_uninstall.add_argument(
-        "--yes",
-        action="store_true",
-        help="Do not prompt for confirmation",
-    )
-    product_uninstall.set_defaults(func=cmd_product)
 
     # =========================================================================
     # whatsapp command

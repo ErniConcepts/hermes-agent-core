@@ -30,6 +30,7 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     soul_text = soul_path.read_text(encoding="utf-8")
     assert "You are Hermes" in soul_text
     assert "Your currently enabled Hermes toolsets are: memory, session_search." in soul_text
+    assert "The concrete tools currently available in this runtime are: memory, session_search." in soul_text
     manifest = Path(record.manifest_file)
     assert manifest.exists()
     loaded = ProductRuntimeRecord.model_validate_json(manifest.read_text(encoding="utf-8"))
@@ -53,6 +54,7 @@ def test_stage_product_runtime_uses_custom_soul_template(tmp_path, monkeypatch):
     soul_text = soul_path.read_text(encoding="utf-8")
     assert "Custom runtime identity" in soul_text
     assert "Your currently enabled Hermes toolsets are: memory, session_search." in soul_text
+    assert "The concrete tools currently available in this runtime are: memory, session_search." in soul_text
 
 
 def test_get_product_runtime_session_proxies_runtime(monkeypatch):
@@ -98,12 +100,12 @@ def test_normalize_runtime_session_payload_accepts_legacy_shape():
             "session_id": "product_admin_123",
             "messages": [],
             "runtime_profile": "admin",
-            "runtime_toolset": "mynah-tier1",
+            "runtime_toolset": "memory",
         }
     )
 
     assert payload["runtime_mode"] == "admin"
-    assert payload["runtime_toolsets"] == ["mynah-tier1"]
+    assert payload["runtime_toolsets"] == ["memory"]
 
 
 def test_wait_for_runtime_health_retries_until_ok(monkeypatch):
