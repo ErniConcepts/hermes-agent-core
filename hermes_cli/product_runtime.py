@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -311,12 +312,36 @@ def _remove_container_if_exists(container_name: str) -> None:
     )
 
 
+def _wait_for_runtime_health(
+    record: ProductRuntimeRecord,
+    *,
+    timeout_seconds: float = 20.0,
+    interval_seconds: float = 0.25,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            response = httpx.get(f"{runtime_base_url(record)}/healthz", timeout=2.0)
+            response.raise_for_status()
+            payload = response.json()
+            if str(payload.get("status", "")).strip().lower() == "ok":
+                return
+            last_error = "runtime health endpoint did not report ok"
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(interval_seconds)
+    raise RuntimeError(f"Runtime failed to become ready: {last_error or 'health check timeout'}")
+
+
 def ensure_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord:
     product_config = config or load_product_config()
     record = stage_product_runtime(user, config=product_config)
     container_state = _docker_inspect_state(record.container_name)
     if container_state and bool(container_state.get("State", {}).get("Running")):
-        return ProductRuntimeRecord(**{**record.model_dump(), "status": "running"})
+        running = ProductRuntimeRecord(**{**record.model_dump(), "status": "running"})
+        _wait_for_runtime_health(running)
+        return running
 
     _remove_container_if_exists(record.container_name)
     result = subprocess.run(
@@ -327,18 +352,38 @@ def ensure_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | Non
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout).strip() or "docker run failed")
-    return ProductRuntimeRecord(**{**record.model_dump(), "status": "running"})
+    running = ProductRuntimeRecord(**{**record.model_dump(), "status": "running"})
+    _wait_for_runtime_health(running)
+    return running
 
 
 def runtime_base_url(record: ProductRuntimeRecord) -> str:
     return f"http://127.0.0.1:{record.runtime_port}"
 
 
+def _normalize_runtime_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    runtime_mode = str(normalized.get("runtime_mode") or "").strip()
+    if not runtime_mode:
+        runtime_mode = str(normalized.get("runtime_profile") or "product").strip() or "product"
+        normalized["runtime_mode"] = runtime_mode
+
+    runtime_toolsets = normalized.get("runtime_toolsets")
+    if isinstance(runtime_toolsets, list):
+        normalized["runtime_toolsets"] = [str(item).strip() for item in runtime_toolsets if str(item).strip()]
+    else:
+        legacy_toolset = str(normalized.get("runtime_toolset") or "").strip()
+        normalized["runtime_toolsets"] = [legacy_toolset] if legacy_toolset else []
+
+    return normalized
+
+
 def get_product_runtime_session(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> dict[str, Any]:
     record = ensure_product_runtime(user, config=config)
     response = httpx.get(f"{runtime_base_url(record)}/runtime/session", timeout=60.0)
     response.raise_for_status()
-    return ProductRuntimeSession.model_validate(response.json()).model_dump(mode="json")
+    payload = _normalize_runtime_session_payload(response.json())
+    return ProductRuntimeSession.model_validate(payload).model_dump(mode="json")
 
 
 def stream_product_runtime_turn(

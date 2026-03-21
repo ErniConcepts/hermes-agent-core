@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -12,6 +13,8 @@ from hermes_cli.product_config import load_product_config
 _PLACEHOLDER_EMAIL_DOMAIN = "users.local.invalid"
 _DEFAULT_SIGNUP_TOKEN_TTL = 7 * 24 * 60 * 60
 _DEFAULT_SIGNUP_TOKEN_USAGE_LIMIT = 1
+_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._@-]*[A-Za-z0-9])?$")
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class ProductUser(BaseModel):
@@ -29,6 +32,11 @@ class ProductSignupToken(BaseModel):
     signup_url: str
     ttl_seconds: int
     usage_limit: int
+
+
+class ProductCreatedUser(BaseModel):
+    user: ProductUser
+    signup: ProductSignupToken
 
 
 class PocketIdUserRecord(BaseModel):
@@ -64,11 +72,16 @@ def _request_json(
     method: str,
     path: str,
     *,
-    expected_status: int,
+    expected_status: int | tuple[int, ...],
     **kwargs: Any,
 ) -> dict[str, Any]:
     response = client.request(method, path, **kwargs)
-    if response.status_code != expected_status:
+    expected = (
+        expected_status
+        if isinstance(expected_status, tuple)
+        else (expected_status,)
+    )
+    if response.status_code not in expected:
         raise RuntimeError(f"{method} {path} failed with {response.status_code}: {response.text}")
     return response.json() if response.content else {}
 
@@ -112,6 +125,26 @@ def _split_display_name(display_name: str, username: str) -> tuple[str, str]:
     return first_name[:50], last_name[:50]
 
 
+def _validate_username(username: str) -> str:
+    normalized = username.strip()
+    if not normalized:
+        raise ValueError("Username must not be empty")
+    if not _USERNAME_PATTERN.fullmatch(normalized):
+        raise ValueError(
+            "Username may use letters, numbers, underscores, dots, hyphens, and @, and must start and end with a letter or number"
+        )
+    return normalized
+
+
+def _validate_optional_email(email: str | None) -> str | None:
+    normalized = (email or "").strip()
+    if not normalized:
+        return None
+    if not _EMAIL_PATTERN.fullmatch(normalized):
+        raise ValueError("Email must be a valid email address")
+    return normalized
+
+
 def list_product_users(config: dict[str, Any] | None = None) -> list[ProductUser]:
     with _client(config) as client:
         payload = _request_json(client, "GET", "/api/users", expected_status=200)
@@ -143,12 +176,10 @@ def create_product_user(
     email: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> ProductUser:
-    normalized_username = username.strip()
-    if not normalized_username:
-        raise ValueError("Username must not be empty")
+    normalized_username = _validate_username(username)
     normalized_display_name = display_name.strip() or normalized_username
     first_name, last_name = _split_display_name(normalized_display_name, normalized_username)
-    normalized_email = (email or "").strip() or _placeholder_email(normalized_username)
+    normalized_email = _validate_optional_email(email) or _placeholder_email(normalized_username)
     payload = {
         "username": normalized_username,
         "firstName": first_name,
@@ -160,7 +191,7 @@ def create_product_user(
         "disabled": False,
     }
     with _client(config) as client:
-        response = _request_json(client, "POST", "/api/users", expected_status=200, json=payload)
+        response = _request_json(client, "POST", "/api/users", expected_status=(200, 201), json=payload)
     return _normalize_user(PocketIdUserRecord.model_validate(response))
 
 
@@ -198,7 +229,7 @@ def create_product_signup_token(config: dict[str, Any] | None = None) -> Product
         "userGroupIds": [],
     }
     with _client(product_config) as client:
-        response = _request_json(client, "POST", "/api/signup-tokens", expected_status=200, json=payload)
+        response = _request_json(client, "POST", "/api/signup-tokens", expected_status=(200, 201), json=payload)
     token = str(response.get("token", "")).strip()
     if not token:
         raise RuntimeError("Pocket ID did not return a signup token")
@@ -209,3 +240,22 @@ def create_product_signup_token(config: dict[str, Any] | None = None) -> Product
         ttl_seconds=_DEFAULT_SIGNUP_TOKEN_TTL,
         usage_limit=_DEFAULT_SIGNUP_TOKEN_USAGE_LIMIT,
     )
+
+
+def create_product_user_with_signup(
+    username: str,
+    display_name: str,
+    *,
+    email: str | None = None,
+    config: dict[str, Any] | None = None,
+) -> ProductCreatedUser:
+    user = ProductUser.model_validate(
+        create_product_user(
+        username,
+        display_name,
+        email=email,
+        config=config,
+        )
+    )
+    signup = ProductSignupToken.model_validate(create_product_signup_token(config=config))
+    return ProductCreatedUser(user=user, signup=signup)

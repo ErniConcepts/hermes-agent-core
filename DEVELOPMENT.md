@@ -100,6 +100,7 @@ Do not mark work done early.
 - The first product auth app surface should stay minimal: login, callback, session, and logout only. Do not grow browser-side auth features beyond that until the real product app exists.
 - If product setup reuses generic Hermes setup helpers for model or tool selection, that reuse should happen from the product-owned command path. Do not modify generic `hermes setup` semantics to fit the product.
 - `SOUL.md` customization is setup-owned. The product setup flow should persist the chosen template path in `product.yaml`, and runtime creation should render that content into each per-user runtime home.
+- Per-user workspace quota is also setup-owned. The product setup flow should persist it in `product.yaml`, runtime and API code should enforce it server-side, and the web UI should display current usage versus limit.
 - Pocket ID admin-created users currently require an email address. If the product UX keeps email optional, the backend must synthesize a deterministic `.invalid` placeholder email and hide it as placeholder metadata in the product UI.
 - Product-admin user removal should default to deactivation, not hard deletion.
 - A disabled Pocket ID user should lose product access on the next authenticated request; do not treat the browser session as authoritative once the provider account is disabled.

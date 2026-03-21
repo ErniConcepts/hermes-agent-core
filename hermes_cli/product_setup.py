@@ -41,6 +41,7 @@ from hermes_cli.setup import (
 PRODUCT_SETUP_SECTIONS = [
     ("network", "Product Network"),
     ("identity", "Agent Identity"),
+    ("storage", "Workspace Storage"),
     ("model", "Model & Provider"),
     ("tools", "Tools"),
     ("bootstrap", "Pocket ID & First Admin"),
@@ -105,6 +106,32 @@ def setup_product_identity() -> None:
         product_config.setdefault("product", {}).setdefault("agent", {})["soul_template_path"] = str(candidate)
         save_product_config(product_config)
         print_info(f"  Runtime SOUL.md will be rendered from: {candidate}")
+        return
+
+
+def setup_product_storage() -> None:
+    product_config = load_product_config()
+    current_limit_mb = int(product_config.get("storage", {}).get("user_workspace_limit_mb", 2048))
+    default_gb = f"{current_limit_mb / 1024:.1f}".rstrip("0").rstrip(".")
+
+    print_header("Workspace Storage")
+    print_info("Choose the per-user storage limit for uploaded files and folders.")
+    print_info("Files are written directly into the live-mounted runtime workspace.")
+
+    while True:
+        raw_value = (prompt("Per-user workspace limit (GB)", default_gb) or default_gb).strip()
+        try:
+            limit_gb = float(raw_value)
+        except ValueError:
+            print_warning("Please enter a number like 2, 5, or 10.")
+            continue
+        if limit_gb <= 0:
+            print_warning("Workspace storage limit must be greater than zero.")
+            continue
+        limit_mb = max(1, round(limit_gb * 1024))
+        product_config.setdefault("storage", {})["user_workspace_limit_mb"] = limit_mb
+        save_product_config(product_config)
+        print_info(f"  Per-user workspace limit: {limit_mb / 1024:.1f} GB")
         return
 
 
@@ -174,6 +201,7 @@ def _print_product_setup_summary() -> None:
         str(product_config.get("product", {}).get("agent", {}).get("soul_template_path", "")).strip()
         or "(bundled default)"
     )
+    workspace_limit_mb = int(product_config.get("storage", {}).get("user_workspace_limit_mb", 2048))
 
     print()
     print_header("Product Setup Summary")
@@ -185,6 +213,7 @@ def _print_product_setup_summary() -> None:
     print_info(f"App URL:        {urls['app_base_url']}")
     print_info(f"Pocket ID URL:  {urls['issuer_url']}")
     print_info(f"SOUL template:  {soul_template}")
+    print_info(f"Workspace cap:  {workspace_limit_mb / 1024:.1f} GB per user")
 
 
 def _start_product_stack() -> None:
@@ -242,6 +271,8 @@ def run_product_setup_wizard(args: Any) -> None:
             setup_product_network()
         elif section == "identity":
             setup_product_identity()
+        elif section == "storage":
+            setup_product_storage()
         elif section == "model":
             _run_model_section()
         elif section == "tools":
@@ -281,6 +312,7 @@ def run_product_setup_wizard(args: Any) -> None:
 
     setup_product_network()
     setup_product_identity()
+    setup_product_storage()
     _run_model_section()
     _run_tools_section()
     _run_bootstrap_section()

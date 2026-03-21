@@ -285,6 +285,8 @@ The product should support a per-user workspace exposed through the web UI.
 
 Users should be able to upload files into that workspace for their own agent to use.
 
+Users should also be able to create folders in that workspace from the web UI.
+
 The preferred model is:
 
 - user files are live-mounted into the user runtime workspace
@@ -301,6 +303,7 @@ The product should therefore guarantee:
 - the runtime cannot browse the general host filesystem
 - uploads through the web UI are an intentional handoff of files to the agent
 - the UI clearly communicates that uploaded files may be modified by the agent
+- the UI shows current workspace storage usage against a setup-owned per-user limit
 - deletion and overwrite behavior are treated as normal direct edits rather than delayed sync actions in the first version
 
 The canonical storage root for the first implementation should live under `HERMES_HOME`, with per-user workspace and runtime state derived from that root.
@@ -317,8 +320,11 @@ The runtime `SOUL.md` should be rendered into:
 The content for that file should come from setup-owned product config:
 
 - `product.agent.soul_template_path`
+- `storage.user_workspace_limit_mb`
 
 If no custom template path is configured, the product should render a bundled default identity template.
+
+The product setup flow should therefore also own the per-user workspace quota, and the web UI should render a small usage bar in the shared-files header based on the current workspace usage.
 
 ## Upstream Compatibility Rule
 

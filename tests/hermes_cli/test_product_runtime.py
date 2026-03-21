@@ -3,7 +3,9 @@ from pathlib import Path
 from hermes_cli.product_runtime import (
     ProductRuntimeRecord,
     _docker_run_command,
+    _normalize_runtime_session_payload,
     _resolve_runtime_model_base_url,
+    _wait_for_runtime_health,
     get_product_runtime_session,
     product_runtime_session_id,
     stage_product_runtime,
@@ -88,6 +90,61 @@ def test_get_product_runtime_session_proxies_runtime(monkeypatch):
     payload = get_product_runtime_session({"preferred_username": "admin"})
     assert payload["session_id"] == "product_admin_123"
     assert payload["messages"][0]["content"] == "hello"
+
+
+def test_normalize_runtime_session_payload_accepts_legacy_shape():
+    payload = _normalize_runtime_session_payload(
+        {
+            "session_id": "product_admin_123",
+            "messages": [],
+            "runtime_profile": "admin",
+            "runtime_toolset": "mynah-tier1",
+        }
+    )
+
+    assert payload["runtime_mode"] == "admin"
+    assert payload["runtime_toolsets"] == ["mynah-tier1"]
+
+
+def test_wait_for_runtime_health_retries_until_ok(monkeypatch):
+    record = ProductRuntimeRecord(
+        user_id="admin",
+        display_name="Admin",
+        session_id="product_admin_123",
+        container_name="runtime-admin",
+        runtime="runsc",
+        runtime_port=18091,
+        runtime_root="/tmp/runtime",
+        hermes_home="/tmp/runtime/hermes",
+        workspace_root="/tmp/workspace",
+        env_file="/tmp/runtime/runtime.env",
+        manifest_file="/tmp/runtime/launch-spec.json",
+        status="running",
+    )
+    calls = {"count": 0}
+
+    class _Response:
+        def __init__(self, status="ok"):
+            self._status = status
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": self._status}
+
+    def _fake_get(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise RuntimeError("connection refused")
+        return _Response()
+
+    monkeypatch.setattr("hermes_cli.product_runtime.httpx.get", _fake_get)
+    monkeypatch.setattr("hermes_cli.product_runtime.time.sleep", lambda *_args, **_kwargs: None)
+
+    _wait_for_runtime_health(record, timeout_seconds=2.0, interval_seconds=0.01)
+
+    assert calls["count"] == 3
 
 
 def test_runtime_model_base_url_rewrites_loopback_for_container_access():

@@ -1,4 +1,5 @@
 from hermes_cli.product_users import (
+    create_product_user_with_signup,
     create_product_signup_token,
     create_product_user,
     deactivate_product_user,
@@ -126,6 +127,28 @@ def test_create_product_user_uses_placeholder_email_when_missing(monkeypatch):
     assert payload["email"] == "maria@users.local.invalid"
 
 
+def test_create_product_user_rejects_invalid_username(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_users._client", lambda config=None: None)
+
+    try:
+        create_product_user(" test 4 ", "Test User")
+    except ValueError as exc:
+        assert "Username may use letters" in str(exc)
+    else:
+        raise AssertionError("Expected invalid username to be rejected")
+
+
+def test_create_product_user_rejects_invalid_email(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_users._client", lambda config=None: None)
+
+    try:
+        create_product_user("test4", "Test User", email="not-an-email")
+    except ValueError as exc:
+        assert str(exc) == "Email must be a valid email address"
+    else:
+        raise AssertionError("Expected invalid email to be rejected")
+
+
 def test_get_product_user_by_id_returns_none_for_missing(monkeypatch):
     client = DummyClient({("GET", "/api/users/user-1"): (404, {"error": "missing"})})
     monkeypatch.setattr("hermes_cli.product_users._client", lambda config=None: client)
@@ -194,3 +217,32 @@ def test_create_product_signup_token_returns_full_url(monkeypatch):
 
     assert token.token == "signup-123"
     assert token.signup_url == "http://localhost:1411/st/signup-123"
+
+
+def test_create_product_user_with_signup_combines_results(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.product_users.create_product_user",
+        lambda username, display_name, email=None, config=None: {
+                "id": "user-1",
+                "username": username,
+                "display_name": display_name,
+                "email": email,
+                "email_is_placeholder": False,
+                "is_admin": False,
+                "disabled": False,
+            },
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_users.create_product_signup_token",
+        lambda config=None: {
+                "token": "signup-123",
+                "signup_url": "http://localhost:1411/st/signup-123",
+                "ttl_seconds": 604800,
+                "usage_limit": 1,
+            },
+    )
+
+    created = create_product_user_with_signup("maria", "Maria Example", email="maria@example.com")
+
+    assert created.user.username == "maria"
+    assert created.signup.signup_url.endswith("/st/signup-123")

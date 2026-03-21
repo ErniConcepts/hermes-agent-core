@@ -34,6 +34,7 @@ def test_load_product_config_returns_defaults_when_missing(tmp_path, monkeypatch
     assert config["auth"]["provider"] == "pocket-id"
     assert config["auth"]["mode"] == "passkey"
     assert config["tools"]["hermes_toolsets"] == DEFAULT_PRODUCT_CONFIG["tools"]["hermes_toolsets"]
+    assert config["storage"]["user_workspace_limit_mb"] == 2048
 
 
 def test_save_product_config_roundtrip_and_merge(tmp_path, monkeypatch):

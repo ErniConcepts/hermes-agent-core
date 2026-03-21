@@ -19,8 +19,11 @@ def test_product_app_index_shows_login_link_when_signed_out(monkeypatch):
 
     assert response.status_code == 200
     assert "Sign in with Pocket ID" in response.text
+    assert "Loading your workspace." in response.text
     assert "Your Agent" in response.text
     assert "User Management" in response.text
+    assert 'id="workspaceUploadForm"' in response.text
+    assert 'id="workspaceUsageBar"' in response.text
     assert 'id="sessionCard"' not in response.text
     assert 'id="chatForm"' in response.text
 
@@ -87,6 +90,18 @@ def test_product_app_login_redirects_and_stores_pending_pkce(monkeypatch):
 
     session = client.get("/api/auth/session")
     assert session.json() == {"authenticated": False, "user": None}
+
+
+def test_product_app_login_short_circuits_when_already_authenticated(monkeypatch):
+    _patch_admin_session(monkeypatch)
+
+    client = TestClient(create_product_app())
+    _login_admin(client)
+
+    response = client.get("/api/auth/login", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "http://officebox.local:8086"
 
 
 def test_product_app_callback_establishes_session(monkeypatch):
@@ -186,10 +201,28 @@ def test_product_app_callback_rejects_state_mismatch(monkeypatch):
 
     client = TestClient(create_product_app())
     client.get("/api/auth/login", follow_redirects=False)
-    response = client.get("/api/auth/oidc/callback?code=auth-code&state=wrong-state")
+    response = client.get("/api/auth/oidc/callback?code=auth-code&state=wrong-state", follow_redirects=False)
 
-    assert response.status_code == 400
-    assert response.json() == {"detail": "OIDC state mismatch"}
+    assert response.status_code == 303
+    assert response.headers["location"] == "http://officebox.local:8086"
+
+
+def test_product_app_callback_without_pending_state_redirects_home(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_product_config",
+        lambda: {"bootstrap": {"first_admin_username": "admin"}},
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+
+    client = TestClient(create_product_app())
+    response = client.get("/api/auth/oidc/callback?code=auth-code&state=state-123", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "http://officebox.local:8086"
 
 
 def test_product_app_logout_clears_session(monkeypatch):
@@ -332,6 +365,22 @@ def test_product_app_chat_session_returns_payload(monkeypatch):
     }
 
 
+def test_product_app_chat_session_returns_503_when_runtime_unavailable(monkeypatch):
+    _patch_admin_session(monkeypatch)
+    monkeypatch.setattr(
+        "hermes_cli.product_app.get_product_runtime_session",
+        lambda user: (_ for _ in ()).throw(RuntimeError("runtime warming up")),
+    )
+
+    client = TestClient(create_product_app())
+    _login_admin(client)
+
+    response = client.get("/api/chat/session")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "runtime warming up"}
+
+
 def test_product_app_chat_stream_returns_sse(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.product_app.load_product_config",
@@ -403,6 +452,94 @@ def test_product_app_chat_stream_returns_sse(monkeypatch):
     assert '"final_response": "done"' in response.text
 
 
+def test_product_app_workspace_requires_auth(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_product_config",
+        lambda: {"product": {"brand": {"name": "Hermes Core"}}},
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+
+    client = TestClient(create_product_app())
+
+    response = client.get("/api/workspace")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Not authenticated"}
+
+
+def test_product_app_workspace_returns_state(monkeypatch):
+    _patch_admin_session(monkeypatch)
+    monkeypatch.setattr(
+        "hermes_cli.product_app.get_workspace_state",
+        lambda user, path="": {
+            "current_path": path,
+            "entries": [{"name": "reports", "path": "reports", "kind": "folder", "size_bytes": 0}],
+            "used_bytes": 1024,
+            "limit_bytes": 2048,
+        },
+    )
+
+    client = TestClient(create_product_app())
+    _login_admin(client)
+
+    response = client.get("/api/workspace?path=reports")
+
+    assert response.status_code == 200
+    assert response.json()["current_path"] == "reports"
+    assert response.json()["entries"][0]["kind"] == "folder"
+
+
+def test_product_app_workspace_create_folder(monkeypatch):
+    _patch_admin_session(monkeypatch)
+    monkeypatch.setattr(
+        "hermes_cli.product_app.create_workspace_folder",
+        lambda user, parent_path, folder_name: {
+            "current_path": parent_path,
+            "entries": [{"name": folder_name, "path": folder_name, "kind": "folder", "size_bytes": 0}],
+            "used_bytes": 0,
+            "limit_bytes": 10,
+        },
+    )
+
+    client = TestClient(create_product_app())
+    _login_admin(client)
+
+    response = client.post("/api/workspace/folders", json={"path": "", "name": "reports"})
+
+    assert response.status_code == 200
+    assert response.json()["entries"][0]["name"] == "reports"
+
+
+def test_product_app_workspace_upload_file(monkeypatch):
+    _patch_admin_session(monkeypatch)
+    monkeypatch.setattr(
+        "hermes_cli.product_app.store_workspace_file",
+        lambda user, parent_path, filename, content: {
+            "current_path": parent_path,
+            "entries": [{"name": filename, "path": filename, "kind": "file", "size_bytes": len(content)}],
+            "used_bytes": len(content),
+            "limit_bytes": 1024,
+        },
+    )
+
+    client = TestClient(create_product_app())
+    _login_admin(client)
+
+    response = client.post(
+        "/api/workspace/files",
+        data={"path": ""},
+        files=[("files", ("hello.txt", b"hello", "text/plain"))],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["entries"][0]["name"] == "hello.txt"
+    assert response.json()["used_bytes"] == 5
+
+
 def test_product_app_index_shows_session_details_when_signed_in(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.product_app.load_product_config",
@@ -471,7 +608,7 @@ def test_product_app_index_shows_session_details_when_signed_in(monkeypatch):
     assert "Hermes Core" in response.text
     assert "Shared Files" in response.text
     assert 'id="sessionCard"' not in response.text
-    assert "Create signup link" in response.text
+    assert "Create signup link" not in response.text
 
 
 def _login_admin(client):
@@ -573,15 +710,23 @@ def test_product_app_admin_users_returns_users(monkeypatch):
 def test_product_app_admin_create_user(monkeypatch):
     _patch_admin_session(monkeypatch)
     monkeypatch.setattr(
-        "hermes_cli.product_app.create_product_user",
+        "hermes_cli.product_app.create_product_user_with_signup",
         lambda username, display_name, email=None: {
-            "id": "user-2",
-            "username": username,
-            "display_name": display_name,
-            "email": email,
-            "email_is_placeholder": False,
-            "is_admin": False,
-            "disabled": False,
+            "user": {
+                "id": "user-2",
+                "username": username,
+                "display_name": display_name,
+                "email": email,
+                "email_is_placeholder": False,
+                "is_admin": False,
+                "disabled": False,
+            },
+            "signup": {
+                "token": "signup-123",
+                "signup_url": "http://officebox.local:1411/st/signup-123",
+                "ttl_seconds": 604800,
+                "usage_limit": 1,
+            },
         },
     )
 
@@ -594,28 +739,8 @@ def test_product_app_admin_create_user(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json()["display_name"] == "Maria Example"
-
-
-def test_product_app_admin_signup_token(monkeypatch):
-    _patch_admin_session(monkeypatch)
-    monkeypatch.setattr(
-        "hermes_cli.product_app.create_product_signup_token",
-        lambda: {
-            "token": "signup-123",
-            "signup_url": "http://officebox.local:1411/st/signup-123",
-            "ttl_seconds": 604800,
-            "usage_limit": 1,
-        },
-    )
-
-    client = TestClient(create_product_app())
-    _login_admin(client)
-
-    response = client.post("/api/admin/signup-tokens")
-
-    assert response.status_code == 200
-    assert response.json()["signup_url"].endswith("/st/signup-123")
+    assert response.json()["user"]["display_name"] == "Maria Example"
+    assert response.json()["signup"]["signup_url"].endswith("/st/signup-123")
 
 
 def test_product_app_admin_deactivate_user_deletes_runtime(monkeypatch):

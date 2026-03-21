@@ -65,6 +65,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
     "storage": {
         "root": "product",
         "users_root": "product/users",
+        "user_workspace_limit_mb": 2048,
     },
     "bootstrap": {
         "first_admin_username": "admin",

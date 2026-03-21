@@ -2,7 +2,7 @@ from argparse import Namespace
 from unittest.mock import patch
 
 from hermes_cli.product_config import load_product_config
-from hermes_cli.product_setup import run_product_setup_wizard, setup_product_identity, setup_product_network
+from hermes_cli.product_setup import run_product_setup_wizard, setup_product_identity, setup_product_network, setup_product_storage
 
 
 def _make_product_args(**overrides):
@@ -75,6 +75,16 @@ def test_product_setup_identity_section_updates_soul_template_path(tmp_path, mon
 
     product_config = load_product_config()
     assert product_config["product"]["agent"]["soul_template_path"] == str(template_path.resolve())
+
+
+def test_product_setup_storage_section_updates_workspace_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: "5")
+
+    setup_product_storage()
+
+    product_config = load_product_config()
+    assert product_config["storage"]["user_workspace_limit_mb"] == 5120
 
 
 def test_product_setup_noninteractive_prints_guidance(tmp_path, capsys, monkeypatch):

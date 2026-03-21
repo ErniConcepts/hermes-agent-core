@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
@@ -21,13 +21,20 @@ from hermes_cli.product_oidc import (
 from hermes_cli.product_runtime import delete_product_runtime, get_product_runtime_session, stream_product_runtime_turn
 from hermes_cli.product_stack import resolve_product_urls
 from hermes_cli.product_users import (
+    ProductCreatedUser,
     ProductSignupToken,
     ProductUser,
-    create_product_signup_token,
-    create_product_user,
+    create_product_user_with_signup,
     deactivate_product_user,
     get_product_user_by_id,
     list_product_users,
+)
+from hermes_cli.product_workspace import (
+    ProductWorkspaceEntry,
+    ProductWorkspaceQuotaError,
+    create_workspace_folder,
+    get_workspace_state,
+    store_workspace_file,
 )
 from hermes_cli.product_web import build_product_index_html
 
@@ -66,6 +73,26 @@ class ProductChatSessionResponse(BaseModel):
 
 class ProductChatTurnRequest(BaseModel):
     user_message: str
+
+
+class ProductWorkspaceResponse(BaseModel):
+    current_path: str
+    entries: list[ProductWorkspaceEntry]
+    used_bytes: int
+    limit_bytes: int
+
+
+class ProductCreateWorkspaceFolderRequest(BaseModel):
+    path: str = ""
+    name: str
+
+
+def _workspace_response_payload(payload: Any) -> ProductWorkspaceResponse:
+    if hasattr(payload, "model_dump"):
+        data = payload.model_dump(mode="json")
+    else:
+        data = payload
+    return ProductWorkspaceResponse(**data)
 
 
 def _session_secret() -> str:
@@ -150,7 +177,12 @@ def create_product_app() -> FastAPI:
             str(product_config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip()
             or "Hermes Core"
         )
-        return HTMLResponse(build_product_index_html(product_name=product_name))
+        return HTMLResponse(
+            build_product_index_html(
+                product_name=product_name,
+                account_url=f"{issuer_url.rstrip('/')}/settings/account",
+            )
+        )
 
     @app.get("/healthz", response_model=ProductHealthResponse)
     def healthz() -> ProductHealthResponse:
@@ -162,6 +194,13 @@ def create_product_app() -> FastAPI:
 
     @app.get("/api/auth/login")
     def auth_login(request: Request) -> RedirectResponse:
+        existing = request.session.get("user")
+        if isinstance(existing, dict):
+            refreshed = _refresh_session_user(existing)
+            if refreshed is not None:
+                request.session["user"] = refreshed
+                return RedirectResponse(urls["app_base_url"], status_code=303)
+            request.session.clear()
         settings = load_product_oidc_client_settings()
         metadata = discover_product_oidc_provider_metadata(settings)
         login_request = create_oidc_login_request(settings, metadata)
@@ -176,9 +215,10 @@ def create_product_app() -> FastAPI:
     def auth_callback(request: Request, code: str, state: str) -> RedirectResponse:
         pending = request.session.get("oidc_pending")
         if not isinstance(pending, dict):
-            raise HTTPException(status_code=400, detail="Missing OIDC login state")
+            return RedirectResponse(urls["app_base_url"], status_code=303)
         if state != pending.get("state"):
-            raise HTTPException(status_code=400, detail="OIDC state mismatch")
+            request.session.pop("oidc_pending", None)
+            return RedirectResponse(urls["app_base_url"], status_code=303)
 
         settings = load_product_oidc_client_settings()
         metadata = discover_product_oidc_provider_metadata(settings)
@@ -216,7 +256,12 @@ def create_product_app() -> FastAPI:
     @app.get("/api/chat/session", response_model=ProductChatSessionResponse)
     def chat_session(request: Request) -> ProductChatSessionResponse:
         user = _require_product_user(request)
-        payload = get_product_runtime_session(user)
+        try:
+            payload = get_product_runtime_session(user)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=str(exc) or "Runtime session unavailable") from exc
         return ProductChatSessionResponse(**payload)
 
     @app.post("/api/chat/turn/stream")
@@ -235,30 +280,75 @@ def create_product_app() -> FastAPI:
             },
         )
 
+    @app.get("/api/workspace", response_model=ProductWorkspaceResponse)
+    def workspace_state(request: Request, path: str = "") -> ProductWorkspaceResponse:
+        user = _require_product_user(request)
+        try:
+            payload = get_workspace_state(user, path=path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _workspace_response_payload(payload)
+
+    @app.post("/api/workspace/folders", response_model=ProductWorkspaceResponse)
+    def workspace_create_folder(
+        request: Request,
+        payload: ProductCreateWorkspaceFolderRequest,
+    ) -> ProductWorkspaceResponse:
+        user = _require_product_user(request)
+        try:
+            state = create_workspace_folder(
+                user,
+                parent_path=payload.path,
+                folder_name=payload.name,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _workspace_response_payload(state)
+
+    @app.post("/api/workspace/files", response_model=ProductWorkspaceResponse)
+    async def workspace_upload_files(
+        request: Request,
+        path: str = Form(default=""),
+        files: list[UploadFile] = File(...),
+    ) -> ProductWorkspaceResponse:
+        user = _require_product_user(request)
+        current_state = None
+        try:
+            for upload in files:
+                content = await upload.read()
+                current_state = store_workspace_file(
+                    user,
+                    parent_path=path,
+                    filename=upload.filename or "",
+                    content=content,
+                )
+        except ProductWorkspaceQuotaError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            for upload in files:
+                await upload.close()
+        if current_state is None:
+            raise HTTPException(status_code=400, detail="At least one file is required")
+        return _workspace_response_payload(current_state)
+
     @app.get("/api/admin/users", response_model=ProductAdminUsersResponse)
     def admin_list_users(request: Request) -> ProductAdminUsersResponse:
         _require_admin_user(request)
         return ProductAdminUsersResponse(users=list_product_users())
 
-    @app.post("/api/admin/users", response_model=ProductUser)
-    def admin_create_user(request: Request, payload: ProductCreateUserRequest) -> ProductUser:
+    @app.post("/api/admin/users", response_model=ProductCreatedUser)
+    def admin_create_user(request: Request, payload: ProductCreateUserRequest) -> ProductCreatedUser:
         _require_admin_user(request)
         try:
-            return create_product_user(
+            return create_product_user_with_signup(
                 payload.username,
                 payload.display_name,
                 email=payload.email,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    @app.post("/api/admin/signup-tokens", response_model=ProductSignupToken)
-    def admin_create_signup_token(request: Request) -> ProductSignupToken:
-        _require_admin_user(request)
-        try:
-            return create_product_signup_token()
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 

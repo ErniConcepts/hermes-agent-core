@@ -13,23 +13,26 @@ PAGE_TEMPLATE = """<!doctype html>
 <div class="topbar">
 <div class="brand"><span class="brand-mark"></span><span id="brandName">__PRODUCT_NAME__</span></div>
 <div class="top-controls">
-<div class="mini-control session-chip" id="sessionChip" hidden></div>
-<button type="button" class="mini-control theme-toggle" id="themeToggle" aria-label="Toggle theme">__DARK_ICON__</button>
+<a class="mini-control logout-button session-chip" id="sessionChip" href="#" hidden></a>
 <button type="button" class="mini-control logout-button" id="logoutButton" hidden>Log out</button>
+<button type="button" class="mini-control theme-toggle" id="themeToggle" aria-label="Toggle theme">__DARK_ICON__</button>
 </div>
 </div>
 
 <div class="stack">
-<section class="popup hero-card" id="authCard">
+<section class="popup hero-card" id="bootCard">
+<div class="popup-inner hero-inner">
+<p class="eyebrow">__PRODUCT_NAME__</p>
+<h1>Loading your workspace.</h1>
+<p class="lead">Checking your current session before the app decides whether to show login or your signed-in view.</p>
+</div>
+</section>
+
+<section class="popup hero-card" id="authCard" hidden>
 <div class="popup-inner hero-inner">
 <p class="eyebrow">__PRODUCT_NAME__</p>
 <h1 id="heroTitle">Private local agents for your team.</h1>
 <p class="lead" id="heroLead">Sign in to open your personal workspace and chat with your agent.</p>
-<div class="pill-list">
-<span class="pill">Chat</span>
-<span class="pill">Private</span>
-<span class="pill">Local</span>
-</div>
 <div class="actions">
 <a class="button" id="loginButton" href="/api/auth/login">Sign in with Pocket ID</a>
 </div>
@@ -44,7 +47,6 @@ PAGE_TEMPLATE = """<!doctype html>
 <p class="eyebrow">Chat</p>
 <h2>Your Agent</h2>
 </div>
-<span class="status-pill">Streaming UX kept</span>
 </div>
 <div id="chatMessage" class="message"></div>
 <div class="shell">
@@ -66,9 +68,52 @@ PAGE_TEMPLATE = """<!doctype html>
 
 <section class="popup shell-card" id="workspaceCard" hidden>
 <div class="popup-inner">
+<div class="section-head workspace-head">
+<div>
 <p class="eyebrow">Workspace</p>
 <h2>Shared Files</h2>
-<p class="lead small">This area will expose the user workspace that is live-mounted into the isolated runtime.</p>
+</div>
+<div class="usage-block">
+<div class="usage-copy"><span id="workspaceUsageLabel">0 B / 0 B used</span></div>
+<div class="usage-meter" aria-hidden="true"><span id="workspaceUsageBar"></span></div>
+</div>
+</div>
+<p class="lead small">Files and folders created here are written directly into the live-mounted runtime workspace so your agent can see them immediately.</p>
+<div id="workspaceMessage" class="message"></div>
+<div class="workspace-layout">
+<section class="shell workspace-explorer-shell">
+<div class="workspace-toolbar">
+<div class="workspace-toolbar-left">
+<button class="workspace-round-button" id="workspaceUpButton" type="button" aria-label="Go up one folder">↑</button>
+<code class="token-link workspace-path" id="workspacePathLabel">/</code>
+</div>
+<div class="workspace-toolbar-right">
+<button class="workspace-round-button" id="workspaceFolderButton" type="button" aria-label="Create folder">＋</button>
+<button class="workspace-round-button" id="workspaceUploadButton" type="button" aria-label="Upload files">⇪</button>
+</div>
+</div>
+<input id="workspaceFileInput" type="file" multiple hidden>
+<form class="workspace-inline-form" id="workspaceFolderForm" hidden>
+<label class="field full">
+<span>New folder name</span>
+<input id="workspaceFolderName" type="text" placeholder="reports">
+</label>
+<div class="actions">
+<button class="button secondary-button" id="workspaceFolderSubmitButton" type="submit">Create folder</button>
+</div>
+</form>
+<form id="workspaceUploadForm" hidden></form>
+<div class="workspace-dropzone" id="workspaceDropzone">
+<div class="workspace-drop-copy">
+<strong>Drop files here</strong>
+<span>or use the upload button</span>
+</div>
+</div>
+<div class="workspace-list" id="workspaceTable">
+<div class="workspace-empty muted-cell">No files yet.</div>
+</div>
+</section>
+</div>
 </div>
 </section>
 
@@ -79,7 +124,6 @@ PAGE_TEMPLATE = """<!doctype html>
 <p class="eyebrow">Admin</p>
 <h2>User Management</h2>
 </div>
-<span class="status-pill">Compact by design</span>
 </div>
 <p class="lead small">Create regular users, issue a Pocket ID signup link, and deactivate accounts without exposing broader setup controls in the browser.</p>
 <div class="admin-layout">
@@ -100,7 +144,6 @@ PAGE_TEMPLATE = """<!doctype html>
 </div>
 <div class="actions">
 <button class="button" id="adminCreateUserButton" type="submit">Create user</button>
-<button class="button secondary-button" id="adminCreateSignupLinkButton" type="button">Create signup link</button>
 </div>
 <div id="adminMessage" class="message"></div>
 </form>
