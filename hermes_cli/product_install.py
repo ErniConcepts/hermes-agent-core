@@ -14,7 +14,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Windows
     grp = None
 
-from hermes_cli.config import get_env_path
+from hermes_cli.config import get_env_path, get_hermes_home
 from hermes_cli.product_config import ensure_product_home, get_product_config_path, get_product_storage_root
 from hermes_cli.product_stack import (
     get_pocket_id_compose_path,
@@ -147,7 +147,7 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
     product_config = config or load_product_config()
     app_port = int(product_config.get("network", {}).get("app_port", 8086))
     run_as_user, home_dir = _product_service_identity()
-    hermes_home = str(PurePosixPath(home_dir) / ".hermes")
+    hermes_home = str(get_hermes_home())
     return "\n".join(
         [
             "[Unit]",

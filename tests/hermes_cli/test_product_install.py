@@ -133,7 +133,7 @@ def test_render_product_app_service_unit_uses_non_root_identity(tmp_path, monkey
     assert "User=alice" not in rendered
     assert "WorkingDirectory=/home/alice" in rendered
     assert "Environment=HOME=/home/alice" in rendered
-    assert "Environment=HERMES_HOME=/home/alice/.hermes" in rendered
+    assert f"Environment=HERMES_HOME={tmp_path}" in rendered
     assert "--port 18086" in rendered
     assert "WantedBy=default.target" in rendered
 
