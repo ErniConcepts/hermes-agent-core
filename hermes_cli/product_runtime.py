@@ -25,6 +25,7 @@ from toolsets import validate_toolset
 logger = logging.getLogger(__name__)
 _RUNTIME_HEALTH_TTL_SECONDS = 10.0
 _RUNTIME_HEALTH_CACHE: dict[str, float] = {}
+_RUNTIME_WORKSPACE_PATH = "/workspace"
 
 class ProductRuntimeRecord(BaseModel):
     user_id: str
@@ -281,6 +282,8 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
 
     env = {
         "HERMES_HOME": "/srv/hermes",
+        "HERMES_WRITE_SAFE_ROOT": _RUNTIME_WORKSPACE_PATH,
+        "TERMINAL_CWD": _RUNTIME_WORKSPACE_PATH,
         "OPENAI_BASE_URL": base_url,
         "OPENAI_API_KEY": api_key,
         "HERMES_PRODUCT_RUNTIME_MODE": "product",
@@ -343,12 +346,14 @@ def _docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) ->
         "/var/tmp:rw,noexec,nosuid,size=32m",
         "--env-file",
         record.env_file,
+        "--workdir",
+        _RUNTIME_WORKSPACE_PATH,
         "--add-host",
         f"{runtime_host_access_host(config)}:host-gateway",
         "--mount",
         f"type=bind,src={Path(record.hermes_home).as_posix()},dst=/srv/hermes",
         "--mount",
-        f"type=bind,src={Path(record.workspace_root).as_posix()},dst=/srv/workspace",
+        f"type=bind,src={Path(record.workspace_root).as_posix()},dst={_RUNTIME_WORKSPACE_PATH}",
         "--label",
         f"ch.hermes.product.user_id={record.user_id}",
         "--label",

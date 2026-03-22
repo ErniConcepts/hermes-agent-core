@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
+import importlib
 
+from hermes_cli.product_runtime import _RUNTIME_WORKSPACE_PATH
 from hermes_cli.product_runtime_service import create_product_runtime_app
 from hermes_cli.product_runtime_service import build_runtime_agent
 
@@ -155,15 +157,17 @@ def test_build_runtime_agent_scopes_tools_to_workspace(monkeypatch, tmp_path):
             captured["agent_kwargs"] = kwargs
 
     monkeypatch.setattr("run_agent.AIAgent", FakeAgent)
+    terminal_tool_module = importlib.import_module("tools.terminal_tool")
     monkeypatch.setattr(
-        "tools.terminal_tool.register_task_env_overrides",
+        terminal_tool_module,
+        "register_task_env_overrides",
         lambda task_id, overrides: captured.update({"task_id": task_id, "overrides": overrides}),
     )
 
     build_runtime_agent(object(), "product_admin_123")
 
     assert captured["task_id"] == "product_admin_123"
-    assert captured["overrides"] == {"cwd": "/srv/workspace"}
+    assert captured["overrides"] == {"cwd": _RUNTIME_WORKSPACE_PATH}
     assert captured["agent_kwargs"]["enabled_toolsets"] == ["memory", "file"]
     assert captured["agent_kwargs"]["session_id"] == "product_admin_123"
     assert captured["agent_kwargs"]["platform"] == "product-runtime"

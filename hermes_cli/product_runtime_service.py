@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 import uvicorn
 
 from hermes_state import SessionDB
+from hermes_cli.product_runtime import _RUNTIME_WORKSPACE_PATH
 
 
 def _required_env(name: str) -> str:
@@ -145,7 +146,7 @@ def build_runtime_agent(db: SessionDB, session_id: str, *, reasoning_callback: A
     api_key = _required_env("OPENAI_API_KEY")
 
     # Scope local file/terminal-backed tools to the mounted per-user workspace.
-    register_task_env_overrides(session_id, {"cwd": "/srv/workspace"})
+    register_task_env_overrides(session_id, {"cwd": _RUNTIME_WORKSPACE_PATH})
 
     return AIAgent(
         base_url=base_url,

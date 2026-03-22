@@ -4,6 +4,7 @@ import yaml
 
 from hermes_cli.product_runtime import (
     ProductRuntimeRecord,
+    _RUNTIME_WORKSPACE_PATH,
     _docker_run_command,
     _normalize_runtime_session_payload,
     _resolve_runtime_model_base_url,
@@ -191,6 +192,8 @@ def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, mo
     record = stage_product_runtime({"preferred_username": "admin"})
     env_text = Path(record.env_file).read_text(encoding="utf-8")
 
+    assert f"HERMES_WRITE_SAFE_ROOT={_RUNTIME_WORKSPACE_PATH}" in env_text
+    assert f"TERMINAL_CWD={_RUNTIME_WORKSPACE_PATH}" in env_text
     assert "OPENAI_BASE_URL=http://host.docker.internal:8080/v1" in env_text
 
 
@@ -244,7 +247,10 @@ def test_docker_run_command_adds_host_gateway_mapping():
     command = _docker_run_command(record, config)
 
     assert "--add-host" in command
+    assert "--workdir" in command
+    assert _RUNTIME_WORKSPACE_PATH in command
     assert "host.docker.internal:host-gateway" in command
+    assert f"type=bind,src=/tmp/workspace,dst={_RUNTIME_WORKSPACE_PATH}" in command
     assert "--read-only" in command
     assert "--cap-drop=ALL" in command
     assert "no-new-privileges" in command
