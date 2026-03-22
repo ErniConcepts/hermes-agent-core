@@ -386,7 +386,7 @@ def _start_product_stack() -> None:
 
 def _run_model_section() -> None:
     existing_route = dict(load_product_config().get("models", {}).get("default_route", {}))
-    temp_config: dict[str, Any] = {}
+    temp_config: dict[str, Any] = _seed_product_model_setup_config(load_product_config())
     with _isolated_product_setup_home() as temp_home:
         setup_model_provider(temp_config)
         disk_config = yaml.safe_load((temp_home / "config.yaml").read_text(encoding="utf-8")) or {}
