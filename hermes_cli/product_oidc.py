@@ -43,7 +43,9 @@ def _required_string(value: str, field_name: str) -> str:
     return candidate
 
 
-def load_product_oidc_client_settings(config: Mapping[str, Any] | None = None) -> ProductOIDCClientSettings:
+def load_product_oidc_client_settings(
+    config: Mapping[str, Any] | None = None,
+) -> ProductOIDCClientSettings:
     from hermes_cli.product_stack import resolve_product_urls
 
     product_config = dict(config or load_product_config())
@@ -64,7 +66,7 @@ def load_product_oidc_client_settings(config: Mapping[str, Any] | None = None) -
         issuer_url=issuer_url.rstrip("/"),
         client_id=client_id,
         client_secret=client_secret,
-        redirect_uri=urls["oidc_callback_url"],
+        redirect_uri=_required_string(urls["oidc_callback_url"], "oidc redirect_uri"),
         scopes=("openid", "profile", "email"),
     )
 

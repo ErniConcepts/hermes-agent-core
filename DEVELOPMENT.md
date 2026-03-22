@@ -85,16 +85,20 @@ Do not mark work done early.
 - `network.public_host` must be a hostname or domain, not a raw IP address.
 - Default local `public_host` is `localhost`.
 - Treat `bind_host` and `public_host` as separate concerns in setup and implementation.
+- If Tailscale mode is enabled, treat the Tailnet HTTPS URL as the only supported browser/login origin.
+- In Tailscale mode, localhost should redirect to the canonical Tailnet app URL rather than trying to support a second auth origin.
 - Bundle `Pocket ID` as a product-managed local auth service rather than requiring external SMTP-backed identity infrastructure.
 - Prefer native `Pocket ID` onboarding primitives such as signup tokens or login codes over custom product-owned invite/reset flows.
 - Prefer native `Pocket ID` onboarding primitives such as signup tokens over custom product-owned invite/reset flows in the browser admin UI.
 - Keep the product auth flow passkey-first by default. Password-first remains a supported setup choice only if the underlying `Pocket ID` flow supports it cleanly without product-side auth hacks.
 - Keep the product app as a standard OIDC client. Avoid provider-specific product logic unless the provider workflow genuinely requires it.
 - Start or restart the bundled auth stack with `docker compose up -d --wait --force-recreate` so changed container definitions are actually applied.
+- Linux install/setup must also ensure the product app service is running before applying `tailscale serve`.
 - The bundled Pocket ID service contract currently relies on:
   - `APP_URL`
   - `ENCRYPTION_KEY`
   - `STATIC_API_KEY`
+- Do not generate Pocket ID container settings that force user remapping or capability dropping if they break a fresh boot on the target runtime.
 - The setup flow should use `STATIC_API_KEY` for setup-time admin API work such as OIDC client bootstrap. Do not shell into containers for provider mutations.
 - The first-admin setup contract is the native Pocket ID `/setup` flow. Do not recreate the old temporary-password bootstrap pattern in product code.
 - If the first-admin setup state is persisted locally, it should only contain non-secret enrollment metadata such as username, display name, email, setup URL, and client id.

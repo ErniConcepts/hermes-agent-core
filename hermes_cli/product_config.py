@@ -41,6 +41,11 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         "pocket_id_port": 1411,
         "tailscale": {
             "enabled": False,
+            "tailnet_name": "",
+            "device_name": "",
+            "app_https_port": 443,
+            "auth_https_port": 4444,
+            "command_path": "tailscale",
         },
     },
     "models": {

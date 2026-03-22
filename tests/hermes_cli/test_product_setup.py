@@ -2,7 +2,13 @@ from argparse import Namespace
 from unittest.mock import patch
 
 from hermes_cli.product_config import load_product_config
-from hermes_cli.product_setup import run_product_setup_wizard, setup_product_identity, setup_product_network, setup_product_storage
+from hermes_cli.product_setup import (
+    run_product_setup_wizard,
+    setup_product_identity,
+    setup_product_network,
+    setup_product_storage,
+    setup_product_tailscale,
+)
 
 
 def _make_product_args(**overrides):
@@ -35,6 +41,7 @@ def test_product_setup_model_section_syncs_model_route(tmp_path, monkeypatch):
         "base_url": "http://127.0.0.1:8080/v1",
         "model": "qwen3.5-9b-local",
         "api_mode": "chat_completions",
+        "context_length": None,
     }
 
 
@@ -105,6 +112,57 @@ def test_product_setup_storage_section_updates_workspace_limit(tmp_path, monkeyp
 
     product_config = load_product_config()
     assert product_config["storage"]["user_workspace_limit_mb"] == 5120
+
+
+def test_product_setup_tailscale_section_updates_tailnet_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    answers = iter(["yes", "", "", "443", "4444"])
+    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: next(answers))
+    monkeypatch.setattr(
+        "hermes_cli.product_setup.subprocess.run",
+        lambda *args, **kwargs: type(
+            "_Result",
+            (),
+            {
+                "stdout": '{"Self":{"DNSName":"hermes-box.corpnet.ts.net."},"MagicDNSSuffix":"corpnet.ts.net"}',
+            },
+        )(),
+    )
+
+    setup_product_tailscale()
+
+    product_config = load_product_config()
+    assert product_config["network"]["tailscale"] == {
+        "enabled": True,
+        "tailnet_name": "corpnet",
+        "device_name": "hermes-box",
+        "app_https_port": 443,
+        "auth_https_port": 4444,
+        "command_path": "tailscale",
+    }
+
+
+def test_start_product_stack_ensures_linux_product_app_service(monkeypatch):
+    seen = {}
+    monkeypatch.setattr("hermes_cli.product_setup.ensure_product_app_service_started", lambda config=None: seen.setdefault("service", True))
+    monkeypatch.setattr("hermes_cli.product_setup.ensure_product_stack_started", lambda: seen.setdefault("stack", True))
+    monkeypatch.setattr(
+        "hermes_cli.product_setup.bootstrap_first_admin_enrollment",
+        lambda: {
+            "username": "admin",
+            "display_name": "Administrator",
+            "email": "",
+            "auth_mode": "passkey",
+            "setup_url": "https://example.ts.net:8443/setup",
+            "oidc_client_id": "hermes-core",
+        },
+    )
+
+    from hermes_cli.product_setup import _start_product_stack
+
+    _start_product_stack()
+
+    assert seen == {"service": True, "stack": True}
 
 
 def test_product_setup_noninteractive_prints_guidance(tmp_path, capsys, monkeypatch):

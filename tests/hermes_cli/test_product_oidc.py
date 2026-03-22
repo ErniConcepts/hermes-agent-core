@@ -29,6 +29,24 @@ def test_load_product_oidc_client_settings_reads_product_config_and_secret(monke
     assert settings.scopes == ("openid", "profile", "email")
 
 
+def test_load_product_oidc_client_settings_uses_tailnet_callback_when_enabled(monkeypatch):
+    config = load_product_config()
+    config["network"]["public_host"] = "officebox.local"
+    config["network"]["tailscale"]["enabled"] = True
+    config["network"]["tailscale"]["tailnet_name"] = "corpnet"
+    config["network"]["tailscale"]["device_name"] = "hermes-box"
+    config["network"]["tailscale"]["app_https_port"] = 443
+    config["network"]["tailscale"]["auth_https_port"] = 4444
+    config["auth"]["issuer_url"] = "https://hermes-box.corpnet.ts.net:4444"
+    config["auth"]["client_id"] = "hermes-core"
+
+    monkeypatch.setattr("hermes_cli.product_oidc.get_env_value", lambda key: "oidc-secret")
+
+    settings = load_product_oidc_client_settings(config)
+
+    assert settings.redirect_uri == "https://hermes-box.corpnet.ts.net/api/auth/oidc/callback"
+
+
 def test_discover_product_oidc_provider_metadata_uses_well_known(monkeypatch):
     monkeypatch.setattr("hermes_cli.product_oidc.get_env_value", lambda key: "oidc-secret")
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import os
 import secrets
 import subprocess
 import time
@@ -98,35 +97,129 @@ def _validate_public_host(host: str) -> None:
     )
 
 
-def _runtime_user_spec() -> str:
-    getuid = getattr(os, "getuid", None)
-    getgid = getattr(os, "getgid", None)
-    if getuid is None or getgid is None:
-        return ""
+def _tailscale_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    network = config.get("network", {})
+    tailscale = network.get("tailscale", {})
+    return tailscale if isinstance(tailscale, dict) else {}
+
+
+def _tailscale_enabled(config: Dict[str, Any]) -> bool:
+    return bool(_tailscale_config(config).get("enabled", False))
+
+
+def _required_tailnet_value(config: Dict[str, Any], key: str) -> str:
+    value = str(_tailscale_config(config).get(key, "")).strip().lower()
+    if not value:
+        raise ValueError(f"product network.tailscale.{key} must be configured when Tailscale is enabled")
+    return value
+
+
+def _tailscale_host(config: Dict[str, Any]) -> str:
+    device_name = _required_tailnet_value(config, "device_name")
+    tailnet_name = _required_tailnet_value(config, "tailnet_name")
+    return f"{device_name}.{tailnet_name}.ts.net"
+
+
+def _tailscale_https_port(config: Dict[str, Any], key: str, default: int) -> int:
+    raw_value = _tailscale_config(config).get(key, default)
     try:
-        return f"{getuid()}:{getgid()}"
-    except OSError:
-        return ""
+        port = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"product network.tailscale.{key} must be an integer") from exc
+    if port <= 0:
+        raise ValueError(f"product network.tailscale.{key} must be positive")
+    return port
+
+
+def _format_https_url(host: str, port: int) -> str:
+    if port == 443:
+        return f"https://{host}"
+    return f"https://{host}:{port}"
 
 
 def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]:
     product_config = config or load_product_config()
     network = product_config.get("network", {})
+    app_port = int(network.get("app_port", 8086))
+    pocket_id_port = int(network.get("pocket_id_port", 1411))
     public_host = _public_host(product_config)
     _validate_public_host(public_host)
     scheme = _url_scheme(product_config)
-    app_port = int(network.get("app_port", 8086))
-    pocket_id_port = int(network.get("pocket_id_port", 1411))
-    app_base_url = f"{scheme}://{public_host}:{app_port}"
-    issuer_url = f"{scheme}://{public_host}:{pocket_id_port}"
+    local_app_base_url = f"{scheme}://{public_host}:{app_port}"
+    local_issuer_url = f"{scheme}://{public_host}:{pocket_id_port}"
+
+    if _tailscale_enabled(product_config):
+        tailnet_host = _tailscale_host(product_config)
+        app_https_port = _tailscale_https_port(product_config, "app_https_port", 443)
+        auth_https_port = _tailscale_https_port(product_config, "auth_https_port", 4444)
+        app_base_url = _format_https_url(tailnet_host, app_https_port)
+        issuer_url = _format_https_url(tailnet_host, auth_https_port)
+        return {
+            "public_host": public_host,
+            "url_scheme": "https",
+            "app_base_url": app_base_url,
+            "issuer_url": issuer_url,
+            "oidc_callback_url": f"{app_base_url}/api/auth/oidc/callback",
+            "pocket_id_setup_url": f"{issuer_url}/setup",
+            "local_app_base_url": local_app_base_url,
+            "local_issuer_url": local_issuer_url,
+            "tailnet_host": tailnet_host,
+        }
+
     return {
         "public_host": public_host,
         "url_scheme": scheme,
-        "app_base_url": app_base_url,
-        "issuer_url": issuer_url,
-        "oidc_callback_url": f"{app_base_url}/api/auth/oidc/callback",
-        "pocket_id_setup_url": f"{issuer_url}/setup",
+        "app_base_url": local_app_base_url,
+        "issuer_url": local_issuer_url,
+        "oidc_callback_url": f"{local_app_base_url}/api/auth/oidc/callback",
+        "pocket_id_setup_url": f"{local_issuer_url}/setup",
     }
+
+
+def _tailscale_command_path(config: Dict[str, Any]) -> str:
+    configured = str(_tailscale_config(config).get("command_path", "tailscale")).strip()
+    if not configured:
+        raise ValueError("product network.tailscale.command_path must not be empty")
+    return configured
+
+
+def _tailscale_serve_command(config: Dict[str, Any], *, https_port: int, target_url: str) -> list[str]:
+    return [
+        _tailscale_command_path(config),
+        "serve",
+        "--bg",
+        f"--https={https_port}",
+        target_url,
+    ]
+
+
+def ensure_product_tailnet_started(config: Dict[str, Any] | None = None) -> list[subprocess.CompletedProcess[str]]:
+    product_config = config or load_product_config()
+    if not _tailscale_enabled(product_config):
+        return []
+
+    network = product_config.get("network", {})
+    app_port = int(network.get("app_port", 8086))
+    pocket_id_port = int(network.get("pocket_id_port", 1411))
+    app_https_port = _tailscale_https_port(product_config, "app_https_port", 443)
+    auth_https_port = _tailscale_https_port(product_config, "auth_https_port", 4444)
+
+    commands = [
+        _tailscale_serve_command(
+            product_config,
+            https_port=app_https_port,
+            target_url=f"http://127.0.0.1:{app_port}",
+        ),
+        _tailscale_serve_command(
+            product_config,
+            https_port=auth_https_port,
+            target_url=f"http://127.0.0.1:{pocket_id_port}",
+        ),
+    ]
+    results: list[subprocess.CompletedProcess[str]] = []
+    for command in commands:
+        results.append(subprocess.run(command, check=True, capture_output=True, text=True))
+    return results
 
 
 def _required_secret(env_key: str) -> str:
@@ -170,21 +263,14 @@ def _ensure_encryption_key(config: Dict[str, Any]) -> str:
 
 def _build_env_file(config: Dict[str, Any]) -> str:
     network = config.get("network", {})
-    services_cfg = config.get("services", {}).get("pocket_id", {})
     bind_host = str(network.get("bind_host", "")).strip()
     if not bind_host:
         raise ValueError("product network.bind_host must be configured")
-    puid = services_cfg.get("puid")
-    pgid = services_cfg.get("pgid")
-    if puid is None or pgid is None:
-        raise ValueError("services.pocket_id.puid and services.pocket_id.pgid must be configured")
     return "\n".join(
         [
             f"APP_URL={resolve_product_urls(config)['issuer_url']}",
             f"ENCRYPTION_KEY={_ensure_encryption_key(config)}",
             f"STATIC_API_KEY={_ensure_static_api_key(config)}",
-            f"PUID={puid}",
-            f"PGID={pgid}",
             f"HOST={bind_host}",
             "PORT=1411",
             "",
@@ -222,12 +308,7 @@ def _build_compose_spec(config: Dict[str, Any]) -> Dict[str, Any]:
             "retries": 2,
             "start_period": "10s",
         },
-        "security_opt": ["no-new-privileges:true"],
-        "cap_drop": ["ALL"],
     }
-    runtime_user = str(services_cfg.get("user", "")).strip()
-    if runtime_user:
-        service["user"] = runtime_user
     return {"services": {"pocket-id": service}}
 
 
@@ -249,11 +330,9 @@ def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, 
     services_cfg["mode"] = str(services_cfg.get("mode", "docker")).strip() or "docker"
     services_cfg["container_name"] = str(services_cfg.get("container_name", "hermes-pocket-id")).strip() or "hermes-pocket-id"
     services_cfg["image"] = str(services_cfg.get("image", POCKET_ID_IMAGE)).strip() or POCKET_ID_IMAGE
-    services_cfg["puid"] = int(services_cfg.get("puid", 1000))
-    services_cfg["pgid"] = int(services_cfg.get("pgid", 1000))
-    runtime_user = _runtime_user_spec()
-    if runtime_user:
-        services_cfg["user"] = runtime_user
+    services_cfg.pop("puid", None)
+    services_cfg.pop("pgid", None)
+    services_cfg.pop("user", None)
 
     _ensure_client_secret(product_config)
 
@@ -272,12 +351,14 @@ def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, 
 def ensure_product_stack_started(config: Dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     product_config = config or initialize_product_stack()
     compose_path = get_pocket_id_compose_path()
-    return subprocess.run(
+    result = subprocess.run(
         ["docker", "compose", "-f", str(compose_path), "up", "-d", "--wait", "--force-recreate"],
         check=True,
         capture_output=True,
         text=True,
     )
+    ensure_product_tailnet_started(product_config)
+    return result
 
 
 def _wait_for_pocket_id_ready(config: Dict[str, Any], timeout_seconds: float = _READY_TIMEOUT_SECONDS) -> None:

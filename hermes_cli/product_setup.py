@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 from typing import Any
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from hermes_cli.product_stack import (
     initialize_product_stack,
     resolve_product_urls,
 )
-from hermes_cli.product_install import validate_product_host_prereqs
+from hermes_cli.product_install import ensure_product_app_service_started, validate_product_host_prereqs
 from model_tools import get_available_toolsets
 from toolsets import validate_toolset
 from hermes_cli.setup import (
@@ -39,6 +41,7 @@ from hermes_cli.setup import (
 
 PRODUCT_SETUP_SECTIONS = [
     ("network", "Product Network"),
+    ("tailscale", "Tailscale"),
     ("identity", "Agent Identity"),
     ("storage", "Workspace Storage"),
     ("model", "Model & Provider"),
@@ -47,6 +50,31 @@ PRODUCT_SETUP_SECTIONS = [
 ]
 
 DEFAULT_PRODUCT_TOOLSETS = ["memory", "session_search"]
+
+
+def _detect_tailscale_identity(command_path: str) -> tuple[str, str]:
+    result = subprocess.run(
+        [command_path, "status", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout or "{}")
+    dns_name = str(payload.get("Self", {}).get("DNSName", "")).strip().rstrip(".").lower()
+    suffix = str(payload.get("MagicDNSSuffix", "")).strip().rstrip(".").lower()
+    if not dns_name or not suffix:
+        raise RuntimeError("Could not detect the current Tailscale device hostname")
+    if not suffix.endswith(".ts.net"):
+        raise RuntimeError(f"Unexpected Tailscale MagicDNS suffix: {suffix}")
+    if not dns_name.endswith(f".{suffix}"):
+        raise RuntimeError(f"Tailscale DNS name does not match suffix: {dns_name}")
+    device_name = dns_name[: -(len(suffix) + 1)]
+    tailnet_name = suffix.removesuffix(".ts.net")
+    if "." in device_name:
+        device_name = device_name.split(".", 1)[0]
+    if not device_name or not tailnet_name:
+        raise RuntimeError("Could not derive the Tailnet device name and tailnet name")
+    return device_name, tailnet_name
 
 
 def setup_product_network() -> None:
@@ -59,7 +87,8 @@ def setup_product_network() -> None:
 
     print_header("Product Network")
     print_info("Choose the hostname users will use to reach this machine.")
-    print_info("This hostname is used for local app URLs and Pocket ID OIDC origins.")
+    print_info("This hostname is used for local URLs when Tailscale mode is disabled.")
+    print_info("When Tailscale mode is enabled, the Tailnet URL becomes the canonical auth origin.")
     print_info("Use a hostname like localhost, officebox.local, or a DNS name.")
     print_info("Raw IP addresses are not supported for the Pocket ID public host.")
 
@@ -76,6 +105,73 @@ def setup_product_network() -> None:
         print_info(f"  App URL: {urls['app_base_url']}")
         print_info(f"  Pocket ID issuer: {urls['issuer_url']}")
         break
+
+
+def setup_product_tailscale() -> None:
+    product_config = load_product_config()
+    tailscale = product_config.setdefault("network", {}).setdefault("tailscale", {})
+    enabled = bool(tailscale.get("enabled", False))
+    current_enabled = "yes" if enabled else "no"
+    current_tailnet = str(tailscale.get("tailnet_name", "")).strip()
+    current_device = str(tailscale.get("device_name", "")).strip()
+    current_app_port = str(int(tailscale.get("app_https_port", 443)))
+    current_auth_port = str(int(tailscale.get("auth_https_port", 4444)))
+
+    print_header("Tailscale")
+    print_info("Optionally expose the product app and Pocket ID through your tailnet.")
+    print_info("When enabled, the Tailnet app URL becomes the only supported browser origin.")
+    print_info("Local browser requests redirect to the Tailnet URL instead of running a second auth origin.")
+
+    raw_enabled = (prompt("Enable Tailscale exposure (yes/no)", current_enabled) or current_enabled).strip().lower()
+    enabled = raw_enabled in {"y", "yes", "true", "1"}
+    tailscale["enabled"] = enabled
+    if not enabled:
+        save_product_config(product_config)
+        print_info("  Tailscale exposure disabled.")
+        return
+
+    command_path = str(tailscale.get("command_path", "tailscale")).strip() or "tailscale"
+    device_name, tailnet_name = _detect_tailscale_identity(command_path)
+    print_info(f"  Detected Tailnet device: {device_name}")
+    print_info(f"  Detected Tailnet name:   {tailnet_name}")
+
+    while True:
+        chosen_tailnet = (prompt("Tailnet name", current_tailnet or tailnet_name) or current_tailnet or tailnet_name).strip().lower()
+        if chosen_tailnet:
+            tailscale["tailnet_name"] = chosen_tailnet
+            break
+        print_warning("Tailnet name must not be empty when Tailscale is enabled.")
+
+    while True:
+        chosen_device = (prompt("Tailscale device name", current_device or device_name) or current_device or device_name).strip().lower()
+        if chosen_device:
+            tailscale["device_name"] = chosen_device
+            break
+        print_warning("Tailscale device name must not be empty when Tailscale is enabled.")
+
+    while True:
+        try:
+            app_port = int((prompt("Tailnet HTTPS port for app", current_app_port) or current_app_port).strip())
+            auth_port = int((prompt("Tailnet HTTPS port for Pocket ID", current_auth_port) or current_auth_port).strip())
+        except ValueError:
+            print_warning("Tailscale HTTPS ports must be integers.")
+            continue
+        if app_port <= 0 or auth_port <= 0:
+            print_warning("Tailscale HTTPS ports must be positive.")
+            continue
+        if app_port == auth_port:
+            print_warning("App and Pocket ID must use different Tailnet HTTPS ports.")
+            continue
+        tailscale["app_https_port"] = app_port
+        tailscale["auth_https_port"] = auth_port
+        break
+
+    save_product_config(product_config)
+    urls = resolve_product_urls(product_config)
+    print_info(f"  Canonical app URL:       {urls['app_base_url']}")
+    print_info(f"  Canonical Pocket ID URL: {urls['issuer_url']}")
+    if urls.get("local_app_base_url"):
+        print_info(f"  Local debug URL:         {urls['local_app_base_url']}")
 
 
 def setup_product_identity() -> None:
@@ -208,13 +304,18 @@ def _print_product_setup_summary() -> None:
     print_info(f"Product config: {hermes_home / 'product.yaml'}")
     print_info(f"Data folder:    {hermes_home}")
     print_info(f"Install dir:    {PROJECT_ROOT}")
-    print_info(f"App URL:        {urls['app_base_url']}")
-    print_info(f"Pocket ID URL:  {urls['issuer_url']}")
+    print_info(f"Canonical app URL:       {urls['app_base_url']}")
+    print_info(f"Canonical Pocket ID URL: {urls['issuer_url']}")
+    if urls.get("local_app_base_url"):
+        print_info(f"Local debug URL:        {urls['local_app_base_url']}")
+    if urls.get("local_issuer_url"):
+        print_info(f"Local auth debug URL:   {urls['local_issuer_url']}")
     print_info(f"SOUL template:  {soul_template}")
     print_info(f"Workspace cap:  {workspace_limit_mb / 1024:.1f} GB per user")
 
 
 def _start_product_stack() -> None:
+    ensure_product_app_service_started(load_product_config())
     ensure_product_stack_started()
     state = bootstrap_first_admin_enrollment()
     print_info("Bundled Pocket ID service is up.")
@@ -265,6 +366,8 @@ def run_product_setup_wizard(args: Any) -> None:
     if section:
         if section == "network":
             setup_product_network()
+        elif section == "tailscale":
+            setup_product_tailscale()
         elif section == "identity":
             setup_product_identity()
         elif section == "storage":
@@ -307,6 +410,7 @@ def run_product_setup_wizard(args: Any) -> None:
     print()
 
     setup_product_network()
+    setup_product_tailscale()
     setup_product_identity()
     setup_product_storage()
     _run_model_section()

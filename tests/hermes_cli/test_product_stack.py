@@ -10,6 +10,7 @@ from hermes_cli.product_stack import (
     POCKET_ID_IMAGE,
     bootstrap_first_admin_enrollment,
     bootstrap_product_oidc_client,
+    ensure_product_tailnet_started,
     ensure_product_stack_started,
     get_first_admin_enrollment_state_path,
     get_pocket_id_compose_path,
@@ -41,6 +42,34 @@ def test_resolve_product_urls_uses_public_host_when_bind_is_wildcard(tmp_path, m
     }
 
 
+def test_resolve_product_urls_uses_tailnet_urls_when_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    config = load_product_config()
+    config["network"]["public_host"] = "officebox.local"
+    config["network"]["app_port"] = 18086
+    config["network"]["pocket_id_port"] = 19111
+    config["network"]["tailscale"]["enabled"] = True
+    config["network"]["tailscale"]["tailnet_name"] = "corpnet"
+    config["network"]["tailscale"]["device_name"] = "hermes-box"
+    config["network"]["tailscale"]["app_https_port"] = 443
+    config["network"]["tailscale"]["auth_https_port"] = 4444
+
+    urls = resolve_product_urls(config)
+
+    assert urls == {
+        "public_host": "officebox.local",
+        "url_scheme": "https",
+        "app_base_url": "https://hermes-box.corpnet.ts.net",
+        "issuer_url": "https://hermes-box.corpnet.ts.net:4444",
+        "oidc_callback_url": "https://hermes-box.corpnet.ts.net/api/auth/oidc/callback",
+        "pocket_id_setup_url": "https://hermes-box.corpnet.ts.net:4444/setup",
+        "local_app_base_url": "https://officebox.local:18086",
+        "local_issuer_url": "https://officebox.local:19111",
+        "tailnet_host": "hermes-box.corpnet.ts.net",
+    }
+
+
 def test_resolve_product_urls_rejects_raw_ip_public_host(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
@@ -69,7 +98,6 @@ def test_initialize_product_stack_generates_files_and_bootstraps_product_yaml(tm
     config["network"]["pocket_id_port"] = 19411
 
     with (
-        patch("hermes_cli.product_stack._runtime_user_spec", return_value="1000:1000"),
         patch("hermes_cli.product_stack.save_env_value_secure") as mock_save_env,
     ):
         mock_save_env.return_value = {"success": True}
@@ -83,13 +111,17 @@ def test_initialize_product_stack_generates_files_and_bootstraps_product_yaml(tm
     assert "APP_URL=https://hermes.local:19411" in env_text
     assert "STATIC_API_KEY=" in env_text
     assert "ENCRYPTION_KEY=" in env_text
+    assert "PUID=" not in env_text
+    assert "PGID=" not in env_text
 
     compose = yaml.safe_load(get_pocket_id_compose_path().read_text(encoding="utf-8"))
     service = compose["services"]["pocket-id"]
     assert service["image"] == POCKET_ID_IMAGE
     assert "0.0.0.0:19411:1411" in service["ports"]
     assert f"{get_pocket_id_data_root().as_posix()}:/app/data" in service["volumes"]
-    assert "user" in service
+    assert "user" not in service
+    assert "security_opt" not in service
+    assert "cap_drop" not in service
 
     reloaded = load_product_config()
     assert reloaded["network"]["public_host"] == "hermes.local"
@@ -110,7 +142,6 @@ def test_initialize_product_stack_reuses_existing_secrets(tmp_path, monkeypatch)
         return existing.get(key, "")
 
     with (
-        patch("hermes_cli.product_stack._runtime_user_spec", return_value="1000:1000"),
         patch("hermes_cli.product_stack.get_env_value", side_effect=_existing_env_value),
         patch("hermes_cli.product_stack.save_env_value_secure") as mock_save_env,
     ):
@@ -136,16 +167,46 @@ def test_ensure_product_stack_started_uses_generated_compose_file(tmp_path, monk
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     with (
-        patch("hermes_cli.product_stack._runtime_user_spec", return_value="1000:1000"),
         patch("hermes_cli.product_stack.get_env_value", return_value="existing-secret"),
         patch("hermes_cli.product_stack.subprocess.run") as mock_run,
     ):
         ensure_product_stack_started()
 
-    compose_command = mock_run.call_args.args[0]
+    compose_command = mock_run.call_args_list[0].args[0]
     assert compose_command[:4] == ["docker", "compose", "-f", str(get_pocket_id_compose_path())]
     assert compose_command[-4:] == ["up", "-d", "--wait", "--force-recreate"]
     assert Path(compose_command[3]) == get_pocket_id_compose_path()
+
+
+def test_ensure_product_stack_started_attempts_tailscale_serve_when_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    config = load_product_config()
+    config["network"]["tailscale"]["enabled"] = True
+    config["network"]["tailscale"]["tailnet_name"] = "corpnet"
+    config["network"]["tailscale"]["device_name"] = "hermes-box"
+    config["network"]["tailscale"]["app_https_port"] = 443
+    config["network"]["tailscale"]["auth_https_port"] = 4444
+
+    with (
+        patch("hermes_cli.product_stack.get_env_value", return_value="existing-secret"),
+        patch("hermes_cli.product_stack.subprocess.run") as mock_run,
+    ):
+        ensure_product_stack_started(config)
+
+    commands = [call.args[0] for call in mock_run.call_args_list]
+    assert commands[1] == ["tailscale", "serve", "--bg", "--https=443", "http://127.0.0.1:8086"]
+    assert commands[2] == ["tailscale", "serve", "--bg", "--https=4444", "http://127.0.0.1:1411"]
+
+
+def test_ensure_product_tailnet_started_noops_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    with patch("hermes_cli.product_stack.subprocess.run") as mock_run:
+        results = ensure_product_tailnet_started(load_product_config())
+
+    assert results == []
+    mock_run.assert_not_called()
 
 
 class _Response:

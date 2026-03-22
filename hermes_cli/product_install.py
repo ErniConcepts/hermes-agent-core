@@ -4,8 +4,9 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from hermes_cli.config import get_env_path
@@ -13,6 +14,7 @@ from hermes_cli.product_config import ensure_product_home, get_product_config_pa
 from hermes_cli.product_stack import (
     get_pocket_id_compose_path,
     get_product_services_root,
+    load_product_config,
 )
 from utils import atomic_json_write
 
@@ -28,6 +30,8 @@ PRODUCT_SECRET_KEYS = [
     "HERMES_POCKET_ID_STATIC_API_KEY",
     "HERMES_POCKET_ID_ENCRYPTION_KEY",
 ]
+PRODUCT_APP_SERVICE_NAME = "hermes-core-product-app.service"
+PRODUCT_APP_SERVICE_PATH = Path("/etc/systemd/system") / PRODUCT_APP_SERVICE_NAME
 
 
 def _is_linux() -> bool:
@@ -49,6 +53,91 @@ def _run(
         capture_output=capture_output,
         text=True,
     )
+
+
+def _project_root() -> Path:
+    return Path(__file__).parent.parent.resolve()
+
+
+def _systemd_available() -> bool:
+    return _run(["systemctl", "--version"], check=False).returncode == 0
+
+
+def _product_service_identity() -> tuple[str, str]:
+    import pwd
+
+    if not _is_linux():
+        raise RuntimeError("Product app service management is only supported on Linux")
+    if getattr(os, "geteuid", lambda: 1)() == 0:
+        sudo_user = str(os.environ.get("SUDO_USER", "")).strip()
+        if not sudo_user or sudo_user == "root":
+            raise RuntimeError("Could not determine the non-root user for the product app service")
+        account = pwd.getpwnam(sudo_user)
+        return account.pw_name, account.pw_dir
+    account = pwd.getpwuid(os.geteuid())
+    if account.pw_name == "root":
+        raise RuntimeError("Refusing to install the product app service as root")
+    return account.pw_name, account.pw_dir
+
+
+def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> str:
+    product_config = config or load_product_config()
+    app_port = int(product_config.get("network", {}).get("app_port", 8086))
+    run_as_user, home_dir = _product_service_identity()
+    hermes_home = str(PurePosixPath(home_dir) / ".hermes")
+    return "\n".join(
+        [
+            "[Unit]",
+            "Description=Hermes Core Product App",
+            "After=network-online.target docker.service",
+            "Wants=network-online.target",
+            "",
+            "[Service]",
+            "Type=simple",
+            f"User={run_as_user}",
+            f"WorkingDirectory={_project_root()}",
+            f"Environment=HOME={home_dir}",
+            f"Environment=HERMES_HOME={hermes_home}",
+            (
+                "ExecStart="
+                f"{sys.executable} -m uvicorn hermes_cli.product_app:create_product_app "
+                f"--factory --host 127.0.0.1 --port {app_port}"
+            ),
+            "Restart=always",
+            "RestartSec=3",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target",
+            "",
+        ]
+    )
+
+
+def _write_product_app_service_unit(config: dict[str, Any] | None = None) -> None:
+    rendered = _render_product_app_service_unit(config)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        handle.write(rendered)
+        temp_path = Path(handle.name)
+    try:
+        if getattr(os, "geteuid", lambda: 1)() == 0:
+            shutil.copyfile(temp_path, PRODUCT_APP_SERVICE_PATH)
+        else:
+            _run(["cp", str(temp_path), str(PRODUCT_APP_SERVICE_PATH)], sudo=True)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def ensure_product_app_service_started(config: dict[str, Any] | None = None) -> None:
+    if not _is_linux():
+        return
+    if not _systemd_available():
+        raise RuntimeError("systemd is required to manage the Hermes Core product app service")
+    _write_product_app_service_unit(config)
+    _run(["systemctl", "daemon-reload"], sudo=True)
+    _run(["systemctl", "enable", PRODUCT_APP_SERVICE_NAME], sudo=True)
+    active = _run(["systemctl", "is-active", PRODUCT_APP_SERVICE_NAME], check=False, sudo=True)
+    action = "restart" if active.returncode == 0 else "start"
+    _run(["systemctl", action, PRODUCT_APP_SERVICE_NAME], sudo=True)
 
 
 def get_product_install_state_path() -> Path:
@@ -224,6 +313,14 @@ def perform_product_cleanup() -> dict[str, bool]:
     if _docker_available():
         _remove_pocket_id_stack()
         _remove_runtime_containers()
+    if _is_linux() and _systemd_available():
+        _run(["systemctl", "disable", "--now", PRODUCT_APP_SERVICE_NAME], check=False, sudo=True)
+        if PRODUCT_APP_SERVICE_PATH.exists():
+            if getattr(os, "geteuid", lambda: 1)() == 0:
+                PRODUCT_APP_SERVICE_PATH.unlink(missing_ok=True)
+            else:
+                _run(["rm", "-f", str(PRODUCT_APP_SERVICE_PATH)], check=False, sudo=True)
+        _run(["systemctl", "daemon-reload"], check=False, sudo=True)
     removed_runsc_registration = _remove_runsc_registration_if_managed()
     shutil.rmtree(get_product_services_root(), ignore_errors=True)
     shutil.rmtree(get_product_storage_root(), ignore_errors=True)
@@ -250,6 +347,7 @@ def run_product_install(args: Any) -> None:
     state = _product_install_state()
     state["managed_runsc_registration"] = bool(changed or state.get("managed_runsc_registration"))
     save_product_install_state(state)
+    ensure_product_app_service_started(load_product_config())
 
     if getattr(args, "skip_setup", False):
         return

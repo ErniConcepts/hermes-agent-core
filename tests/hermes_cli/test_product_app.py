@@ -105,7 +105,7 @@ def test_product_app_login_redirects_and_stores_pending_pkce(monkeypatch):
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
     monkeypatch.setattr(
         "hermes_cli.product_app.load_product_oidc_client_settings",
-        lambda: object(),
+        lambda config=None: object(),
     )
     monkeypatch.setattr(
         "hermes_cli.product_app.discover_product_oidc_provider_metadata",
@@ -134,6 +134,28 @@ def test_product_app_login_redirects_and_stores_pending_pkce(monkeypatch):
     assert payload["csrf_token"]
 
 
+def test_product_app_redirects_localhost_to_tailnet_when_enabled(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {
+            "app_base_url": "https://laptopjannis.tail5fd7a5.ts.net",
+            "issuer_url": "https://laptopjannis.tail5fd7a5.ts.net:8443",
+            "oidc_callback_url": "https://laptopjannis.tail5fd7a5.ts.net/api/auth/oidc/callback",
+            "local_app_base_url": "http://localhost:8086",
+            "local_issuer_url": "http://localhost:1411",
+            "tailnet_host": "laptopjannis.tail5fd7a5.ts.net",
+        },
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+
+    client = TestClient(create_product_app())
+    response = client.get("http://localhost:8086/", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "https://laptopjannis.tail5fd7a5.ts.net/"
+
+
 def test_product_app_login_short_circuits_when_already_authenticated(monkeypatch):
     _patch_admin_session(monkeypatch)
 
@@ -156,7 +178,7 @@ def test_product_app_callback_establishes_session(monkeypatch):
         lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda: object())
+    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: object())
     monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: object())
     monkeypatch.setattr(
         "hermes_cli.product_app.create_oidc_login_request",
@@ -220,6 +242,7 @@ def test_product_app_callback_establishes_session(monkeypatch):
     }
 
 
+
 def test_product_app_callback_rejects_state_mismatch(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.product_app.load_product_config",
@@ -230,7 +253,7 @@ def test_product_app_callback_rejects_state_mismatch(monkeypatch):
         lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda: object())
+    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: object())
     monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: object())
     monkeypatch.setattr(
         "hermes_cli.product_app.create_oidc_login_request",
@@ -278,7 +301,7 @@ def test_product_app_logout_clears_session(monkeypatch):
         lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda: object())
+    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: object())
     monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: object())
     monkeypatch.setattr(
         "hermes_cli.product_app.create_oidc_login_request",
@@ -302,6 +325,21 @@ def test_product_app_logout_clears_session(monkeypatch):
             "preferred_username": "admin",
             "email_verified": True,
         },
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.get_product_user_by_id",
+        lambda user_id: type(
+            "U",
+            (),
+            {
+                "id": user_id,
+                "username": "admin",
+                "display_name": "Admin User",
+                "email": "admin@example.com",
+                "is_admin": True,
+                "disabled": False,
+            },
+        )(),
     )
 
     client = TestClient(create_product_app())
@@ -347,7 +385,7 @@ def test_product_app_chat_session_returns_payload(monkeypatch):
         lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda: object())
+    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: object())
     monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: object())
     monkeypatch.setattr(
         "hermes_cli.product_app.create_oidc_login_request",
@@ -439,7 +477,7 @@ def test_product_app_chat_stream_returns_sse(monkeypatch):
         lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda: object())
+    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: object())
     monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: object())
     monkeypatch.setattr(
         "hermes_cli.product_app.create_oidc_login_request",
@@ -614,7 +652,7 @@ def test_product_app_index_shows_session_details_when_signed_in(monkeypatch):
         lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda: object())
+    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: object())
     monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: object())
     monkeypatch.setattr(
         "hermes_cli.product_app.create_oidc_login_request",
@@ -688,7 +726,7 @@ def _patch_admin_session(monkeypatch):
         lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda: object())
+    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: object())
     monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: object())
     monkeypatch.setattr(
         "hermes_cli.product_app.create_oidc_login_request",
@@ -860,7 +898,7 @@ def test_product_app_does_not_grant_admin_from_username_alone(monkeypatch):
         lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda: object())
+    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: object())
     monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: object())
     monkeypatch.setattr(
         "hermes_cli.product_app.create_oidc_login_request",

@@ -44,6 +44,17 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     assert loaded.runtime == "runsc"
 
 
+def test_stage_product_runtime_reuses_existing_runtime_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    first = stage_product_runtime({"preferred_username": "admin", "name": "Admin User"})
+    second = stage_product_runtime({"preferred_username": "admin", "name": "Admin User"})
+
+    assert second.auth_token == first.auth_token
+    assert second.runtime_port == first.runtime_port
+    assert second.session_id == first.session_id
+
+
 def test_stage_product_runtime_uses_custom_soul_template(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     template_path = tmp_path / "custom-soul.md"

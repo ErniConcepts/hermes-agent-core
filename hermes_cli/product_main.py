@@ -56,12 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser = subparsers.add_parser(
         "setup",
         help="Interactive setup wizard for the hermes-core product layer",
-        description="Configure product-owned settings such as Pocket ID, public host, model route, and tools",
+        description="Configure product-owned settings such as Pocket ID, public host, Tailscale, model route, and tools",
     )
     setup_parser.add_argument(
         "section",
         nargs="?",
-        choices=["network", "identity", "storage", "model", "tools", "bootstrap"],
+        choices=["network", "tailscale", "identity", "storage", "model", "tools", "bootstrap"],
         default=None,
         help="Run a specific product setup section instead of the full product wizard",
     )

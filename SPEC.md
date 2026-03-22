@@ -41,6 +41,7 @@ After setup, the product should start:
 
 - a lightweight authenticated local web app
 - optional tailnet exposure when enabled
+- in tailnet mode, a single canonical Tailnet app/auth origin
 - isolated per-user Hermes runtimes
 
 The first authenticated web app should stay intentionally minimal.
@@ -84,6 +85,12 @@ The first implementation should distinguish:
 
 - `network.bind_host` for local service binding
 - `network.public_host` for generated local URLs and OIDC-facing origins
+
+When Tailscale mode is enabled:
+
+- the Tailnet HTTPS URL becomes the only supported browser origin
+- localhost should redirect to the canonical Tailnet app URL rather than acting as a second auth origin
+- local URLs may still exist for service health/debugging, but not as a first-class login path
 
 For the product auth flow:
 
@@ -147,6 +154,7 @@ The first implementation should generate:
 The first implementation should also treat these startup details as part of the contract:
 
 - service startup should use a reproducible Docker path and should recreate changed container definitions cleanly
+- Linux install should also own a product-app service so the app is actually running before Tailnet exposure is applied
 - bundled auth bootstrap should use the supported `Pocket ID` admin/API surface rather than shelling into containers for identity mutations
 - setup should bootstrap the product's OIDC client through the `STATIC_API_KEY` admin surface
 - setup should surface the native `Pocket ID` `/setup` flow for first-admin enrollment instead of inventing a product-owned password bootstrap

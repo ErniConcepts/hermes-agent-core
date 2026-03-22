@@ -193,6 +193,21 @@ def _require_admin_user(request: Request) -> dict[str, Any]:
     return user
 
 
+def _canonical_request_redirect(request: Request, urls: dict[str, str]) -> str | None:
+    tailnet_host = str(urls.get("tailnet_host", "")).strip().lower()
+    if not tailnet_host:
+        return None
+    canonical_base = urls["app_base_url"].rstrip("/")
+    canonical_host = canonical_base.split("://", 1)[-1].lower()
+    request_host = str(request.headers.get("host", "")).strip().lower()
+    if request_host == canonical_host:
+        return None
+    target = f"{canonical_base}{request.url.path}"
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return target
+
+
 def create_product_app() -> FastAPI:
     product_config = load_product_config()
     urls = resolve_product_urls(product_config)
@@ -207,6 +222,13 @@ def create_product_app() -> FastAPI:
         same_site="lax",
         https_only=urls["app_base_url"].startswith("https://"),
     )
+
+    @app.middleware("http")
+    async def enforce_canonical_origin(request: Request, call_next):
+        redirect_url = _canonical_request_redirect(request, urls)
+        if redirect_url is not None:
+            return RedirectResponse(redirect_url, status_code=307)
+        return await call_next(request)
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
@@ -239,7 +261,7 @@ def create_product_app() -> FastAPI:
                 request.session["user"] = refreshed
                 return RedirectResponse(urls["app_base_url"], status_code=303)
             request.session.clear()
-        settings = load_product_oidc_client_settings()
+        settings = load_product_oidc_client_settings(config=product_config)
         metadata = discover_product_oidc_provider_metadata(settings)
         login_request = create_oidc_login_request(settings, metadata)
         request.session["oidc_pending"] = {
@@ -258,7 +280,7 @@ def create_product_app() -> FastAPI:
             request.session.pop("oidc_pending", None)
             return RedirectResponse(urls["app_base_url"], status_code=303)
 
-        settings = load_product_oidc_client_settings()
+        settings = load_product_oidc_client_settings(config=product_config)
         metadata = discover_product_oidc_provider_metadata(settings)
         token_response = exchange_product_oidc_code(
             settings,

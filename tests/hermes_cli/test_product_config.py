@@ -35,6 +35,9 @@ def test_load_product_config_returns_defaults_when_missing(tmp_path, monkeypatch
     assert config["auth"]["mode"] == "passkey"
     assert config["tools"]["hermes_toolsets"] == DEFAULT_PRODUCT_CONFIG["tools"]["hermes_toolsets"]
     assert config["models"]["default_route"]["context_length"] is None
+    assert config["network"]["tailscale"]["enabled"] is False
+    assert config["network"]["tailscale"]["app_https_port"] == 443
+    assert config["network"]["tailscale"]["auth_https_port"] == 4444
     assert config["storage"]["user_workspace_limit_mb"] == 2048
 
 

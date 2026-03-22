@@ -240,6 +240,7 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
     product_config = config or load_product_config()
     ensure_hermes_home()
     user_id = _user_id(user)
+    existing = load_runtime_record(user_id, config=product_config)
     runtime_root = _runtime_root(product_config, user_id)
     hermes_home = _hermes_home(product_config, user_id)
     workspace_root = _workspace_root(product_config, user_id)
@@ -272,13 +273,12 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
         raise RuntimeError("product models.default_route.base_url must be configured")
     base_url = _resolve_runtime_model_base_url(product_config, base_url)
     _write_runtime_cli_config(product_config, user_id, base_url=base_url, model=model)
-    session_id = product_runtime_session_id(user_id)
-    runtime_port = _resolve_runtime_port(product_config, user_id)
-    container_name = f"hermes-product-runtime-{user_id}"
-    runtime_key = _runtime_key(user_id)
-    container_name = f"hermes-product-runtime-{runtime_key}"
+    session_id = existing.session_id if existing is not None else product_runtime_session_id(user_id)
+    runtime_port = existing.runtime_port if existing is not None else _resolve_runtime_port(product_config, user_id)
+    runtime_key = existing.runtime_key if existing is not None and existing.runtime_key else _runtime_key(user_id)
+    container_name = existing.container_name if existing is not None else f"hermes-product-runtime-{runtime_key}"
     toolsets = _runtime_toolsets(product_config)
-    auth_token = secrets.token_urlsafe(32)
+    auth_token = existing.auth_token if existing is not None and existing.auth_token else secrets.token_urlsafe(32)
 
     env = {
         "HERMES_HOME": "/srv/hermes",
