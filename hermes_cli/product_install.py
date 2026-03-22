@@ -9,6 +9,11 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+try:
+    import grp
+except ModuleNotFoundError:  # pragma: no cover - Windows
+    grp = None
+
 from hermes_cli.config import get_env_path
 from hermes_cli.product_config import ensure_product_home, get_product_config_path, get_product_storage_root
 from hermes_cli.product_stack import (
@@ -31,7 +36,11 @@ PRODUCT_SECRET_KEYS = [
     "HERMES_POCKET_ID_ENCRYPTION_KEY",
 ]
 PRODUCT_APP_SERVICE_NAME = "hermes-core-product-app.service"
-PRODUCT_APP_SERVICE_PATH = Path("/etc/systemd/system") / PRODUCT_APP_SERVICE_NAME
+APT_INSTALL_PACKAGES = [
+    "docker.io",
+    "docker-compose-v2",
+    "runsc",
+]
 
 
 def _is_linux() -> bool:
@@ -59,7 +68,32 @@ def _project_root() -> Path:
     return Path(__file__).parent.parent.resolve()
 
 
+def _product_app_service_path() -> Path:
+    return Path.home() / ".config" / "systemd" / "user" / PRODUCT_APP_SERVICE_NAME
+
+
+def _linux_distro_id() -> str:
+    if not _is_linux():
+        return ""
+    os_release = Path("/etc/os-release")
+    if not os_release.exists():
+        return ""
+    values: dict[str, str] = {}
+    for line in os_release.read_text(encoding="utf-8").splitlines():
+        if "=" not in line:
+            continue
+        key, raw = line.split("=", 1)
+        values[key.strip().lower()] = raw.strip().strip('"').lower()
+    return values.get("id", "")
+
+
+def _apt_supported_linux() -> bool:
+    return _linux_distro_id() in {"ubuntu", "debian"}
+
+
 def _systemd_available() -> bool:
+    if shutil.which("systemctl") is None:
+        return False
     return _run(["systemctl", "--version"], check=False).returncode == 0
 
 
@@ -80,6 +114,35 @@ def _product_service_identity() -> tuple[str, str]:
     return account.pw_name, account.pw_dir
 
 
+def _current_user_name() -> str:
+    import pwd
+
+    if getattr(os, "geteuid", lambda: 1)() == 0:
+        sudo_user = str(os.environ.get("SUDO_USER", "")).strip()
+        if sudo_user and sudo_user != "root":
+            return sudo_user
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
+def _user_in_group(group_name: str, user_name: str | None = None) -> bool:
+    if grp is None:
+        return False
+    name = user_name or _current_user_name()
+    try:
+        group_info = grp.getgrnam(group_name)
+    except KeyError:
+        return False
+    if name in group_info.gr_mem:
+        return True
+    try:
+        import pwd
+
+        primary_gid = pwd.getpwnam(name).pw_gid
+    except KeyError:
+        return False
+    return primary_gid == group_info.gr_gid
+
+
 def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> str:
     product_config = config or load_product_config()
     app_port = int(product_config.get("network", {}).get("app_port", 8086))
@@ -94,8 +157,7 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
             "",
             "[Service]",
             "Type=simple",
-            f"User={run_as_user}",
-            f"WorkingDirectory={_project_root()}",
+            f"WorkingDirectory={home_dir}",
             f"Environment=HOME={home_dir}",
             f"Environment=HERMES_HOME={hermes_home}",
             (
@@ -107,24 +169,17 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
             "RestartSec=3",
             "",
             "[Install]",
-            "WantedBy=multi-user.target",
+            "WantedBy=default.target",
             "",
         ]
     )
 
 
 def _write_product_app_service_unit(config: dict[str, Any] | None = None) -> None:
+    service_path = _product_app_service_path()
+    service_path.parent.mkdir(parents=True, exist_ok=True)
     rendered = _render_product_app_service_unit(config)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
-        handle.write(rendered)
-        temp_path = Path(handle.name)
-    try:
-        if getattr(os, "geteuid", lambda: 1)() == 0:
-            shutil.copyfile(temp_path, PRODUCT_APP_SERVICE_PATH)
-        else:
-            _run(["cp", str(temp_path), str(PRODUCT_APP_SERVICE_PATH)], sudo=True)
-    finally:
-        temp_path.unlink(missing_ok=True)
+    service_path.write_text(rendered, encoding="utf-8")
 
 
 def ensure_product_app_service_started(config: dict[str, Any] | None = None) -> None:
@@ -133,11 +188,11 @@ def ensure_product_app_service_started(config: dict[str, Any] | None = None) -> 
     if not _systemd_available():
         raise RuntimeError("systemd is required to manage the Hermes Core product app service")
     _write_product_app_service_unit(config)
-    _run(["systemctl", "daemon-reload"], sudo=True)
-    _run(["systemctl", "enable", PRODUCT_APP_SERVICE_NAME], sudo=True)
-    active = _run(["systemctl", "is-active", PRODUCT_APP_SERVICE_NAME], check=False, sudo=True)
+    _run(["systemctl", "--user", "daemon-reload"])
+    _run(["systemctl", "--user", "enable", PRODUCT_APP_SERVICE_NAME])
+    active = _run(["systemctl", "--user", "is-active", PRODUCT_APP_SERVICE_NAME], check=False)
     action = "restart" if active.returncode == 0 else "start"
-    _run(["systemctl", action, PRODUCT_APP_SERVICE_NAME], sudo=True)
+    _run(["systemctl", "--user", action, PRODUCT_APP_SERVICE_NAME])
 
 
 def get_product_install_state_path() -> Path:
@@ -164,21 +219,29 @@ def _product_install_state() -> dict[str, Any]:
 
 
 def _docker_compose_available() -> bool:
+    if shutil.which("docker") is None:
+        return False
     result = _run(["docker", "compose", "version"], check=False)
     return result.returncode == 0
 
 
 def _docker_available() -> bool:
+    if shutil.which("docker") is None:
+        return False
     result = _run(["docker", "info"], check=False)
     return result.returncode == 0
 
 
 def _runsc_available() -> bool:
+    if shutil.which("runsc") is None:
+        return False
     result = _run(["runsc", "--version"], check=False)
     return result.returncode == 0
 
 
 def _docker_runtimes() -> dict[str, Any]:
+    if shutil.which("docker") is None:
+        return {}
     result = _run(["docker", "info", "--format", "{{json .Runtimes}}"], check=False)
     if result.returncode != 0:
         return {}
@@ -188,8 +251,18 @@ def _docker_runtimes() -> dict[str, Any]:
         return {}
 
 
+def _runsc_runtime_matches(config: Any) -> bool:
+    if not isinstance(config, dict):
+        return False
+    path_value = str(config.get("path", "")).strip()
+    runtime_args = config.get("runtimeArgs")
+    if not path_value or PurePosixPath(path_value).name != RUNSC_RUNTIME_NAME:
+        return False
+    return runtime_args == RUNSC_RUNTIME_CONFIG["runtimeArgs"]
+
+
 def _runsc_registered() -> bool:
-    return RUNSC_RUNTIME_NAME in _docker_runtimes()
+    return _runsc_runtime_matches(_docker_runtimes().get(RUNSC_RUNTIME_NAME))
 
 
 def _load_docker_daemon_config() -> tuple[dict[str, Any], bool]:
@@ -220,11 +293,57 @@ def _restart_docker_service() -> None:
     _run(["systemctl", "restart", "docker"], sudo=True)
 
 
+def _start_and_enable_docker_service() -> None:
+    if not _systemd_available():
+        return
+    _run(["systemctl", "enable", "--now", "docker"], sudo=True)
+
+
+def _docker_service_active() -> bool:
+    if not _systemd_available():
+        return False
+    return _run(["systemctl", "is-active", "docker"], check=False).returncode == 0
+
+
+def _apt_install(packages: list[str]) -> None:
+    env_prefix = ["env", "DEBIAN_FRONTEND=noninteractive", "NEEDRESTART_MODE=a"]
+    _run([*env_prefix, "apt-get", "update", "-qq"], sudo=True)
+    _run([*env_prefix, "apt-get", "install", "-y", *packages], sudo=True)
+
+
+def ensure_linux_product_host_prereqs() -> dict[str, bool]:
+    if not _is_linux():
+        return {"installed_packages": False, "added_docker_group_membership": False}
+    if not _apt_supported_linux():
+        raise RuntimeError(
+            "Automatic host prerequisite installation is currently supported only on Ubuntu/Debian"
+        )
+
+    installed_packages = False
+    if not _docker_available() or not _docker_compose_available() or not _runsc_available():
+        _apt_install(APT_INSTALL_PACKAGES)
+        installed_packages = True
+
+    if installed_packages or not _docker_service_active():
+        _start_and_enable_docker_service()
+
+    added_docker_group_membership = False
+    current_user = _current_user_name()
+    if not _user_in_group("docker", current_user):
+        _run(["usermod", "-aG", "docker", current_user], sudo=True)
+        added_docker_group_membership = True
+
+    return {
+        "installed_packages": installed_packages,
+        "added_docker_group_membership": added_docker_group_membership,
+    }
+
+
 def ensure_runsc_registered_with_docker() -> bool:
     config, _exists = _load_docker_daemon_config()
     runtimes = config.setdefault("runtimes", {})
     existing = runtimes.get(RUNSC_RUNTIME_NAME)
-    if existing == RUNSC_RUNTIME_CONFIG and _runsc_registered():
+    if _runsc_runtime_matches(existing) and _runsc_registered():
         return False
     runtimes[RUNSC_RUNTIME_NAME] = dict(RUNSC_RUNTIME_CONFIG)
     _write_docker_daemon_config(config)
@@ -296,7 +415,7 @@ def _remove_runsc_registration_if_managed() -> bool:
     if not exists:
         return False
     runtimes = config.get("runtimes", {})
-    if runtimes.get(RUNSC_RUNTIME_NAME) != RUNSC_RUNTIME_CONFIG:
+    if not _runsc_runtime_matches(runtimes.get(RUNSC_RUNTIME_NAME)):
         return False
     runtimes.pop(RUNSC_RUNTIME_NAME, None)
     if not runtimes:
@@ -314,13 +433,11 @@ def perform_product_cleanup() -> dict[str, bool]:
         _remove_pocket_id_stack()
         _remove_runtime_containers()
     if _is_linux() and _systemd_available():
-        _run(["systemctl", "disable", "--now", PRODUCT_APP_SERVICE_NAME], check=False, sudo=True)
-        if PRODUCT_APP_SERVICE_PATH.exists():
-            if getattr(os, "geteuid", lambda: 1)() == 0:
-                PRODUCT_APP_SERVICE_PATH.unlink(missing_ok=True)
-            else:
-                _run(["rm", "-f", str(PRODUCT_APP_SERVICE_PATH)], check=False, sudo=True)
-        _run(["systemctl", "daemon-reload"], check=False, sudo=True)
+        _run(["systemctl", "--user", "disable", "--now", PRODUCT_APP_SERVICE_NAME], check=False)
+        service_path = _product_app_service_path()
+        if service_path.exists():
+            service_path.unlink(missing_ok=True)
+        _run(["systemctl", "--user", "daemon-reload"], check=False)
     removed_runsc_registration = _remove_runsc_registration_if_managed()
     shutil.rmtree(get_product_services_root(), ignore_errors=True)
     shutil.rmtree(get_product_storage_root(), ignore_errors=True)
@@ -336,18 +453,27 @@ def run_product_install(args: Any) -> None:
 
     if not _is_linux():
         raise SystemExit("hermes-core install currently supports Linux host setup only")
+    try:
+        prereq_state = ensure_linux_product_host_prereqs()
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     if not _docker_available():
         raise SystemExit("Docker is not available or the daemon is not running")
     if not _docker_compose_available():
         raise SystemExit("docker compose is not available")
     if not _runsc_available():
-        raise SystemExit("runsc is not installed; install it before running hermes-core install")
+        raise SystemExit("runsc is not installed on this machine")
 
     changed = ensure_runsc_registered_with_docker()
     state = _product_install_state()
     state["managed_runsc_registration"] = bool(changed or state.get("managed_runsc_registration"))
     save_product_install_state(state)
     ensure_product_app_service_started(load_product_config())
+
+    if prereq_state.get("added_docker_group_membership") and not _docker_available():
+        raise SystemExit(
+            "Added your user to the docker group. Run 'newgrp docker' or start a new login shell, then rerun 'hermes-core install'."
+        )
 
     if getattr(args, "skip_setup", False):
         return

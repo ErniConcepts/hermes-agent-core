@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from typing import Any
 from pathlib import Path
 
-from hermes_cli.config import ensure_hermes_home, get_hermes_home
+import yaml
+
+from hermes_cli.config import ensure_hermes_home, get_config_path, get_env_path, get_hermes_home
 from hermes_cli.product_config import initialize_product_config_file, load_product_config, save_product_config
 from hermes_cli.product_stack import (
     bootstrap_first_admin_enrollment,
@@ -265,6 +271,57 @@ def _sync_model_route_from_temp_config(temp_config: dict[str, Any]) -> None:
     save_product_config(product_config)
 
 
+def _seed_product_model_setup_config(product_config: dict[str, Any]) -> dict[str, Any]:
+    route = product_config.get("models", {}).get("default_route", {})
+    toolsets = product_config.get("tools", {}).get("hermes_toolsets", []) or list(DEFAULT_PRODUCT_TOOLSETS)
+    seeded_model: dict[str, Any] = {
+        "provider": str(route.get("provider", "custom")).strip() or "custom",
+        "default": str(route.get("model", "")).strip() or "qwen3.5-9b-local",
+    }
+    base_url = str(route.get("base_url", "")).strip()
+    if base_url:
+        seeded_model["base_url"] = base_url
+    api_mode = str(route.get("api_mode", "")).strip()
+    if api_mode:
+        seeded_model["api_mode"] = api_mode
+    return {
+        "model": seeded_model,
+        "platform_toolsets": {"cli": [str(toolset).strip() for toolset in toolsets if str(toolset).strip()]},
+    }
+
+
+@contextmanager
+def _isolated_product_setup_home() -> Any:
+    product_config = load_product_config()
+    real_home = get_hermes_home()
+    real_env_path = get_env_path()
+    real_auth_path = real_home / "auth.json"
+    original_home = os.environ.get("HERMES_HOME")
+    with tempfile.TemporaryDirectory(prefix="hermes-core-product-setup-") as temp_dir:
+        temp_home = Path(temp_dir)
+        try:
+            os.environ["HERMES_HOME"] = str(temp_home)
+            ensure_hermes_home()
+            if real_env_path.exists():
+                shutil.copyfile(real_env_path, get_env_path())
+            seeded_config = _seed_product_model_setup_config(product_config)
+            get_config_path().write_text(yaml.safe_dump(seeded_config, sort_keys=False), encoding="utf-8")
+            yield temp_home
+            temp_env_path = get_env_path()
+            if temp_env_path.exists():
+                real_home.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(temp_env_path, real_env_path)
+            temp_auth_path = temp_home / "auth.json"
+            if temp_auth_path.exists():
+                real_home.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(temp_auth_path, real_auth_path)
+        finally:
+            if original_home is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = original_home
+
+
 def _sync_toolsets_from_temp_config(temp_config: dict[str, Any]) -> None:
     platform_toolsets = temp_config.get("platform_toolsets", {})
     cli_toolsets = platform_toolsets.get("cli") if isinstance(platform_toolsets, dict) else None
@@ -328,9 +385,32 @@ def _start_product_stack() -> None:
 
 
 def _run_model_section() -> None:
+    existing_route = dict(load_product_config().get("models", {}).get("default_route", {}))
     temp_config: dict[str, Any] = {}
-    setup_model_provider(temp_config)
-    _sync_model_route_from_temp_config(temp_config)
+    with _isolated_product_setup_home() as temp_home:
+        setup_model_provider(temp_config)
+        disk_config = yaml.safe_load((temp_home / "config.yaml").read_text(encoding="utf-8")) or {}
+        if isinstance(disk_config, dict) and isinstance(disk_config.get("model"), (dict, str)):
+            merged_config = dict(disk_config)
+            if isinstance(disk_config.get("model"), dict) and isinstance(temp_config.get("model"), dict):
+                merged_model = dict(disk_config["model"])
+                merged_model.update(temp_config["model"])
+                merged_config["model"] = merged_model
+            elif isinstance(temp_config.get("model"), (dict, str)):
+                merged_config["model"] = temp_config["model"]
+            temp_config = merged_config
+        elif not isinstance(temp_config.get("model"), (dict, str)):
+            temp_config.update(disk_config if isinstance(disk_config, dict) else {})
+    try:
+        _sync_model_route_from_temp_config(temp_config)
+    except RuntimeError as exc:
+        if "valid model configuration" not in str(exc):
+            raise
+        provider = str(existing_route.get("provider", "")).strip()
+        model_name = str(existing_route.get("model", "")).strip()
+        if not provider or not model_name:
+            raise
+        print_info("  Kept current product model route.")
 
 
 def _run_tools_section() -> None:
@@ -344,7 +424,10 @@ def _run_tools_section() -> None:
 
 
 def _run_bootstrap_section() -> None:
-    validate_product_host_prereqs()
+    try:
+        validate_product_host_prereqs()
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     initialize_product_stack()
     _start_product_stack()
 

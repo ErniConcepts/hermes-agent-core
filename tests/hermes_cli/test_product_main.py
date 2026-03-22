@@ -30,6 +30,16 @@ def test_hermes_core_install_dispatches(monkeypatch):
     assert called["skip_setup"] is True
 
 
+def test_hermes_core_main_exits_cleanly_on_runtime_error(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.product_install.run_product_install",
+        lambda args: (_ for _ in ()).throw(RuntimeError("Docker is not available")),
+    )
+
+    with pytest.raises(SystemExit, match="Docker is not available"):
+        product_main.main(["install", "--skip-setup"])
+
+
 def test_hermes_cli_rejects_product_subcommand(monkeypatch):
     monkeypatch.setattr("sys.argv", ["hermes", "product"])
 

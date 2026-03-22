@@ -109,7 +109,10 @@ def main(argv: list[str] | None = None) -> None:
     if not hasattr(args, "func"):
         parser.print_help()
         raise SystemExit(1)
-    args.func(args)
+    try:
+        args.func(args)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == "__main__":

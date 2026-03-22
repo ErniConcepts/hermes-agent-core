@@ -1,6 +1,11 @@
 from argparse import Namespace
 from unittest.mock import patch
 
+import os
+import pytest
+import yaml
+from pathlib import Path
+
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_setup import (
     run_product_setup_wizard,
@@ -80,6 +85,76 @@ def test_product_setup_model_section_does_not_write_generic_hermes_config(tmp_pa
         run_product_setup_wizard(_make_product_args(section="model"))
 
     assert not (tmp_path / "config.yaml").exists()
+
+
+def test_product_setup_model_section_seeds_isolated_config_from_product_route(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    product_config = load_product_config()
+    product_config["models"]["default_route"] = {
+        "provider": "custom",
+        "base_url": "http://product-route.local:8080/v1",
+        "model": "qwen3.5-9b-local",
+        "context_length": 32768,
+    }
+    product_config["tools"]["hermes_toolsets"] = ["memory", "file"]
+    from hermes_cli.product_config import save_product_config
+
+    save_product_config(product_config)
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=test-key\n", encoding="utf-8")
+
+    def _fake_model_setup(config):
+        seeded_home = Path(os.environ["HERMES_HOME"])
+        seeded = yaml.safe_load((seeded_home / "config.yaml").read_text(encoding="utf-8"))
+        assert seeded["model"]["provider"] == "custom"
+        assert seeded["model"]["base_url"] == "http://product-route.local:8080/v1"
+        assert seeded["model"]["default"] == "qwen3.5-9b-local"
+        assert seeded["platform_toolsets"]["cli"] == ["memory", "file"]
+        config["model"] = {
+            "provider": "custom",
+            "base_url": "http://product-route.local:8080/v1",
+            "default": "qwen3.5-9b-local",
+        }
+
+    with (
+        patch("hermes_cli.product_setup.is_interactive_stdin", return_value=True),
+        patch("hermes_cli.product_setup.setup_model_provider", side_effect=_fake_model_setup),
+    ):
+        run_product_setup_wizard(_make_product_args(section="model"))
+
+    assert not (tmp_path / "config.yaml").exists()
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "OPENAI_API_KEY=test-key\n"
+
+
+def test_product_setup_model_section_reads_back_isolated_config_when_wizard_keeps_current(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    product_config = load_product_config()
+    product_config["models"]["default_route"] = {
+        "provider": "custom",
+        "base_url": "http://product-route.local:8080/v1",
+        "model": "qwen3.5-9b-local",
+        "context_length": 32768,
+    }
+    from hermes_cli.product_config import save_product_config
+
+    save_product_config(product_config)
+
+    def _fake_model_setup(config):
+        seeded_home = Path(os.environ["HERMES_HOME"])
+        seeded = yaml.safe_load((seeded_home / "config.yaml").read_text(encoding="utf-8"))
+        seeded["model"]["api_mode"] = "chat_completions"
+        (seeded_home / "config.yaml").write_text(yaml.safe_dump(seeded, sort_keys=False), encoding="utf-8")
+
+    with (
+        patch("hermes_cli.product_setup.is_interactive_stdin", return_value=True),
+        patch("hermes_cli.product_setup.setup_model_provider", side_effect=_fake_model_setup),
+    ):
+        run_product_setup_wizard(_make_product_args(section="model"))
+
+    reloaded = load_product_config()
+    assert reloaded["models"]["default_route"]["provider"] == "custom"
+    assert reloaded["models"]["default_route"]["base_url"] == "http://product-route.local:8080/v1"
+    assert reloaded["models"]["default_route"]["model"] == "qwen3.5-9b-local"
+    assert reloaded["models"]["default_route"]["api_mode"] == "chat_completions"
 
 
 def test_product_setup_network_section_updates_public_host(tmp_path, monkeypatch):
@@ -187,3 +262,19 @@ def test_product_setup_bootstrap_section_validates_host_prereqs(tmp_path, monkey
         run_product_setup_wizard(_make_product_args(section="bootstrap"))
 
     mock_validate.assert_called_once()
+
+
+def test_product_setup_bootstrap_section_exits_cleanly_on_prereq_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    with (
+        patch("hermes_cli.product_setup.is_interactive_stdin", return_value=True),
+        patch("hermes_cli.product_setup.validate_product_host_prereqs", side_effect=RuntimeError("Docker is not available")),
+    ):
+        with patch("hermes_cli.product_setup.initialize_product_stack") as mock_init:
+            with patch("hermes_cli.product_setup._start_product_stack") as mock_start:
+                with pytest.raises(SystemExit, match="Docker is not available"):
+                    run_product_setup_wizard(_make_product_args(section="bootstrap"))
+
+    mock_init.assert_not_called()
+    mock_start.assert_not_called()
