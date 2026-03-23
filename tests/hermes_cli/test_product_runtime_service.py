@@ -171,3 +171,82 @@ def test_build_runtime_agent_scopes_tools_to_workspace(monkeypatch, tmp_path):
     assert captured["agent_kwargs"]["enabled_toolsets"] == ["memory", "file"]
     assert captured["agent_kwargs"]["session_id"] == "product_admin_123"
     assert captured["agent_kwargs"]["platform"] == "product-runtime"
+
+
+def test_product_runtime_turn_reports_model_not_available(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory,session_search")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+
+    class FailingAgent:
+        def run_conversation(self, *args, **kwargs):
+            raise RuntimeError("APIConnectionError: Connection error.")
+
+    monkeypatch.setattr(
+        "hermes_cli.product_runtime_service.build_runtime_agent",
+        lambda db, session_id, reasoning_callback=None: FailingAgent(),
+    )
+    monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: [])
+
+    client = TestClient(create_product_runtime_app())
+    response = client.post(
+        "/runtime/turn",
+        json={"user_message": "hello"},
+        headers={"X-Hermes-Product-Runtime-Token": "runtime-token"},
+    )
+
+    assert response.status_code == 503
+    assert "Model not available" in response.json()["detail"]
+    assert "host.docker.internal:8080/v1" in response.json()["detail"]
+
+
+def test_product_runtime_stream_reports_model_not_available(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory,session_search")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+
+    class FailingAgent:
+        def __init__(self):
+            self.reasoning_callback = None
+
+        def run_conversation(self, *args, **kwargs):
+            raise RuntimeError("APIConnectionError: Connection error.")
+
+    monkeypatch.setattr(
+        "hermes_cli.product_runtime_service.build_runtime_agent",
+        lambda db, session_id, reasoning_callback=None: FailingAgent(),
+    )
+    monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: [])
+
+    client = TestClient(create_product_runtime_app())
+    with client.stream(
+        "POST",
+        "/runtime/turn/stream",
+        json={"user_message": "hello"},
+        headers={"X-Hermes-Product-Runtime-Token": "runtime-token"},
+    ) as response:
+        body = "\n".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "event: error" in body
+    assert "Model not available" in body

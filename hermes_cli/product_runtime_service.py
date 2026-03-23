@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -95,6 +96,25 @@ def _runtime_token() -> str:
 def _require_runtime_token(header_value: str | None, expected: str) -> None:
     if header_value != expected:
         raise HTTPException(status_code=401, detail="Unauthorized runtime request")
+
+
+def _classify_runtime_error(exc: Exception) -> tuple[int, str]:
+    detail = str(exc or "").strip()
+    normalized = detail.lower()
+    if (
+        "apiconnectionerror" in normalized
+        or "connection error" in normalized
+        or "max retries" in normalized
+        or "failed to establish a new connection" in normalized
+        or "connection refused" in normalized
+    ):
+        endpoint = _required_env("OPENAI_BASE_URL")
+        model = _required_env("HERMES_PRODUCT_MODEL")
+        return (
+            503,
+            f"Model not available. Check that '{model}' is reachable at {endpoint}.",
+        )
+    return (500, "Runtime request failed")
 
 
 def _visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -208,8 +228,8 @@ def create_product_runtime_app() -> FastAPI:
         x_hermes_product_runtime_token: str | None = Header(default=None),
     ) -> RuntimeTurnResponse:
         _require_runtime_token(x_hermes_product_runtime_token, runtime_token)
-        db = SessionDB()
         try:
+            db = SessionDB()
             agent = build_runtime_agent(db, session_id)
             history = _load_session_messages(db, session_id)
             result = agent.run_conversation(
@@ -218,8 +238,12 @@ def create_product_runtime_app() -> FastAPI:
                 sync_honcho=False,
             )
             updated_messages = _load_session_messages(db, session_id)
+        except Exception as exc:
+            status_code, detail = _classify_runtime_error(exc)
+            raise HTTPException(status_code=status_code, detail=detail) from exc
         finally:
-            db.close()
+            if "db" in locals():
+                db.close()
         final_response = str(result.get("final_response") or result.get("response") or "")
         return RuntimeTurnResponse(
             final_response=final_response,
@@ -238,8 +262,8 @@ def create_product_runtime_app() -> FastAPI:
         event_queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
 
         def _run() -> None:
-            db = SessionDB()
             try:
+                db = SessionDB()
                 agent = build_runtime_agent(
                     db,
                     session_id,
@@ -271,10 +295,12 @@ def create_product_runtime_app() -> FastAPI:
                         ).model_dump(mode="json"),
                     )
                 )
-            except Exception:
-                event_queue.put(("error", {"detail": "Runtime request failed"}))
+            except Exception as exc:
+                _, detail = _classify_runtime_error(exc)
+                event_queue.put(("error", {"detail": detail}))
             finally:
-                db.close()
+                if "db" in locals():
+                    db.close()
                 event_queue.put(("done", {}))
 
         def _stream() -> Iterator[bytes]:
