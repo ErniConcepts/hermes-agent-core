@@ -206,29 +206,35 @@ docker_access_ready() {
 
 run_product_install() {
     local install_cmd="\"$VENV_DIR/bin/hermes-core\" install"
-    local install_output
+    local install_output_file
     local status=0
     if [[ "$RUN_SETUP" == false ]]; then
         install_cmd="$install_cmd --skip-setup"
     fi
 
+    log_info "Running Hermes Core install..."
+    log_info "This step may prompt for your sudo password."
+
     if docker_access_ready && command -v sg >/dev/null 2>&1 && ! id -nG "$USER" | tr ' ' '\n' | grep -qx docker; then
         log_info "Starting Hermes Core install in a docker group shell..."
         sg docker -c "$install_cmd"
     else
+        install_output_file="$(mktemp)"
         set +e
-        install_output="$(eval "$install_cmd" 2>&1)"
+        eval "$install_cmd" > >(tee "$install_output_file") 2>&1
         status=$?
         set -e
-        printf '%s\n' "$install_output"
         if [[ $status -eq 0 ]]; then
+            rm -f "$install_output_file"
             return
         fi
-        if command -v sg >/dev/null 2>&1 && printf '%s\n' "$install_output" | grep -q "Added your user to the docker group"; then
+        if command -v sg >/dev/null 2>&1 && grep -q "Added your user to the docker group" "$install_output_file"; then
             log_info "Retrying Hermes Core install in a docker group shell..."
+            rm -f "$install_output_file"
             sg docker -c "$install_cmd"
             return
         fi
+        rm -f "$install_output_file"
         return "$status"
     fi
 }
