@@ -27,6 +27,21 @@ _RUNTIME_HEALTH_TTL_SECONDS = 10.0
 _RUNTIME_HEALTH_CACHE: dict[str, float] = {}
 _RUNTIME_WORKSPACE_PATH = "/workspace"
 
+
+def _secure_runtime_dir(path: Path) -> None:
+    try:
+        path.chmod(0o755)
+    except (OSError, NotImplementedError):
+        pass
+
+
+def _secure_runtime_file(path: Path) -> None:
+    try:
+        if path.exists():
+            path.chmod(0o644)
+    except (OSError, NotImplementedError):
+        pass
+
 class ProductRuntimeRecord(BaseModel):
     user_id: str
     runtime_key: str | None = None
@@ -233,7 +248,7 @@ def _write_runtime_cli_config(config: dict[str, Any], user_id: str, *, base_url:
         }
     }
     config_path.write_text(yaml.safe_dump(runtime_config, sort_keys=False), encoding="utf-8")
-    _secure_file(config_path)
+    _secure_runtime_file(config_path)
 
 
 def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord:
@@ -253,11 +268,11 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
         workspace_root,
     ):
         path.mkdir(parents=True, exist_ok=True)
-        _secure_dir(path)
+        _secure_runtime_dir(path)
 
     soul_path = hermes_home / "SOUL.md"
     soul_path.write_text(render_product_soul(product_config), encoding="utf-8")
-    _secure_file(soul_path)
+    _secure_runtime_file(soul_path)
 
     route = product_config.get("models", {}).get("default_route", {})
     base_url = str(route.get("base_url") or "").strip()

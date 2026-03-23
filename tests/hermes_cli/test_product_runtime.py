@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import pytest
 import yaml
 
@@ -42,6 +43,25 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     assert loaded.runtime_key
     assert loaded.auth_token
     assert loaded.runtime == "runsc"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are only meaningful on non-Windows hosts")
+def test_stage_product_runtime_uses_container_readable_permissions(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    record = stage_product_runtime({"preferred_username": "admin"})
+
+    runtime_root = Path(record.runtime_root)
+    hermes_home = Path(record.hermes_home)
+    workspace_root = Path(record.workspace_root)
+    soul_path = hermes_home / "SOUL.md"
+    env_path = Path(record.env_file)
+
+    assert oct(runtime_root.stat().st_mode & 0o777) == "0o755"
+    assert oct(hermes_home.stat().st_mode & 0o777) == "0o755"
+    assert oct(workspace_root.stat().st_mode & 0o777) == "0o755"
+    assert oct(soul_path.stat().st_mode & 0o777) == "0o644"
+    assert oct(env_path.stat().st_mode & 0o777) == "0o600"
 
 
 def test_stage_product_runtime_reuses_existing_runtime_token(tmp_path, monkeypatch):
