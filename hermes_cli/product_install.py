@@ -54,18 +54,29 @@ def _run(
     capture_output: bool = True,
     sudo: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    using_sudo = False
     if sudo and _is_linux() and getattr(os, "geteuid", lambda: 1)() != 0:
         command = ["sudo", *command]
-    return subprocess.run(
-        command,
-        check=check,
-        capture_output=capture_output,
-        text=True,
-    )
-
-
-def _project_root() -> Path:
-    return Path(__file__).parent.parent.resolve()
+        using_sudo = True
+    try:
+        return subprocess.run(
+            command,
+            check=check,
+            capture_output=capture_output,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip().lower()
+        if using_sudo and (
+            "a password is required" in stderr
+            or "no tty present" in stderr
+            or "terminal is required" in stderr
+        ):
+            raise RuntimeError(
+                "Host prerequisite installation needs sudo in an interactive local shell. "
+                "Rerun 'hermes-core install' directly on the Linux device and enter your sudo password when prompted."
+            ) from exc
+        raise
 
 
 def _product_app_service_path() -> Path:
@@ -146,7 +157,7 @@ def _user_in_group(group_name: str, user_name: str | None = None) -> bool:
 def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> str:
     product_config = config or load_product_config()
     app_port = int(product_config.get("network", {}).get("app_port", 8086))
-    run_as_user, home_dir = _product_service_identity()
+    _run_as_user, home_dir = _product_service_identity()
     hermes_home = str(get_hermes_home())
     return "\n".join(
         [
@@ -290,12 +301,14 @@ def _write_docker_daemon_config(config: dict[str, Any]) -> None:
 
 
 def _restart_docker_service() -> None:
+    _run(["systemctl", "restart", "docker.socket"], sudo=True)
     _run(["systemctl", "restart", "docker"], sudo=True)
 
 
 def _start_and_enable_docker_service() -> None:
     if not _systemd_available():
         return
+    _run(["systemctl", "enable", "--now", "docker.socket"], sudo=True)
     _run(["systemctl", "enable", "--now", "docker"], sudo=True)
 
 
@@ -457,23 +470,24 @@ def run_product_install(args: Any) -> None:
         prereq_state = ensure_linux_product_host_prereqs()
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
-    if not _docker_available():
-        raise SystemExit("Docker is not available or the daemon is not running")
-    if not _docker_compose_available():
-        raise SystemExit("docker compose is not available")
-    if not _runsc_available():
-        raise SystemExit("runsc is not installed on this machine")
-
-    changed = ensure_runsc_registered_with_docker()
-    state = _product_install_state()
-    state["managed_runsc_registration"] = bool(changed or state.get("managed_runsc_registration"))
-    save_product_install_state(state)
-    ensure_product_app_service_started(load_product_config())
-
     if prereq_state.get("added_docker_group_membership") and not _docker_available():
         raise SystemExit(
             "Added your user to the docker group. Run 'newgrp docker' or start a new login shell, then rerun 'hermes-core install'."
         )
+    if not _runsc_available():
+        raise SystemExit("runsc is not installed on this machine")
+    if not _docker_compose_available():
+        raise SystemExit("docker compose is not available")
+
+    try:
+        changed = ensure_runsc_registered_with_docker()
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    if not _docker_available():
+        raise SystemExit("Docker is not available or the daemon is not running")
+    state = _product_install_state()
+    state["managed_runsc_registration"] = bool(changed or state.get("managed_runsc_registration"))
+    save_product_install_state(state)
 
     if getattr(args, "skip_setup", False):
         return

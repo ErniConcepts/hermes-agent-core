@@ -17,6 +17,10 @@ In this model:
 
 The product should be installed through a CLI flow similar to installing Hermes itself.
 
+The public installer entrypoint should be:
+
+- `curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/<branch>/scripts/install-product.sh | bash`
+
 The product-owned setup flow should be exposed separately from generic upstream Hermes setup.
 
 The intended command shape is:
@@ -155,6 +159,7 @@ The first implementation should also treat these startup details as part of the 
 
 - service startup should use a reproducible Docker path and should recreate changed container definitions cleanly
 - Linux install should also own a product-app service so the app is actually running before Tailnet exposure is applied
+- the product-app service should be a user-level systemd unit so the installer can complete as the normal user and only use `sudo` for true host prerequisites
 - bundled auth bootstrap should use the supported `Pocket ID` admin/API surface rather than shelling into containers for identity mutations
 - setup should bootstrap the product's OIDC client through the `STATIC_API_KEY` admin surface
 - setup should surface the native `Pocket ID` `/setup` flow for first-admin enrollment instead of inventing a product-owned password bootstrap

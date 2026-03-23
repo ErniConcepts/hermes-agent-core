@@ -144,7 +144,12 @@ download_source() {
         log_info "Installing from local source directory: $SOURCE_DIR_OVERRIDE"
         rm -rf "$INSTALL_DIR"
         mkdir -p "$INSTALL_DIR"
-        cp -R "$SOURCE_DIR_OVERRIDE"/. "$INSTALL_DIR"/
+        tar -C "$SOURCE_DIR_OVERRIDE" \
+            --exclude=.git \
+            --exclude=.venv \
+            --exclude=.pytest_cache \
+            --exclude=__pycache__ \
+            -cf - . | tar -C "$INSTALL_DIR" -xf -
         return
     fi
 
@@ -201,6 +206,8 @@ docker_access_ready() {
 
 run_product_install() {
     local install_cmd="\"$VENV_DIR/bin/hermes-core\" install"
+    local install_output
+    local status=0
     if [[ "$RUN_SETUP" == false ]]; then
         install_cmd="$install_cmd --skip-setup"
     fi
@@ -209,7 +216,20 @@ run_product_install() {
         log_info "Starting Hermes Core install in a docker group shell..."
         sg docker -c "$install_cmd"
     else
-        eval "$install_cmd"
+        set +e
+        install_output="$(eval "$install_cmd" 2>&1)"
+        status=$?
+        set -e
+        printf '%s\n' "$install_output"
+        if [[ $status -eq 0 ]]; then
+            return
+        fi
+        if command -v sg >/dev/null 2>&1 && printf '%s\n' "$install_output" | grep -q "Added your user to the docker group"; then
+            log_info "Retrying Hermes Core install in a docker group shell..."
+            sg docker -c "$install_cmd"
+            return
+        fi
+        return "$status"
     fi
 }
 

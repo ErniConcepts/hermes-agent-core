@@ -64,6 +64,7 @@ Do not mark work done early.
 - The setup CLI should be the source of truth for product-wide settings.
 - Product setup should live in the separate `hermes-core` CLI, not inside generic `hermes setup`.
 - Product install and uninstall should also live in separate product-owned command paths, not inside generic Hermes install or uninstall behavior.
+- The public install entrypoint for the fork is `scripts/install-product.sh`, intended to be fetched with `curl ... | bash` like upstream Hermes.
 - Generic `hermes setup` should remain upstream-compatible and should not bootstrap Pocket ID or other product-only services.
 - Product setup may reuse the Hermes tool selection UI, but the canonical saved result for product chat runtimes must be the selected Hermes toolset names in `product.yaml`.
 - The browser admin UI should remain narrow and should not become a general product-config console in the first version.
@@ -94,6 +95,7 @@ Do not mark work done early.
 - Keep the product app as a standard OIDC client. Avoid provider-specific product logic unless the provider workflow genuinely requires it.
 - Start or restart the bundled auth stack with `docker compose up -d --wait --force-recreate` so changed container definitions are actually applied.
 - Linux install/setup must also ensure the product app service is running before applying `tailscale serve`.
+- The product app service should be installed as a user-level systemd unit under `~/.config/systemd/user`, not as a host-root `/etc/systemd/system` service.
 - The bundled Pocket ID service contract currently relies on:
   - `APP_URL`
   - `ENCRYPTION_KEY`

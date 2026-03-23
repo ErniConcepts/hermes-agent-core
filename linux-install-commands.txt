@@ -1,0 +1,30 @@
+Hermes Core fresh install commands
+==================================
+
+Run these on the Linux machine as your normal user.
+
+1. Install basic host tools
+
+sudo apt update
+sudo apt install -y curl sudo ca-certificates
+
+2. Download the installer script
+
+curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/pivot/pocket-id-auth/scripts/install-product.sh -o install-product.sh
+
+3. Run the installer script
+
+bash install-product.sh --branch pivot/pocket-id-auth
+
+4. Run setup
+
+~/.local/bin/hermes-core setup
+~/.local/bin/hermes-core setup bootstrap
+
+Notes
+-----
+
+- Run commands one by one, not on a single line.
+- Do not run the installer with sudo bash.
+- If ~/.local/bin is not on PATH yet, use the full path shown above.
+- The installer already runs the product install step.

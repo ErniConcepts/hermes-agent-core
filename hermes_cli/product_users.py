@@ -168,12 +168,14 @@ def _validate_optional_email(email: str | None) -> str | None:
 
 def list_product_users(config: dict[str, Any] | None = None) -> list[ProductUser]:
     client = _client(config)
-    previous_timeout = client.timeout
-    client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
+    previous_timeout = getattr(client, "timeout", None)
+    if hasattr(client, "timeout"):
+        client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
     try:
         payload = _request_json(client, "GET", "/api/users", expected_status=200)
     finally:
-        client.timeout = previous_timeout
+        if hasattr(client, "timeout"):
+            client.timeout = previous_timeout
     records = [
         PocketIdUserRecord.model_validate(item)
         for item in payload.get("data", [])
@@ -184,13 +186,15 @@ def list_product_users(config: dict[str, Any] | None = None) -> list[ProductUser
 
 def get_product_user_by_id(user_id: str, config: dict[str, Any] | None = None) -> ProductUser | None:
     client = _client(config)
-    previous_timeout = client.timeout
-    client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
+    previous_timeout = getattr(client, "timeout", None)
+    if hasattr(client, "timeout"):
+        client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
     started = time.perf_counter()
     try:
         response = client.get(f"/api/users/{user_id}")
     finally:
-        client.timeout = previous_timeout
+        if hasattr(client, "timeout"):
+            client.timeout = previous_timeout
     logger.info(
         "product_users request GET /api/users/%s completed in %.0fms",
         user_id,
@@ -234,13 +238,15 @@ def create_product_user(
 
 def deactivate_product_user(user_id: str, config: dict[str, Any] | None = None) -> ProductUser:
     client = _client(config)
-    previous_timeout = client.timeout
-    client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
+    previous_timeout = getattr(client, "timeout", None)
+    if hasattr(client, "timeout"):
+        client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
     started = time.perf_counter()
     try:
         get_response = client.get(f"/api/users/{user_id}")
     finally:
-        client.timeout = previous_timeout
+        if hasattr(client, "timeout"):
+            client.timeout = previous_timeout
     logger.info(
         "product_users request GET /api/users/%s completed in %.0fms",
         user_id,

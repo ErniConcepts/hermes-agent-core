@@ -1,4 +1,5 @@
 from argparse import Namespace
+import subprocess
 
 import pytest
 
@@ -81,6 +82,27 @@ def test_ensure_linux_product_host_prereqs_rejects_unsupported_distro(monkeypatc
         ensure_linux_product_host_prereqs()
 
 
+def test_run_wraps_noninteractive_sudo_failure_with_product_message(monkeypatch):
+    import hermes_cli.product_install as product_install
+
+    _run = product_install._run
+
+    monkeypatch.setattr("hermes_cli.product_install._is_linux", lambda: True)
+    monkeypatch.setattr(product_install.os, "geteuid", lambda: 1000, raising=False)
+
+    def _boom(*args, **kwargs):
+        raise subprocess.CalledProcessError(
+            1,
+            args[0],
+            stderr="sudo: a password is required",
+        )
+
+    monkeypatch.setattr("hermes_cli.product_install.subprocess.run", _boom)
+
+    with pytest.raises(RuntimeError, match="interactive local shell"):
+        _run(["apt-get", "update"], sudo=True)
+
+
 def test_linux_distro_id_reads_uppercase_os_release_keys(tmp_path, monkeypatch):
     os_release = tmp_path / "os-release"
     os_release.write_text('NAME="Ubuntu"\nID=ubuntu\n', encoding="utf-8")
@@ -108,7 +130,6 @@ def test_run_product_install_records_state_and_runs_setup(tmp_path, monkeypatch)
     monkeypatch.setattr("hermes_cli.product_install._docker_compose_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install._runsc_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install.ensure_runsc_registered_with_docker", lambda: True)
-    monkeypatch.setattr("hermes_cli.product_install.ensure_product_app_service_started", lambda config=None: None)
     monkeypatch.setattr("hermes_cli.product_install.validate_product_host_prereqs", lambda: None)
 
     invoked = {}
@@ -122,6 +143,63 @@ def test_run_product_install_records_state_and_runs_setup(tmp_path, monkeypatch)
     state = get_product_install_state_path().read_text(encoding="utf-8")
     assert '"managed_runsc_registration": true' in state
     assert invoked["args"].non_interactive is True
+
+
+def test_run_product_install_skip_setup_does_not_start_product_app_service(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.product_install._is_linux", lambda: True)
+    monkeypatch.setattr(
+        "hermes_cli.product_install.ensure_linux_product_host_prereqs",
+        lambda: {"installed_packages": False, "added_docker_group_membership": False},
+    )
+    monkeypatch.setattr("hermes_cli.product_install._docker_available", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_install._docker_compose_available", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_install._runsc_available", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_install.ensure_runsc_registered_with_docker", lambda: False)
+    seen = {}
+    monkeypatch.setattr(
+        "hermes_cli.product_install.ensure_product_app_service_started",
+        lambda config=None: seen.setdefault("service_started", True),
+    )
+
+    run_product_install(Namespace(skip_setup=True, non_interactive=True, section=None))
+
+    assert "service_started" not in seen
+
+
+def test_run_product_install_prompts_for_newgrp_before_generic_docker_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.product_install._is_linux", lambda: True)
+    monkeypatch.setattr(
+        "hermes_cli.product_install.ensure_linux_product_host_prereqs",
+        lambda: {"installed_packages": True, "added_docker_group_membership": True},
+    )
+    monkeypatch.setattr("hermes_cli.product_install._docker_available", lambda: False)
+
+    with pytest.raises(SystemExit, match="newgrp docker"):
+        run_product_install(Namespace(skip_setup=True, non_interactive=True, section=None))
+
+
+def test_run_product_install_repairs_runsc_registration_before_docker_health_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.product_install._is_linux", lambda: True)
+    monkeypatch.setattr(
+        "hermes_cli.product_install.ensure_linux_product_host_prereqs",
+        lambda: {"installed_packages": True, "added_docker_group_membership": False},
+    )
+    monkeypatch.setattr("hermes_cli.product_install._runsc_available", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_install._docker_compose_available", lambda: True)
+    seen = []
+    monkeypatch.setattr(
+        "hermes_cli.product_install.ensure_runsc_registered_with_docker",
+        lambda: seen.append("runsc") or False,
+    )
+    monkeypatch.setattr("hermes_cli.product_install._docker_available", lambda: seen.append("docker") or False)
+
+    with pytest.raises(SystemExit, match="Docker is not available"):
+        run_product_install(Namespace(skip_setup=True, non_interactive=True, section=None))
+
+    assert seen == ["runsc", "docker"]
 
 
 def test_render_product_app_service_unit_uses_non_root_identity(tmp_path, monkeypatch):
@@ -162,6 +240,24 @@ def test_ensure_product_app_service_started_installs_and_restarts(tmp_path, monk
     assert calls[1][0] == ["systemctl", "--user", "enable", PRODUCT_APP_SERVICE_NAME]
     assert calls[2][0] == ["systemctl", "--user", "is-active", PRODUCT_APP_SERVICE_NAME]
     assert calls[3][0] == ["systemctl", "--user", "start", PRODUCT_APP_SERVICE_NAME]
+
+
+def test_start_and_enable_docker_service_starts_socket_and_service(monkeypatch):
+    from hermes_cli.product_install import _start_and_enable_docker_service
+
+    monkeypatch.setattr("hermes_cli.product_install._systemd_available", lambda: True)
+    calls = []
+    monkeypatch.setattr(
+        "hermes_cli.product_install._run",
+        lambda command, **kwargs: calls.append(command) or type("_Result", (), {"returncode": 0})(),
+    )
+
+    _start_and_enable_docker_service()
+
+    assert calls == [
+        ["systemctl", "enable", "--now", "docker.socket"],
+        ["systemctl", "enable", "--now", "docker"],
+    ]
 
 
 def test_perform_product_cleanup_removes_product_files_and_env_keys(tmp_path, monkeypatch):

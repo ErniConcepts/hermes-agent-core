@@ -218,12 +218,16 @@ def test_product_setup_tailscale_section_updates_tailnet_settings(tmp_path, monk
 
 
 def test_start_product_stack_ensures_linux_product_app_service(monkeypatch):
-    seen = {}
-    monkeypatch.setattr("hermes_cli.product_setup.ensure_product_app_service_started", lambda config=None: seen.setdefault("service", True))
-    monkeypatch.setattr("hermes_cli.product_setup.ensure_product_stack_started", lambda: seen.setdefault("stack", True))
+    seen = []
+    monkeypatch.setattr(
+        "hermes_cli.product_setup.ensure_product_app_service_started",
+        lambda config=None: seen.append("service"),
+    )
+    monkeypatch.setattr("hermes_cli.product_setup.ensure_product_stack_started", lambda: seen.append("stack"))
     monkeypatch.setattr(
         "hermes_cli.product_setup.bootstrap_first_admin_enrollment",
-        lambda: {
+        lambda: seen.append("bootstrap")
+        or {
             "username": "admin",
             "display_name": "Administrator",
             "email": "",
@@ -237,7 +241,7 @@ def test_start_product_stack_ensures_linux_product_app_service(monkeypatch):
 
     _start_product_stack()
 
-    assert seen == {"service": True, "stack": True}
+    assert seen == ["stack", "bootstrap", "service"]
 
 
 def test_product_setup_noninteractive_prints_guidance(tmp_path, capsys, monkeypatch):

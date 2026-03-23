@@ -372,9 +372,9 @@ def _print_product_setup_summary() -> None:
 
 
 def _start_product_stack() -> None:
-    ensure_product_app_service_started(load_product_config())
     ensure_product_stack_started()
     state = bootstrap_first_admin_enrollment()
+    ensure_product_app_service_started(load_product_config())
     print_info("Bundled Pocket ID service is up.")
     print_info(f"  First admin: {state['username']}")
     if state["email"]:
