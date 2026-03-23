@@ -217,6 +217,20 @@ def test_product_setup_tailscale_section_updates_tailnet_settings(tmp_path, monk
     }
 
 
+def test_product_setup_tailscale_section_reports_missing_cli_cleanly(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    answers = iter(["yes"])
+    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: next(answers))
+
+    def _missing(*args, **kwargs):
+        raise FileNotFoundError("tailscale")
+
+    monkeypatch.setattr("hermes_cli.product_setup.subprocess.run", _missing)
+
+    with pytest.raises(RuntimeError, match="Tailscale CLI not found"):
+        setup_product_tailscale()
+
+
 def test_start_product_stack_ensures_linux_product_app_service(monkeypatch):
     seen = []
     monkeypatch.setattr(

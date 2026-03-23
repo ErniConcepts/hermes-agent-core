@@ -260,6 +260,26 @@ def test_start_and_enable_docker_service_starts_socket_and_service(monkeypatch):
     ]
 
 
+def test_restart_docker_service_resets_failed_socket_state(monkeypatch):
+    from hermes_cli.product_install import _restart_docker_service
+
+    monkeypatch.setattr("hermes_cli.product_install._systemd_available", lambda: True)
+    calls = []
+    monkeypatch.setattr(
+        "hermes_cli.product_install._run",
+        lambda command, **kwargs: calls.append((command, kwargs)) or type("_Result", (), {"returncode": 0})(),
+    )
+
+    _restart_docker_service()
+
+    assert calls == [
+        (["systemctl", "stop", "docker", "docker.socket"], {"check": False, "sudo": True}),
+        (["systemctl", "reset-failed", "docker", "docker.socket"], {"check": False, "sudo": True}),
+        (["systemctl", "start", "docker.socket"], {"sudo": True}),
+        (["systemctl", "start", "docker"], {"sudo": True}),
+    ]
+
+
 def test_perform_product_cleanup_removes_product_files_and_env_keys(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     product_root = tmp_path / "product"

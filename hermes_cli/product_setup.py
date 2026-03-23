@@ -59,12 +59,23 @@ DEFAULT_PRODUCT_TOOLSETS = ["memory", "session_search"]
 
 
 def _detect_tailscale_identity(command_path: str) -> tuple[str, str]:
-    result = subprocess.run(
-        [command_path, "status", "--json"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [command_path, "status", "--json"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Tailscale CLI not found: {command_path}. Install Tailscale or disable Tailscale exposure."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        message = f"Failed to query Tailscale identity with '{command_path} status --json'"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
     payload = json.loads(result.stdout or "{}")
     dns_name = str(payload.get("Self", {}).get("DNSName", "")).strip().rstrip(".").lower()
     suffix = str(payload.get("MagicDNSSuffix", "")).strip().rstrip(".").lower()

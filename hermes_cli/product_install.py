@@ -301,8 +301,12 @@ def _write_docker_daemon_config(config: dict[str, Any]) -> None:
 
 
 def _restart_docker_service() -> None:
-    _run(["systemctl", "restart", "docker.socket"], sudo=True)
-    _run(["systemctl", "restart", "docker"], sudo=True)
+    if not _systemd_available():
+        return
+    _run(["systemctl", "stop", "docker", "docker.socket"], check=False, sudo=True)
+    _run(["systemctl", "reset-failed", "docker", "docker.socket"], check=False, sudo=True)
+    _run(["systemctl", "start", "docker.socket"], sudo=True)
+    _run(["systemctl", "start", "docker"], sudo=True)
 
 
 def _start_and_enable_docker_service() -> None:
