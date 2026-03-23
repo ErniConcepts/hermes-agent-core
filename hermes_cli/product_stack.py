@@ -351,12 +351,20 @@ def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, 
 def ensure_product_stack_started(config: Dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     product_config = config or initialize_product_stack()
     compose_path = get_pocket_id_compose_path()
-    result = subprocess.run(
-        ["docker", "compose", "-f", str(compose_path), "up", "-d", "--wait", "--force-recreate"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    command = ["docker", "compose", "-f", str(compose_path), "up", "-d", "--wait", "--force-recreate"]
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        message = f"Failed to start Pocket ID with docker compose ({compose_path})"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
     ensure_product_tailnet_started(product_config)
     return result
 

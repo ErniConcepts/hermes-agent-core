@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from subprocess import CompletedProcess
+from subprocess import CalledProcessError, CompletedProcess
 from unittest.mock import patch
 
 import yaml
@@ -176,6 +176,29 @@ def test_ensure_product_stack_started_uses_generated_compose_file(tmp_path, monk
     assert compose_command[:4] == ["docker", "compose", "-f", str(get_pocket_id_compose_path())]
     assert compose_command[-4:] == ["up", "-d", "--wait", "--force-recreate"]
     assert Path(compose_command[3]) == get_pocket_id_compose_path()
+
+
+def test_ensure_product_stack_started_wraps_compose_failure_cleanly(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    with (
+        patch("hermes_cli.product_stack.get_env_value", return_value="existing-secret"),
+        patch(
+            "hermes_cli.product_stack.subprocess.run",
+            side_effect=CalledProcessError(
+                1,
+                ["docker", "compose"],
+                stderr="bind: address already in use",
+            ),
+        ),
+    ):
+        try:
+            ensure_product_stack_started()
+        except RuntimeError as exc:
+            assert "Failed to start Pocket ID with docker compose" in str(exc)
+            assert "address already in use" in str(exc)
+        else:
+            raise AssertionError("expected docker compose failure to be wrapped")
 
 
 def test_ensure_product_stack_started_attempts_tailscale_serve_when_enabled(tmp_path, monkeypatch):
