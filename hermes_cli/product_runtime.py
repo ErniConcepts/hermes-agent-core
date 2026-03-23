@@ -30,7 +30,7 @@ _RUNTIME_WORKSPACE_PATH = "/workspace"
 
 def _secure_runtime_dir(path: Path) -> None:
     try:
-        path.chmod(0o755)
+        path.chmod(0o777)
     except (OSError, NotImplementedError):
         pass
 
