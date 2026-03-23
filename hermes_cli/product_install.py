@@ -24,7 +24,7 @@ from hermes_cli.product_stack import (
 from utils import atomic_json_write
 
 
-PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+DEFAULT_INSTALL_DIR_NAME = "hermes-core"
 DOCKER_DAEMON_CONFIG_PATH = Path("/etc/docker/daemon.json")
 RUNSC_RUNTIME_NAME = "runsc"
 RUNSC_RUNTIME_CONFIG = {
@@ -38,7 +38,6 @@ PRODUCT_SECRET_KEYS = [
 ]
 PRODUCT_APP_SERVICE_NAME = "hermes-core-product-app.service"
 PRODUCT_RUNTIME_IMAGE_TAG = "hermes-core-product-runtime:local"
-PRODUCT_RUNTIME_DOCKERFILE = PROJECT_ROOT / "Dockerfile.product"
 DOCKER_GROUP_RELOGIN_EXIT_CODE = 42
 APT_INSTALL_PACKAGES = [
     "docker.io",
@@ -85,6 +84,17 @@ def _run(
 
 def _product_app_service_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / PRODUCT_APP_SERVICE_NAME
+
+
+def product_install_root() -> Path:
+    configured = str(os.environ.get("HERMES_CORE_INSTALL_DIR", "")).strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (get_hermes_home() / DEFAULT_INSTALL_DIR_NAME).resolve()
+
+
+def product_runtime_dockerfile() -> Path:
+    return product_install_root() / "Dockerfile.product"
 
 
 def _linux_distro_id() -> str:
@@ -163,6 +173,7 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
     app_port = int(product_config.get("network", {}).get("app_port", 8086))
     _run_as_user, home_dir = _product_service_identity()
     hermes_home = str(get_hermes_home())
+    install_root = str(product_install_root())
     return "\n".join(
         [
             "[Unit]",
@@ -175,6 +186,7 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
             f"WorkingDirectory={home_dir}",
             f"Environment=HOME={home_dir}",
             f"Environment=HERMES_HOME={hermes_home}",
+            f"Environment=HERMES_CORE_INSTALL_DIR={install_root}",
             (
                 "ExecStart="
                 f"{sys.executable} -m uvicorn hermes_cli.product_app:create_product_app "
@@ -449,8 +461,10 @@ def _remove_runsc_registration_if_managed() -> bool:
 
 
 def build_product_runtime_image() -> None:
-    if not PRODUCT_RUNTIME_DOCKERFILE.exists():
-        raise RuntimeError(f"Product runtime Dockerfile not found: {PRODUCT_RUNTIME_DOCKERFILE}")
+    dockerfile_path = product_runtime_dockerfile()
+    project_root = product_install_root()
+    if not dockerfile_path.exists():
+        raise RuntimeError(f"Product runtime Dockerfile not found: {dockerfile_path}")
     try:
         _run(
             [
@@ -459,8 +473,8 @@ def build_product_runtime_image() -> None:
                 "-t",
                 PRODUCT_RUNTIME_IMAGE_TAG,
                 "-f",
-                str(PRODUCT_RUNTIME_DOCKERFILE),
-                str(PROJECT_ROOT),
+                str(dockerfile_path),
+                str(project_root),
             ],
             capture_output=False,
         )

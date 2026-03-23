@@ -1,4 +1,5 @@
 from argparse import Namespace
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -12,6 +13,8 @@ from hermes_cli.product_install import (
     RUNSC_RUNTIME_CONFIG,
     _render_product_app_service_unit,
     _linux_distro_id,
+    product_install_root,
+    product_runtime_dockerfile,
     _runsc_runtime_matches,
     build_product_runtime_image,
     ensure_linux_product_host_prereqs,
@@ -213,6 +216,7 @@ def test_run_product_install_repairs_runsc_registration_before_docker_health_che
 
 def test_render_product_app_service_unit_uses_non_root_identity(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_CORE_INSTALL_DIR", str(tmp_path / "checkout"))
     monkeypatch.setattr("hermes_cli.product_install._product_service_identity", lambda: ("alice", "/home/alice"))
 
     rendered = _render_product_app_service_unit({"network": {"app_port": 18086}})
@@ -221,6 +225,7 @@ def test_render_product_app_service_unit_uses_non_root_identity(tmp_path, monkey
     assert "WorkingDirectory=/home/alice" in rendered
     assert "Environment=HOME=/home/alice" in rendered
     assert f"Environment=HERMES_HOME={tmp_path}" in rendered
+    assert f"Environment=HERMES_CORE_INSTALL_DIR={tmp_path / 'checkout'}" in rendered
     assert "--port 18086" in rendered
     assert "WantedBy=default.target" in rendered
 
@@ -289,8 +294,12 @@ def test_restart_docker_service_resets_failed_socket_state(monkeypatch):
     ]
 
 
-def test_build_product_runtime_image_uses_local_checkout(monkeypatch):
+def test_build_product_runtime_image_uses_local_checkout(tmp_path, monkeypatch):
     calls = []
+    install_root = tmp_path / "hermes-core"
+    install_root.mkdir()
+    (install_root / "Dockerfile.product").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_CORE_INSTALL_DIR", str(install_root))
     monkeypatch.setattr(
         "hermes_cli.product_install._run",
         lambda command, **kwargs: calls.append((command, kwargs)) or type("_Result", (), {"returncode": 0})(),
@@ -306,12 +315,20 @@ def test_build_product_runtime_image_uses_local_checkout(monkeypatch):
                 "-t",
                 PRODUCT_RUNTIME_IMAGE_TAG,
                 "-f",
-                str(product_install.PRODUCT_RUNTIME_DOCKERFILE),
-                str(product_install.PROJECT_ROOT),
+                str(install_root / "Dockerfile.product"),
+                str(install_root),
             ],
             {"capture_output": False},
         )
     ]
+
+
+def test_product_install_root_defaults_under_hermes_home(tmp_path, monkeypatch):
+    monkeypatch.delenv("HERMES_CORE_INSTALL_DIR", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    assert product_install_root() == (tmp_path / "hermes-core").resolve()
+    assert product_runtime_dockerfile() == (tmp_path / "hermes-core" / "Dockerfile.product").resolve()
 
 
 def test_perform_product_cleanup_removes_product_files_and_env_keys(tmp_path, monkeypatch):

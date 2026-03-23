@@ -187,6 +187,7 @@ install_launcher() {
     mkdir -p "$USER_BIN_DIR"
     cat > "$USER_BIN_DIR/hermes-core" <<EOF
 #!/bin/bash
+export HERMES_CORE_INSTALL_DIR="$INSTALL_DIR"
 exec "$VENV_DIR/bin/hermes-core" "\$@"
 EOF
     chmod +x "$USER_BIN_DIR/hermes-core"
@@ -211,6 +212,7 @@ run_product_install() {
     if [[ "$RUN_SETUP" == false ]]; then
         install_cmd="$install_cmd --skip-setup"
     fi
+    export HERMES_CORE_INSTALL_DIR="$INSTALL_DIR"
 
     log_info "Running Hermes Core install..."
     log_info "This step may prompt for your sudo password."
