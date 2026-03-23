@@ -10,16 +10,15 @@ sudo apt install -y curl sudo ca-certificates
 
 2. Download the installer script
 
-curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/pivot/pocket-id-auth/scripts/install-product.sh -o install-product.sh
+curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/main/scripts/install-product.sh -o install-product.sh
 
 3. Run the installer script
 
-bash install-product.sh --branch pivot/pocket-id-auth
+bash install-product.sh
 
 4. Run setup
 
 ~/.local/bin/hermes-core setup
-~/.local/bin/hermes-core setup bootstrap
 
 Notes
 -----
@@ -28,3 +27,4 @@ Notes
 - Do not run the installer with sudo bash.
 - If ~/.local/bin is not on PATH yet, use the full path shown above.
 - The installer already runs the product install step.
+- The normal setup flow already includes bootstrap/start.

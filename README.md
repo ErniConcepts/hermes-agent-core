@@ -59,8 +59,8 @@ Current product assumptions:
 Run this as your normal user:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/pivot/pocket-id-auth/scripts/install-product.sh -o install-product.sh
-bash install-product.sh --branch pivot/pocket-id-auth
+curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/main/scripts/install-product.sh -o install-product.sh
+bash install-product.sh
 ```
 
 The installer is designed to:
@@ -93,7 +93,7 @@ Typical flow:
 2. enable or disable Tailscale exposure
 3. choose the model route
 4. choose the runtime toolsets
-5. bootstrap Pocket ID
+5. let setup start Pocket ID and the product app
 6. open the first-admin setup URL
 7. sign in to the product web app
 
@@ -108,6 +108,9 @@ hermes-core setup model
 hermes-core setup bootstrap
 hermes-core uninstall --yes
 ```
+
+The normal `hermes-core setup` flow already includes the bootstrap/start step at the end.
+`hermes-core setup bootstrap` remains available as a manual recovery command.
 
 ## Cleanup / Fresh Reinstall
 
