@@ -61,7 +61,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
     },
     "runtime": {
         "isolation_runtime": "runsc",
-        "image": "ghcr.io/erniconcepts/hermes-agent-core:main",
+        "image": "hermes-core-product-runtime:local",
         "internal_port": 8091,
         "host_port_start": 18091,
         "host_port_end": 18150,

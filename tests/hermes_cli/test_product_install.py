@@ -2,14 +2,17 @@ from argparse import Namespace
 import subprocess
 
 import pytest
+import hermes_cli.product_install as product_install
 
 from hermes_cli.product_install import (
     APT_INSTALL_PACKAGES,
     PRODUCT_APP_SERVICE_NAME,
+    PRODUCT_RUNTIME_IMAGE_TAG,
     RUNSC_RUNTIME_CONFIG,
     _render_product_app_service_unit,
     _linux_distro_id,
     _runsc_runtime_matches,
+    build_product_runtime_image,
     ensure_linux_product_host_prereqs,
     ensure_product_app_service_started,
     ensure_runsc_registered_with_docker,
@@ -130,6 +133,7 @@ def test_run_product_install_records_state_and_runs_setup(tmp_path, monkeypatch)
     monkeypatch.setattr("hermes_cli.product_install._docker_compose_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install._runsc_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install.ensure_runsc_registered_with_docker", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_install.build_product_runtime_image", lambda: None)
     monkeypatch.setattr("hermes_cli.product_install.validate_product_host_prereqs", lambda: None)
 
     invoked = {}
@@ -156,6 +160,7 @@ def test_run_product_install_skip_setup_does_not_start_product_app_service(tmp_p
     monkeypatch.setattr("hermes_cli.product_install._docker_compose_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install._runsc_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install.ensure_runsc_registered_with_docker", lambda: False)
+    monkeypatch.setattr("hermes_cli.product_install.build_product_runtime_image", lambda: None)
     seen = {}
     monkeypatch.setattr(
         "hermes_cli.product_install.ensure_product_app_service_started",
@@ -189,6 +194,7 @@ def test_run_product_install_repairs_runsc_registration_before_docker_health_che
     )
     monkeypatch.setattr("hermes_cli.product_install._runsc_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install._docker_compose_available", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_install.build_product_runtime_image", lambda: None)
     seen = []
     monkeypatch.setattr(
         "hermes_cli.product_install.ensure_runsc_registered_with_docker",
@@ -277,6 +283,31 @@ def test_restart_docker_service_resets_failed_socket_state(monkeypatch):
         (["systemctl", "reset-failed", "docker", "docker.socket"], {"check": False, "sudo": True}),
         (["systemctl", "start", "docker.socket"], {"sudo": True}),
         (["systemctl", "start", "docker"], {"sudo": True}),
+    ]
+
+
+def test_build_product_runtime_image_uses_local_checkout(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "hermes_cli.product_install._run",
+        lambda command, **kwargs: calls.append((command, kwargs)) or type("_Result", (), {"returncode": 0})(),
+    )
+
+    build_product_runtime_image()
+
+    assert calls == [
+        (
+            [
+                "docker",
+                "build",
+                "-t",
+                PRODUCT_RUNTIME_IMAGE_TAG,
+                "-f",
+                str(product_install.PRODUCT_RUNTIME_DOCKERFILE),
+                str(product_install.PROJECT_ROOT),
+            ],
+            {"capture_output": False},
+        )
     ]
 
 

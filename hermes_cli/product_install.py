@@ -24,6 +24,7 @@ from hermes_cli.product_stack import (
 from utils import atomic_json_write
 
 
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 DOCKER_DAEMON_CONFIG_PATH = Path("/etc/docker/daemon.json")
 RUNSC_RUNTIME_NAME = "runsc"
 RUNSC_RUNTIME_CONFIG = {
@@ -36,6 +37,8 @@ PRODUCT_SECRET_KEYS = [
     "HERMES_POCKET_ID_ENCRYPTION_KEY",
 ]
 PRODUCT_APP_SERVICE_NAME = "hermes-core-product-app.service"
+PRODUCT_RUNTIME_IMAGE_TAG = "hermes-core-product-runtime:local"
+PRODUCT_RUNTIME_DOCKERFILE = PROJECT_ROOT / "Dockerfile.product"
 APT_INSTALL_PACKAGES = [
     "docker.io",
     "docker-compose-v2",
@@ -444,6 +447,26 @@ def _remove_runsc_registration_if_managed() -> bool:
     return True
 
 
+def build_product_runtime_image() -> None:
+    if not PRODUCT_RUNTIME_DOCKERFILE.exists():
+        raise RuntimeError(f"Product runtime Dockerfile not found: {PRODUCT_RUNTIME_DOCKERFILE}")
+    try:
+        _run(
+            [
+                "docker",
+                "build",
+                "-t",
+                PRODUCT_RUNTIME_IMAGE_TAG,
+                "-f",
+                str(PRODUCT_RUNTIME_DOCKERFILE),
+                str(PROJECT_ROOT),
+            ],
+            capture_output=False,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError("Failed to build the local Hermes Core product runtime image") from exc
+
+
 def perform_product_cleanup() -> dict[str, bool]:
     removed_runsc_registration = False
     if _docker_available():
@@ -492,6 +515,7 @@ def run_product_install(args: Any) -> None:
     state = _product_install_state()
     state["managed_runsc_registration"] = bool(changed or state.get("managed_runsc_registration"))
     save_product_install_state(state)
+    build_product_runtime_image()
 
     if getattr(args, "skip_setup", False):
         return
