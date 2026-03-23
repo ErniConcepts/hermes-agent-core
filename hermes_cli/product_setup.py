@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -59,6 +60,14 @@ PRODUCT_SETUP_SECTIONS = [
 ]
 
 DEFAULT_PRODUCT_TOOLSETS = ["memory", "session_search"]
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _sanitize_prompt_text(value: str) -> str:
+    cleaned = _ANSI_ESCAPE_RE.sub("", value or "")
+    cleaned = _CONTROL_CHAR_RE.sub("", cleaned)
+    return cleaned.strip()
 
 
 def _ensure_tcp_port_available(host: str, port: int, label: str) -> None:
@@ -136,7 +145,9 @@ def setup_product_network() -> None:
     print_info("Raw IP addresses are not supported for the Pocket ID public host.")
 
     while True:
-        public_host = (prompt("Public host", current_public_host) or current_public_host).strip()
+        public_host = _sanitize_prompt_text(
+            prompt("Public host", current_public_host) or current_public_host
+        )
         try:
             _validate_public_host(public_host)
         except ValueError as exc:
@@ -165,7 +176,9 @@ def setup_product_tailscale() -> None:
     print_info("When enabled, the Tailnet app URL becomes the only supported browser origin.")
     print_info("Local browser requests redirect to the Tailnet URL instead of running a second auth origin.")
 
-    raw_enabled = (prompt("Enable Tailscale exposure (yes/no)", current_enabled) or current_enabled).strip().lower()
+    raw_enabled = _sanitize_prompt_text(
+        prompt("Enable Tailscale exposure (yes/no)", current_enabled) or current_enabled
+    ).lower()
     enabled = raw_enabled in {"y", "yes", "true", "1"}
     tailscale["enabled"] = enabled
     if not enabled:
@@ -179,14 +192,22 @@ def setup_product_tailscale() -> None:
     print_info(f"  Detected Tailnet name:   {tailnet_name}")
 
     while True:
-        chosen_tailnet = (prompt("Tailnet name", current_tailnet or tailnet_name) or current_tailnet or tailnet_name).strip().lower()
+        chosen_tailnet = _sanitize_prompt_text(
+            prompt("Tailnet name", current_tailnet or tailnet_name)
+            or current_tailnet
+            or tailnet_name
+        ).lower()
         if chosen_tailnet:
             tailscale["tailnet_name"] = chosen_tailnet
             break
         print_warning("Tailnet name must not be empty when Tailscale is enabled.")
 
     while True:
-        chosen_device = (prompt("Tailscale device name", current_device or device_name) or current_device or device_name).strip().lower()
+        chosen_device = _sanitize_prompt_text(
+            prompt("Tailscale device name", current_device or device_name)
+            or current_device
+            or device_name
+        ).lower()
         if chosen_device:
             tailscale["device_name"] = chosen_device
             break
@@ -194,8 +215,16 @@ def setup_product_tailscale() -> None:
 
     while True:
         try:
-            app_port = int((prompt("Tailnet HTTPS port for app", current_app_port) or current_app_port).strip())
-            auth_port = int((prompt("Tailnet HTTPS port for Pocket ID", current_auth_port) or current_auth_port).strip())
+            app_port = int(
+                _sanitize_prompt_text(
+                    prompt("Tailnet HTTPS port for app", current_app_port) or current_app_port
+                )
+            )
+            auth_port = int(
+                _sanitize_prompt_text(
+                    prompt("Tailnet HTTPS port for Pocket ID", current_auth_port) or current_auth_port
+                )
+            )
         except ValueError:
             print_warning("Tailscale HTTPS ports must be integers.")
             continue
@@ -228,7 +257,7 @@ def setup_product_identity() -> None:
     print_info("Leave this blank to use the bundled default Hermes Core identity.")
 
     while True:
-        raw_value = (prompt("SOUL.md template path", current_path) or current_path).strip()
+        raw_value = _sanitize_prompt_text(prompt("SOUL.md template path", current_path) or current_path)
         if not raw_value:
             product_config.setdefault("product", {}).setdefault("agent", {})["soul_template_path"] = ""
             save_product_config(product_config)
@@ -257,7 +286,7 @@ def setup_product_storage() -> None:
     print_info("Files are written directly into the live-mounted runtime workspace.")
 
     while True:
-        raw_value = (prompt("Per-user workspace limit (GB)", default_gb) or default_gb).strip()
+        raw_value = _sanitize_prompt_text(prompt("Per-user workspace limit (GB)", default_gb) or default_gb)
         try:
             limit_gb = float(raw_value)
         except ValueError:

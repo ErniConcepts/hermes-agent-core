@@ -169,6 +169,19 @@ def test_product_setup_network_section_updates_public_host(tmp_path, monkeypatch
     assert product_config["network"]["public_host"] == "officebox.local"
 
 
+def test_product_setup_network_section_strips_terminal_escape_sequences(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "hermes_cli.product_setup.prompt",
+        lambda *args, **kwargs: "\x1b[A\x1b[Alocalhost\x1b[B",
+    )
+
+    setup_product_network()
+
+    product_config = load_product_config()
+    assert product_config["network"]["public_host"] == "localhost"
+
+
 def test_product_setup_identity_section_updates_soul_template_path(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     template_path = tmp_path / "custom-soul.md"
@@ -231,6 +244,29 @@ def test_product_setup_tailscale_section_reports_missing_cli_cleanly(tmp_path, m
 
     with pytest.raises(RuntimeError, match="Tailscale CLI not found"):
         setup_product_tailscale()
+
+
+def test_product_setup_tailscale_section_strips_terminal_escape_sequences(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    answers = iter(["\x1b[Ayes", "\x1b[A", "corpnet", "\x1b[B", "hermes-box", "443", "4444"])
+    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: next(answers))
+    monkeypatch.setattr(
+        "hermes_cli.product_setup.subprocess.run",
+        lambda *args, **kwargs: type(
+            "_Result",
+            (),
+            {
+                "stdout": '{"Self":{"DNSName":"hermes-box.corpnet.ts.net."},"MagicDNSSuffix":"corpnet.ts.net"}',
+            },
+        )(),
+    )
+
+    setup_product_tailscale()
+
+    product_config = load_product_config()
+    assert product_config["network"]["tailscale"]["enabled"] is True
+    assert product_config["network"]["tailscale"]["tailnet_name"] == "corpnet"
+    assert product_config["network"]["tailscale"]["device_name"] == "hermes-box"
 
 
 def test_start_product_stack_ensures_linux_product_app_service(monkeypatch):

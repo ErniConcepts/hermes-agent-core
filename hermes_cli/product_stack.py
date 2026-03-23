@@ -88,6 +88,10 @@ def _validate_public_host(host: str) -> None:
     candidate = (host or "").strip()
     if not candidate:
         raise ValueError("product network.public_host must not be empty")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in candidate):
+        raise ValueError("product network.public_host must not contain control characters")
+    if any(ch.isspace() for ch in candidate):
+        raise ValueError("product network.public_host must not contain whitespace")
     try:
         ipaddress.ip_address(candidate)
     except ValueError:
