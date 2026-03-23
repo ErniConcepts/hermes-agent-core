@@ -7,6 +7,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 from contextlib import contextmanager
 from typing import Any
@@ -20,6 +21,7 @@ from hermes_cli.product_stack import (
     bootstrap_first_admin_enrollment,
     ensure_product_stack_started,
     initialize_product_stack,
+    load_first_admin_enrollment_state,
     resolve_product_urls,
 )
 from hermes_cli.product_install import ensure_product_app_service_started, validate_product_host_prereqs
@@ -383,6 +385,7 @@ def _print_product_setup_summary() -> None:
     product_config = load_product_config()
     hermes_home = get_hermes_home()
     urls = resolve_product_urls(product_config)
+    enrollment_state = load_first_admin_enrollment_state() or {}
     soul_template = (
         str(product_config.get("product", {}).get("agent", {}).get("soul_template_path", "")).strip()
         or "(bundled default)"
@@ -402,8 +405,25 @@ def _print_product_setup_summary() -> None:
         print_info(f"Local debug URL:        {urls['local_app_base_url']}")
     if urls.get("local_issuer_url"):
         print_info(f"Local auth debug URL:   {urls['local_issuer_url']}")
+    setup_url = str(enrollment_state.get("setup_url", "")).strip()
+    if setup_url:
+        print_info(f"First admin sign-up:    {setup_url}")
     print_info(f"SOUL template:  {soul_template}")
     print_info(f"Workspace cap:  {workspace_limit_mb / 1024:.1f} GB per user")
+
+
+def _clear_terminal_screen() -> None:
+    if sys.stdout.isatty():
+        print("\033[2J\033[H", end="")
+
+
+def _print_install_handoff() -> None:
+    _clear_terminal_screen()
+    print()
+    print_header("Hermes Core Install")
+    print_info("Host prerequisites are ready.")
+    print_info("Starting the product setup wizard...")
+    print()
 
 
 def _start_product_stack() -> None:
@@ -503,6 +523,9 @@ def run_product_setup_wizard(args: Any) -> None:
             return
         _print_product_setup_summary()
         return
+
+    if getattr(args, "from_install", False):
+        _print_install_handoff()
 
     print()
     print(

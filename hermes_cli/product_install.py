@@ -497,6 +497,7 @@ def run_product_install(args: Any) -> None:
         return
 
     validate_product_host_prereqs()
+    setattr(args, "from_install", True)
     run_product_setup_wizard(args)
 
 

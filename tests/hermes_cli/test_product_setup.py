@@ -1,3 +1,4 @@
+import json
 from argparse import Namespace
 from unittest.mock import patch
 
@@ -20,6 +21,7 @@ def _make_product_args(**overrides):
     return Namespace(
         non_interactive=overrides.get("non_interactive", False),
         section=overrides.get("section", None),
+        from_install=overrides.get("from_install", False),
     )
 
 
@@ -266,6 +268,51 @@ def test_product_setup_noninteractive_prints_guidance(tmp_path, capsys, monkeypa
 
     out = capsys.readouterr().out
     assert "hermes config set model.provider custom" in out
+
+
+def test_product_setup_summary_includes_first_admin_signup_url(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    from hermes_cli.product_config import save_product_config
+
+    product_config = load_product_config()
+    save_product_config(product_config)
+    state_path = tmp_path / "product" / "bootstrap" / "first_admin_enrollment.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps({"setup_url": "http://localhost:1411/setup"}),
+        encoding="utf-8",
+    )
+
+    from hermes_cli.product_setup import _print_product_setup_summary
+
+    _print_product_setup_summary()
+
+    out = capsys.readouterr().out
+    assert "First admin sign-up:" in out
+    assert "http://localhost:1411/setup" in out
+
+
+def test_product_setup_prints_install_handoff_when_started_from_install(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    with (
+        patch("hermes_cli.product_setup.is_interactive_stdin", return_value=True),
+        patch("hermes_cli.product_setup.setup_product_network"),
+        patch("hermes_cli.product_setup.setup_product_tailscale"),
+        patch("hermes_cli.product_setup.setup_product_identity"),
+        patch("hermes_cli.product_setup.setup_product_storage"),
+        patch("hermes_cli.product_setup._run_model_section"),
+        patch("hermes_cli.product_setup._run_tools_section"),
+        patch("hermes_cli.product_setup._run_bootstrap_section"),
+        patch("hermes_cli.product_setup._print_product_setup_summary"),
+        patch("hermes_cli.product_setup.print_success"),
+        patch("hermes_cli.product_setup._clear_terminal_screen"),
+    ):
+        run_product_setup_wizard(_make_product_args(from_install=True))
+
+    out = capsys.readouterr().out
+    assert "Host prerequisites are ready." in out
+    assert "Starting the product setup wizard..." in out
 
 
 def test_product_setup_bootstrap_section_validates_host_prereqs(tmp_path, monkeypatch):
