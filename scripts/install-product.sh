@@ -21,6 +21,7 @@ BRANCH="$DEFAULT_BRANCH"
 RUN_SETUP=true
 SOURCE_DIR_OVERRIDE="${HERMES_CORE_SOURCE_DIR:-}"
 SOURCE_URL_OVERRIDE="${HERMES_CORE_SOURCE_URL:-}"
+DOCKER_GROUP_RELOGIN_EXIT_CODE=42
 
 log_info() {
     echo -e "${CYAN}→${NC} $1"
@@ -206,7 +207,6 @@ docker_access_ready() {
 
 run_product_install() {
     local install_cmd="\"$VENV_DIR/bin/hermes-core\" install"
-    local install_output_file
     local status=0
     if [[ "$RUN_SETUP" == false ]]; then
         install_cmd="$install_cmd --skip-setup"
@@ -219,22 +219,18 @@ run_product_install() {
         log_info "Starting Hermes Core install in a docker group shell..."
         sg docker -c "$install_cmd"
     else
-        install_output_file="$(mktemp)"
         set +e
-        eval "$install_cmd" > >(tee "$install_output_file") 2>&1
+        eval "$install_cmd"
         status=$?
         set -e
         if [[ $status -eq 0 ]]; then
-            rm -f "$install_output_file"
             return
         fi
-        if command -v sg >/dev/null 2>&1 && grep -q "Added your user to the docker group" "$install_output_file"; then
+        if command -v sg >/dev/null 2>&1 && [[ $status -eq $DOCKER_GROUP_RELOGIN_EXIT_CODE ]]; then
             log_info "Retrying Hermes Core install in a docker group shell..."
-            rm -f "$install_output_file"
             sg docker -c "$install_cmd"
             return
         fi
-        rm -f "$install_output_file"
         return "$status"
     fi
 }

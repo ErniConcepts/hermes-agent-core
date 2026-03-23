@@ -39,6 +39,7 @@ PRODUCT_SECRET_KEYS = [
 PRODUCT_APP_SERVICE_NAME = "hermes-core-product-app.service"
 PRODUCT_RUNTIME_IMAGE_TAG = "hermes-core-product-runtime:local"
 PRODUCT_RUNTIME_DOCKERFILE = PROJECT_ROOT / "Dockerfile.product"
+DOCKER_GROUP_RELOGIN_EXIT_CODE = 42
 APT_INSTALL_PACKAGES = [
     "docker.io",
     "docker-compose-v2",
@@ -498,9 +499,10 @@ def run_product_install(args: Any) -> None:
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
     if prereq_state.get("added_docker_group_membership") and not _docker_available():
-        raise SystemExit(
+        print(
             "Added your user to the docker group. Run 'newgrp docker' or start a new login shell, then rerun 'hermes-core install'."
         )
+        raise SystemExit(DOCKER_GROUP_RELOGIN_EXIT_CODE)
     if not _runsc_available():
         raise SystemExit("runsc is not installed on this machine")
     if not _docker_compose_available():

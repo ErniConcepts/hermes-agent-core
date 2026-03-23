@@ -6,6 +6,7 @@ import hermes_cli.product_install as product_install
 
 from hermes_cli.product_install import (
     APT_INSTALL_PACKAGES,
+    DOCKER_GROUP_RELOGIN_EXIT_CODE,
     PRODUCT_APP_SERVICE_NAME,
     PRODUCT_RUNTIME_IMAGE_TAG,
     RUNSC_RUNTIME_CONFIG,
@@ -181,8 +182,10 @@ def test_run_product_install_prompts_for_newgrp_before_generic_docker_error(tmp_
     )
     monkeypatch.setattr("hermes_cli.product_install._docker_available", lambda: False)
 
-    with pytest.raises(SystemExit, match="newgrp docker"):
+    with pytest.raises(SystemExit) as excinfo:
         run_product_install(Namespace(skip_setup=True, non_interactive=True, section=None))
+
+    assert excinfo.value.code == DOCKER_GROUP_RELOGIN_EXIT_CODE
 
 
 def test_run_product_install_repairs_runsc_registration_before_docker_health_check(tmp_path, monkeypatch):
