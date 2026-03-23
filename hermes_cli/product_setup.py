@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 from contextlib import contextmanager
@@ -56,6 +57,29 @@ PRODUCT_SETUP_SECTIONS = [
 ]
 
 DEFAULT_PRODUCT_TOOLSETS = ["memory", "session_search"]
+
+
+def _ensure_tcp_port_available(host: str, port: int, label: str) -> None:
+    bind_host = (host or "").strip() or "0.0.0.0"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((bind_host, port))
+    except OSError as exc:
+        raise RuntimeError(
+            f"{label} port {port} on {bind_host} is already in use. "
+            f"Free that port or change product network settings before bootstrap."
+        ) from exc
+
+
+def _validate_product_ports_available() -> None:
+    product_config = load_product_config()
+    network = product_config.get("network", {})
+    bind_host = str(network.get("bind_host", "0.0.0.0")).strip() or "0.0.0.0"
+    app_port = int(network.get("app_port", 8086))
+    pocket_id_port = int(network.get("pocket_id_port", 1411))
+    _ensure_tcp_port_available(bind_host, pocket_id_port, "Pocket ID")
+    _ensure_tcp_port_available("127.0.0.1", app_port, "Product app")
 
 
 def _detect_tailscale_identity(command_path: str) -> tuple[str, str]:
@@ -437,10 +461,11 @@ def _run_tools_section() -> None:
 def _run_bootstrap_section() -> None:
     try:
         validate_product_host_prereqs()
+        _validate_product_ports_available()
+        initialize_product_stack()
+        _start_product_stack()
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
-    initialize_product_stack()
-    _start_product_stack()
 
 
 def run_product_setup_wizard(args: Any) -> None:

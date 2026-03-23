@@ -274,12 +274,14 @@ def test_product_setup_bootstrap_section_validates_host_prereqs(tmp_path, monkey
     with (
         patch("hermes_cli.product_setup.is_interactive_stdin", return_value=True),
         patch("hermes_cli.product_setup.validate_product_host_prereqs") as mock_validate,
+        patch("hermes_cli.product_setup._validate_product_ports_available") as mock_ports,
         patch("hermes_cli.product_setup.initialize_product_stack"),
         patch("hermes_cli.product_setup._start_product_stack"),
     ):
         run_product_setup_wizard(_make_product_args(section="bootstrap"))
 
     mock_validate.assert_called_once()
+    mock_ports.assert_called_once()
 
 
 def test_product_setup_bootstrap_section_exits_cleanly_on_prereq_error(tmp_path, monkeypatch):
@@ -293,6 +295,26 @@ def test_product_setup_bootstrap_section_exits_cleanly_on_prereq_error(tmp_path,
             with patch("hermes_cli.product_setup._start_product_stack") as mock_start:
                 with pytest.raises(SystemExit, match="Docker is not available"):
                     run_product_setup_wizard(_make_product_args(section="bootstrap"))
+
+    mock_init.assert_not_called()
+    mock_start.assert_not_called()
+
+
+def test_product_setup_bootstrap_section_exits_cleanly_on_port_conflict(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    with (
+        patch("hermes_cli.product_setup.is_interactive_stdin", return_value=True),
+        patch("hermes_cli.product_setup.validate_product_host_prereqs"),
+        patch(
+            "hermes_cli.product_setup._validate_product_ports_available",
+            side_effect=RuntimeError("Pocket ID port 1411 on 0.0.0.0 is already in use."),
+        ),
+        patch("hermes_cli.product_setup.initialize_product_stack") as mock_init,
+        patch("hermes_cli.product_setup._start_product_stack") as mock_start,
+    ):
+        with pytest.raises(SystemExit, match="Pocket ID port 1411"):
+            run_product_setup_wizard(_make_product_args(section="bootstrap"))
 
     mock_init.assert_not_called()
     mock_start.assert_not_called()
