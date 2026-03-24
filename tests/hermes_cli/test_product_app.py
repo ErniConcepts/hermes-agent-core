@@ -223,6 +223,10 @@ def test_product_app_callback_establishes_session(monkeypatch):
         "hermes_cli.product_app.mark_first_admin_bootstrap_completed",
         lambda: seen.append("marked"),
     )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.ensure_product_tailnet_started",
+        lambda config=None: None,
+    )
 
     client = TestClient(create_product_app())
     client.get("/api/auth/login", follow_redirects=False)
@@ -246,6 +250,65 @@ def test_product_app_callback_establishes_session(monkeypatch):
         "is_admin": True,
     }
     assert seen == ["marked", "marked"]
+
+
+def test_product_app_blocks_setup_on_proxy_after_bootstrap_completion(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {"network": {"pocket_id_port": 1411}})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_first_admin_enrollment_state",
+        lambda: {"first_admin_login_seen": True},
+    )
+
+    client = TestClient(create_product_app())
+    response = client.get("/__pocket_id_proxy/setup")
+
+    assert response.status_code == 404
+
+
+def test_product_app_proxies_pocket_id_paths_when_not_completed(monkeypatch):
+    class _AsyncUpstreamResponse:
+        def __init__(self):
+            self.content = b'{"ok":true}'
+            self.status_code = 200
+            self.headers = {"content-type": "application/json"}
+
+    class _AsyncClientStub:
+        def __init__(self, *args, **kwargs):
+            self.seen = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, method, url, headers=None, content=None):
+            assert method == "GET"
+            assert url == "http://127.0.0.1:1411/.well-known/openid-configuration"
+            return _AsyncUpstreamResponse()
+
+    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {"network": {"pocket_id_port": 1411}})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_first_admin_enrollment_state",
+        lambda: {"first_admin_login_seen": False},
+    )
+    monkeypatch.setattr("hermes_cli.product_app.httpx.AsyncClient", _AsyncClientStub)
+
+    client = TestClient(create_product_app())
+    response = client.get("/__pocket_id_proxy/.well-known/openid-configuration")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
 
 
 

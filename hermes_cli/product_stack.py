@@ -207,6 +207,13 @@ def ensure_product_tailnet_started(config: Dict[str, Any] | None = None) -> list
     pocket_id_port = int(network.get("pocket_id_port", 1411))
     app_https_port = _tailscale_https_port(product_config, "app_https_port", 443)
     auth_https_port = _tailscale_https_port(product_config, "auth_https_port", 4444)
+    enrollment_state = load_first_admin_enrollment_state() or {}
+    first_admin_login_seen = bool(enrollment_state.get("first_admin_login_seen", False))
+    auth_target_url = (
+        f"http://127.0.0.1:{app_port}/__pocket_id_proxy"
+        if first_admin_login_seen
+        else f"http://127.0.0.1:{pocket_id_port}"
+    )
 
     commands = [
         _tailscale_serve_command(
@@ -217,7 +224,7 @@ def ensure_product_tailnet_started(config: Dict[str, Any] | None = None) -> list
         _tailscale_serve_command(
             product_config,
             https_port=auth_https_port,
-            target_url=f"http://127.0.0.1:{pocket_id_port}",
+            target_url=auth_target_url,
         ),
     ]
     results: list[subprocess.CompletedProcess[str]] = []

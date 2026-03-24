@@ -233,6 +233,42 @@ def test_ensure_product_tailnet_started_noops_when_disabled(tmp_path, monkeypatc
     mock_run.assert_not_called()
 
 
+def test_ensure_product_stack_started_routes_tailnet_auth_through_proxy_after_bootstrap_completion(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    config = load_product_config()
+    config["network"]["tailscale"]["enabled"] = True
+    config["network"]["tailscale"]["tailnet_name"] = "corpnet"
+    config["network"]["tailscale"]["device_name"] = "hermes-box"
+    config["network"]["tailscale"]["app_https_port"] = 443
+    config["network"]["tailscale"]["auth_https_port"] = 4444
+
+    state_path = get_first_admin_enrollment_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps({"first_admin_login_seen": True}),
+        encoding="utf-8",
+    )
+
+    with (
+        patch("hermes_cli.product_stack.get_env_value", return_value="existing-secret"),
+        patch("hermes_cli.product_stack.subprocess.run") as mock_run,
+    ):
+        ensure_product_stack_started(config)
+
+    commands = [call.args[0] for call in mock_run.call_args_list]
+    assert commands[1] == ["tailscale", "serve", "--bg", "--https=443", "http://127.0.0.1:8086"]
+    assert commands[2] == [
+        "tailscale",
+        "serve",
+        "--bg",
+        "--https=4444",
+        "http://127.0.0.1:8086/__pocket_id_proxy",
+    ]
+
+
 class _Response:
     def __init__(self, status_code, json_data=None, text=""):
         self.status_code = status_code
