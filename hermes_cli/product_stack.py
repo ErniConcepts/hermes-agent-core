@@ -235,6 +235,14 @@ def _required_secret(env_key: str) -> str:
     return generated
 
 
+def _pocket_id_upstream_base_url(config: Dict[str, Any]) -> str:
+    services_cfg = config.get("services", {}).get("pocket_id", {})
+    upstream_port = int(services_cfg.get("upstream_port", 19141))
+    if upstream_port <= 0:
+        raise ValueError("services.pocket_id.upstream_port must be a positive integer")
+    return f"http://127.0.0.1:{upstream_port}"
+
+
 def _ensure_client_secret(config: Dict[str, Any]) -> str:
     env_key = str(config.get("auth", {}).get("client_secret_ref", "")).strip()
     if not env_key:
@@ -374,7 +382,7 @@ def ensure_product_stack_started(config: Dict[str, Any] | None = None) -> subpro
 
 
 def _wait_for_pocket_id_ready(config: Dict[str, Any], timeout_seconds: float = _READY_TIMEOUT_SECONDS) -> None:
-    health_url = resolve_product_urls(config)["issuer_url"] + "/.well-known/openid-configuration"
+    health_url = _pocket_id_upstream_base_url(config) + "/.well-known/openid-configuration"
     deadline = time.time() + timeout_seconds
     last_error: Exception | None = None
     while time.time() < deadline:
@@ -434,7 +442,7 @@ def bootstrap_product_oidc_client(config: Dict[str, Any] | None = None) -> Dict[
     urls = resolve_product_urls(product_config)
     client_payload = _oidc_client_payload(product_config)
     client_id = client_payload["id"]
-    base_url = urls["issuer_url"]
+    base_url = _pocket_id_upstream_base_url(product_config)
     headers = _api_headers(product_config)
 
     with httpx.Client(base_url=base_url, headers=headers, timeout=10.0) as client:
