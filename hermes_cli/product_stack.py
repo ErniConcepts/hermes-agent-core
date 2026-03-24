@@ -14,6 +14,7 @@ import httpx
 
 from hermes_cli.config import _secure_dir, _secure_file, get_env_value, save_env_value_secure
 from hermes_cli.product_oidc import (
+    ProductOIDCClientSettings,
     discover_product_oidc_provider_metadata,
     load_product_oidc_client_settings,
 )
@@ -475,7 +476,14 @@ def bootstrap_product_oidc_client(config: Dict[str, Any] | None = None) -> Dict[
         raise RuntimeError("Pocket ID did not return an OIDC client secret")
     save_env_value_secure(str(product_config["auth"]["client_secret_ref"]), client_secret)
     settings = load_product_oidc_client_settings(product_config)
-    metadata = discover_product_oidc_provider_metadata(settings)
+    upstream_settings = ProductOIDCClientSettings(
+        issuer_url=_pocket_id_upstream_base_url(product_config),
+        client_id=settings.client_id,
+        client_secret=settings.client_secret,
+        redirect_uri=settings.redirect_uri,
+        scopes=settings.scopes,
+    )
+    metadata = discover_product_oidc_provider_metadata(upstream_settings)
     return {
         "client_id": client_id,
         "issuer_url": settings.issuer_url,

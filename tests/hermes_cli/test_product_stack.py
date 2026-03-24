@@ -323,6 +323,10 @@ def test_bootstrap_product_oidc_client_creates_client_and_rotates_secret(tmp_pat
                 (),
                 {
                     "issuer_url": "https://officebox.local:1411",
+                    "client_id": "hermes-core",
+                    "client_secret": "new-client-secret",
+                    "redirect_uri": "https://officebox.local:8086/api/auth/oidc/callback",
+                    "scopes": ("openid", "profile", "email"),
                 },
             )(),
         ),
