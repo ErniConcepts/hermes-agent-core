@@ -1,6 +1,6 @@
-# Hermes Agent - Development Guide
+# Hermes Agent Core Fork - Development Guide
 
-Instructions for AI coding assistants and developers working on the hermes-agent codebase.
+Instructions for AI coding assistants and developers working on the `hermes-agent-core` fork.
 
 ## Development Environment
 
@@ -11,7 +11,7 @@ source venv/bin/activate  # ALWAYS activate before running Python
 ## Project Structure
 
 ```
-hermes-agent/
+hermes-agent-core/
 ├── run_agent.py          # AIAgent class — core conversation loop
 ├── model_tools.py        # Tool orchestration, _discover_tools(), handle_function_call()
 ├── toolsets.py           # Toolset definitions, _HERMES_CORE_TOOLS list
@@ -63,6 +63,8 @@ hermes-agent/
 ```
 
 **User config:** `~/.hermes/config.yaml` (settings), `~/.hermes/.env` (API keys)
+
+**Fork docs:** `docs/fork/DEVELOPMENT.md`, `docs/fork/SPEC.md`, `docs/fork/UPSTREAM-SYNC.md`
 
 ## File Dependency Chain
 
