@@ -41,7 +41,7 @@ class ProductSignupToken(BaseModel):
 
 
 class ProductCreatedUser(BaseModel):
-    user: ProductUser
+    user: ProductUser | None = None
     signup: ProductSignupToken
 
 
@@ -296,20 +296,52 @@ def create_product_signup_token(config: dict[str, Any] | None = None) -> Product
     )
 
 
+def list_active_product_signup_tokens(config: dict[str, Any] | None = None) -> set[str]:
+    client = _client(config)
+    started = time.perf_counter()
+    response = client.get("/api/signup-tokens")
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"GET /api/signup-tokens failed with {response.status_code}: {response.text}"
+        )
+    logger.info(
+        "product_users request GET /api/signup-tokens completed in %.0fms",
+        (time.perf_counter() - started) * 1000,
+    )
+    payload = response.json() if response.content else {}
+    rows: list[Any]
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, list):
+            rows = data
+        elif isinstance(payload.get("tokens"), list):
+            rows = payload.get("tokens", [])
+        else:
+            rows = []
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        rows = []
+    tokens: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        token = str(item.get("token", "")).strip()
+        if token:
+            tokens.add(token)
+    return tokens
+
+
 def create_product_user_with_signup(
-    username: str,
-    display_name: str,
+    username: str | None = None,
+    display_name: str | None = None,
     *,
     email: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> ProductCreatedUser:
-    user = ProductUser.model_validate(
-        create_product_user(
-            username,
-            display_name,
-            email=email,
-            config=config,
-        )
-    )
+    if username is not None:
+        _validate_username(username)
+    if email is not None:
+        _validate_optional_email(email)
     signup = ProductSignupToken.model_validate(create_product_signup_token(config=config))
-    return ProductCreatedUser(user=user, signup=signup)
+    return ProductCreatedUser(user=None, signup=signup)

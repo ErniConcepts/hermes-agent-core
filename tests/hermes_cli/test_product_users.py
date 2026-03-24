@@ -4,6 +4,7 @@ from hermes_cli.product_users import (
     create_product_user,
     deactivate_product_user,
     get_product_user_by_id,
+    list_active_product_signup_tokens,
     list_product_users,
 )
 
@@ -221,18 +222,6 @@ def test_create_product_signup_token_returns_full_url(monkeypatch):
 
 def test_create_product_user_with_signup_combines_results(monkeypatch):
     monkeypatch.setattr(
-        "hermes_cli.product_users.create_product_user",
-        lambda username, display_name, email=None, config=None: {
-                "id": "user-1",
-                "username": username,
-                "display_name": display_name,
-                "email": email,
-                "email_is_placeholder": False,
-                "is_admin": False,
-                "disabled": False,
-            },
-    )
-    monkeypatch.setattr(
         "hermes_cli.product_users.create_product_signup_token",
         lambda config=None: {
                 "token": "signup-123",
@@ -244,5 +233,14 @@ def test_create_product_user_with_signup_combines_results(monkeypatch):
 
     created = create_product_user_with_signup("maria", "Maria Example", email="maria@example.com")
 
-    assert created.user.username == "maria"
+    assert created.user is None
     assert created.signup.signup_url.endswith("/st/signup-123")
+
+
+def test_list_active_product_signup_tokens_reads_data_rows(monkeypatch):
+    client = DummyClient({("GET", "/api/signup-tokens"): (200, {"data": [{"token": "signup-1"}, {"token": "signup-2"}]})})
+    monkeypatch.setattr("hermes_cli.product_users._client", lambda config=None: client)
+
+    tokens = list_active_product_signup_tokens()
+
+    assert tokens == {"signup-1", "signup-2"}

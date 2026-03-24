@@ -16,6 +16,10 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
 from hermes_cli.product_config import load_product_config
+from hermes_cli.product_invites import (
+    list_pending_product_signup_invites,
+    register_product_signup_invite,
+)
 from hermes_cli.product_oidc import (
     create_oidc_login_request,
     discover_product_oidc_provider_metadata,
@@ -64,12 +68,23 @@ class ProductSessionResponse(BaseModel):
 
 
 class ProductAdminUsersResponse(BaseModel):
-    users: list[ProductUser]
+    users: list["ProductAdminEntry"]
+
+
+class ProductAdminEntry(BaseModel):
+    id: str
+    type: str = "user"
+    username: str | None = None
+    display_name: str
+    email: str | None = None
+    is_admin: bool = False
+    disabled: bool = False
+    status: str
 
 
 class ProductCreateUserRequest(BaseModel):
-    username: str
-    display_name: str
+    username: str | None = None
+    display_name: str | None = None
     email: str | None = None
 
 
@@ -499,8 +514,38 @@ def create_product_app() -> FastAPI:
     @app.get("/api/admin/users", response_model=ProductAdminUsersResponse)
     def admin_list_users(request: Request) -> ProductAdminUsersResponse:
         started = time.perf_counter()
-        _require_admin_user(request)
-        response = ProductAdminUsersResponse(users=list_product_users())
+        admin_user = _require_admin_user(request)
+        users = list_product_users()
+        pending_invites = list_pending_product_signup_invites()
+        current_user_id = str(admin_user.get("sub") or "")
+        rows: list[ProductAdminEntry] = []
+        for user in users:
+            rows.append(
+                ProductAdminEntry(
+                    id=user.id,
+                    type="user",
+                    username=user.username,
+                    display_name=user.display_name,
+                    email=user.email,
+                    is_admin=user.is_admin,
+                    disabled=user.disabled,
+                    status="Disabled" if user.disabled else ("You" if user.id == current_user_id else "Active"),
+                )
+            )
+        for invite in pending_invites:
+            rows.append(
+                ProductAdminEntry(
+                    id=invite.invite_id,
+                    type="invite",
+                    username=None,
+                    display_name="User",
+                    email=None,
+                    is_admin=False,
+                    disabled=False,
+                    status="No signup",
+                )
+            )
+        response = ProductAdminUsersResponse(users=rows)
         logger.info(
             "product_app /api/admin/users completed in %.0fms",
             (time.perf_counter() - started) * 1000,
@@ -508,15 +553,20 @@ def create_product_app() -> FastAPI:
         return response
 
     @app.post("/api/admin/users", response_model=ProductCreatedUser)
-    def admin_create_user(request: Request, payload: ProductCreateUserRequest) -> ProductCreatedUser:
+    def admin_create_user(request: Request, payload: ProductCreateUserRequest | None = None) -> ProductCreatedUser:
         _require_admin_user(request)
         _require_csrf(request)
+        normalized_payload = payload or ProductCreateUserRequest()
         try:
-            return create_product_user_with_signup(
-                payload.username,
-                payload.display_name,
-                email=payload.email,
+            created = ProductCreatedUser.model_validate(
+                create_product_user_with_signup(
+                    normalized_payload.username,
+                    normalized_payload.display_name,
+                    email=normalized_payload.email,
+                )
             )
+            register_product_signup_invite(created.signup)
+            return created
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:

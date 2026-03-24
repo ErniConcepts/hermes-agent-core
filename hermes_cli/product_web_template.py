@@ -126,25 +126,12 @@ PAGE_TEMPLATE = """<!doctype html>
 <h2>User Management</h2>
 </div>
 </div>
-<p class="lead small">Create regular users, issue a Pocket ID signup link, and deactivate accounts without exposing broader setup controls in the browser.</p>
+<p class="lead small">Issue Pocket ID signup links and deactivate accounts without exposing broader setup controls in the browser.</p>
 <div class="admin-layout">
 <form class="admin-form shell" id="adminCreateUserForm">
-<div class="admin-grid">
-<label class="field">
-<span>Username</span>
-<input id="adminUsername" type="text" placeholder="maria" required>
-</label>
-<label class="field">
-<span>Display name</span>
-<input id="adminDisplayName" type="text" placeholder="Maria Example" required>
-</label>
-<label class="field admin-email-field">
-<span>Email <em>(optional)</em></span>
-<input id="adminEmail" type="email" placeholder="maria@example.com">
-</label>
-</div>
+<p class="lead small">Each generated link can be used once and expires after seven days.</p>
 <div class="actions">
-<button class="button" id="adminCreateUserButton" type="submit">Create user</button>
+<button class="button" id="adminCreateUserButton" type="submit">Create signup link</button>
 </div>
 <div id="adminMessage" class="message"></div>
 </form>

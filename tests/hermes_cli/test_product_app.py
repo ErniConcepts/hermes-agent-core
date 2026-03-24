@@ -779,7 +779,7 @@ def test_product_app_index_shows_session_details_when_signed_in(monkeypatch):
     assert "Hermes Core" in response.text
     assert "Shared Files" in response.text
     assert 'id="sessionCard"' not in response.text
-    assert "Create signup link" not in response.text
+    assert "Create signup link" in response.text
 
 
 def _login_admin(client):
@@ -858,15 +858,35 @@ def test_product_app_admin_users_returns_users(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.product_app.list_product_users",
         lambda: [
-            {
-                "id": "user-2",
-                "username": "maria",
-                "display_name": "Maria Example",
-                "email": None,
-                "email_is_placeholder": True,
-                "is_admin": False,
-                "disabled": False,
-            }
+            type(
+                "U",
+                (),
+                {
+                    "id": "user-2",
+                    "username": "maria",
+                    "display_name": "Maria Example",
+                    "email": None,
+                    "is_admin": False,
+                    "disabled": False,
+                },
+            )()
+        ],
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.list_pending_product_signup_invites",
+        lambda: [
+            type(
+                "I",
+                (),
+                {
+                    "invite_id": "invite-signup-1",
+                    "token": "signup-1",
+                    "signup_url": "http://officebox.local:1411/st/signup-1",
+                    "status": "pending",
+                    "created_at": 1,
+                    "expires_at": 2,
+                },
+            )()
         ],
     )
 
@@ -876,7 +896,10 @@ def test_product_app_admin_users_returns_users(monkeypatch):
     response = client.get("/api/admin/users")
 
     assert response.status_code == 200
+    assert response.json()["users"][0]["type"] == "user"
     assert response.json()["users"][0]["username"] == "maria"
+    assert response.json()["users"][1]["type"] == "invite"
+    assert response.json()["users"][1]["status"] == "No signup"
 
 
 def test_product_app_admin_create_user(monkeypatch):
@@ -884,15 +907,7 @@ def test_product_app_admin_create_user(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.product_app.create_product_user_with_signup",
         lambda username, display_name, email=None: {
-            "user": {
-                "id": "user-2",
-                "username": username,
-                "display_name": display_name,
-                "email": email,
-                "email_is_placeholder": False,
-                "is_admin": False,
-                "disabled": False,
-            },
+            "user": None,
             "signup": {
                 "token": "signup-123",
                 "signup_url": "http://officebox.local:1411/st/signup-123",
@@ -901,19 +916,25 @@ def test_product_app_admin_create_user(monkeypatch):
             },
         },
     )
+    seen = []
+    monkeypatch.setattr(
+        "hermes_cli.product_app.register_product_signup_invite",
+        lambda signup: seen.append(signup["token"] if isinstance(signup, dict) else signup.token),
+    )
 
     client = TestClient(create_product_app())
     _login_admin(client)
 
     response = client.post(
         "/api/admin/users",
-        json={"username": "maria", "display_name": "Maria Example", "email": None},
+        json={},
         headers=_csrf_headers(client),
     )
 
     assert response.status_code == 200
-    assert response.json()["user"]["display_name"] == "Maria Example"
+    assert response.json()["user"] is None
     assert response.json()["signup"]["signup_url"].endswith("/st/signup-123")
+    assert seen == ["signup-123"]
 
 
 def test_product_app_admin_deactivate_user_deletes_runtime(monkeypatch):
