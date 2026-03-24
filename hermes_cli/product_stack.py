@@ -204,16 +204,9 @@ def ensure_product_tailnet_started(config: Dict[str, Any] | None = None) -> list
 
     network = product_config.get("network", {})
     app_port = int(network.get("app_port", 8086))
-    pocket_id_port = int(network.get("pocket_id_port", 1411))
     app_https_port = _tailscale_https_port(product_config, "app_https_port", 443)
     auth_https_port = _tailscale_https_port(product_config, "auth_https_port", 4444)
-    enrollment_state = load_first_admin_enrollment_state() or {}
-    first_admin_login_seen = bool(enrollment_state.get("first_admin_login_seen", False))
-    auth_target_url = (
-        f"http://127.0.0.1:{app_port}/__pocket_id_proxy"
-        if first_admin_login_seen
-        else f"http://127.0.0.1:{pocket_id_port}"
-    )
+    auth_target_url = f"http://127.0.0.1:{int(network.get('pocket_id_port', 1411))}"
 
     commands = [
         _tailscale_serve_command(
@@ -295,9 +288,9 @@ def _build_compose_spec(config: Dict[str, Any]) -> Dict[str, Any]:
     bind_host = str(network.get("bind_host", "")).strip()
     if not bind_host:
         raise ValueError("product network.bind_host must be configured")
-    pocket_id_port = network.get("pocket_id_port")
-    if pocket_id_port is None:
-        raise ValueError("product network.pocket_id_port must be configured")
+    upstream_port = int(services_cfg.get("upstream_port", 19141))
+    if upstream_port <= 0:
+        raise ValueError("services.pocket_id.upstream_port must be a positive integer")
     container_name = str(services_cfg.get("container_name", "")).strip()
     if not container_name:
         raise ValueError("services.pocket_id.container_name must be configured")
@@ -310,7 +303,7 @@ def _build_compose_spec(config: Dict[str, Any]) -> Dict[str, Any]:
         "container_name": container_name,
         "restart": "unless-stopped",
         "env_file": [get_pocket_id_env_path().as_posix()],
-        "ports": [f"{bind_host}:{pocket_id_port}:1411"],
+        "ports": [f"127.0.0.1:{upstream_port}:1411"],
         "volumes": [f"{data_root}:/app/data"],
         "healthcheck": {
             "test": ["CMD", "/app/pocket-id", "healthcheck"],

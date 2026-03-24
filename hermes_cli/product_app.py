@@ -26,7 +26,6 @@ from hermes_cli.product_oidc import (
 )
 from hermes_cli.product_runtime import delete_product_runtime, get_product_runtime_session, stream_product_runtime_turn
 from hermes_cli.product_stack import (
-    ensure_product_tailnet_started,
     load_first_admin_enrollment_state,
     mark_first_admin_bootstrap_completed,
     resolve_product_urls,
@@ -202,20 +201,13 @@ def _require_admin_user(request: Request) -> dict[str, Any]:
 
 def _mark_bootstrap_completed_if_admin(user: dict[str, Any]) -> None:
     if bool(user.get("is_admin")):
-        state_before = load_first_admin_enrollment_state() or {}
-        was_completed = bool(state_before.get("first_admin_login_seen", False))
-        state_after = mark_first_admin_bootstrap_completed()
-        if state_after and not was_completed:
-            try:
-                ensure_product_tailnet_started(load_product_config())
-            except Exception:
-                logger.exception("failed to refresh tailscale auth serve target after bootstrap completion")
+        mark_first_admin_bootstrap_completed()
 
 
 def _pocket_id_proxy_base_url(config: dict[str, Any]) -> str:
-    network = config.get("network", {})
-    pocket_id_port = int(network.get("pocket_id_port", 1411))
-    return f"http://127.0.0.1:{pocket_id_port}"
+    services = config.get("services", {}).get("pocket_id", {})
+    upstream_port = int(services.get("upstream_port", 19141))
+    return f"http://127.0.0.1:{upstream_port}"
 
 
 def _is_setup_path(path: str) -> bool:
@@ -242,6 +234,31 @@ def _filter_proxy_response_headers(headers: dict[str, str]) -> dict[str, str]:
             continue
         filtered[key] = value
     return filtered
+
+
+async def _proxy_pocket_id_request(request: Request, pocket_path: str) -> Response:
+    enrollment_state = load_first_admin_enrollment_state() or {}
+    if bool(enrollment_state.get("first_admin_login_seen", False)) and _is_setup_path(pocket_path):
+        raise HTTPException(status_code=404, detail="Not found")
+    base_url = _pocket_id_proxy_base_url(load_product_config()).rstrip("/")
+    upstream_url = f"{base_url}/{pocket_path.lstrip('/')}"
+    if request.url.query:
+        upstream_url = f"{upstream_url}?{request.url.query}"
+    body = await request.body()
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+        upstream = await client.request(
+            request.method,
+            upstream_url,
+            headers=headers,
+            content=body,
+        )
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=_filter_proxy_response_headers(dict(upstream.headers)),
+    )
 
 
 def _canonical_request_redirect(request: Request, urls: dict[str, str]) -> str | None:
@@ -307,28 +324,7 @@ def create_product_app() -> FastAPI:
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     )
     async def pocket_id_proxy(request: Request, pocket_path: str) -> Response:
-        enrollment_state = load_first_admin_enrollment_state() or {}
-        if bool(enrollment_state.get("first_admin_login_seen", False)) and _is_setup_path(pocket_path):
-            raise HTTPException(status_code=404, detail="Not found")
-        base_url = _pocket_id_proxy_base_url(load_product_config()).rstrip("/")
-        upstream_url = f"{base_url}/{pocket_path.lstrip('/')}"
-        if request.url.query:
-            upstream_url = f"{upstream_url}?{request.url.query}"
-        body = await request.body()
-        headers = dict(request.headers)
-        headers.pop("host", None)
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
-            upstream = await client.request(
-                request.method,
-                upstream_url,
-                headers=headers,
-                content=body,
-            )
-        return Response(
-            content=upstream.content,
-            status_code=upstream.status_code,
-            headers=_filter_proxy_response_headers(dict(upstream.headers)),
-        )
+        return await _proxy_pocket_id_request(request, pocket_path)
 
     @app.get("/api/auth/login")
     def auth_login(request: Request) -> RedirectResponse:
@@ -541,5 +537,22 @@ def create_product_app() -> FastAPI:
         normalized = ProductUser.model_validate(updated)
         delete_product_runtime(normalized.username)
         return normalized
+
+    return app
+
+
+def create_product_auth_proxy_app() -> FastAPI:
+    app = FastAPI(title="Hermes Core Product Auth Proxy", version="0.1.0")
+
+    @app.get("/healthz")
+    def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.api_route(
+        "/{pocket_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def pocket_id_proxy_root(request: Request, pocket_path: str) -> Response:
+        return await _proxy_pocket_id_request(request, pocket_path)
 
     return app

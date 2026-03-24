@@ -118,7 +118,7 @@ def test_initialize_product_stack_generates_files_and_bootstraps_product_yaml(tm
     compose = yaml.safe_load(get_pocket_id_compose_path().read_text(encoding="utf-8"))
     service = compose["services"]["pocket-id"]
     assert service["image"] == POCKET_ID_IMAGE
-    assert "0.0.0.0:19411:1411" in service["ports"]
+    assert "127.0.0.1:19141:1411" in service["ports"]
     assert f"{get_pocket_id_data_root().as_posix()}:/app/data" in service["volumes"]
     assert "user" not in service
     assert "security_opt" not in service
@@ -233,7 +233,7 @@ def test_ensure_product_tailnet_started_noops_when_disabled(tmp_path, monkeypatc
     mock_run.assert_not_called()
 
 
-def test_ensure_product_stack_started_routes_tailnet_auth_through_proxy_after_bootstrap_completion(
+def test_ensure_product_stack_started_routes_tailnet_auth_through_proxy(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -244,13 +244,6 @@ def test_ensure_product_stack_started_routes_tailnet_auth_through_proxy_after_bo
     config["network"]["tailscale"]["device_name"] = "hermes-box"
     config["network"]["tailscale"]["app_https_port"] = 443
     config["network"]["tailscale"]["auth_https_port"] = 4444
-
-    state_path = get_first_admin_enrollment_state_path()
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(
-        json.dumps({"first_admin_login_seen": True}),
-        encoding="utf-8",
-    )
 
     with (
         patch("hermes_cli.product_stack.get_env_value", return_value="existing-secret"),
@@ -265,7 +258,7 @@ def test_ensure_product_stack_started_routes_tailnet_auth_through_proxy_after_bo
         "serve",
         "--bg",
         "--https=4444",
-        "http://127.0.0.1:8086/__pocket_id_proxy",
+        "http://127.0.0.1:1411",
     ]
 
 

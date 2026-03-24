@@ -37,6 +37,7 @@ PRODUCT_SECRET_KEYS = [
     "HERMES_POCKET_ID_ENCRYPTION_KEY",
 ]
 PRODUCT_APP_SERVICE_NAME = "hermes-core-product-app.service"
+PRODUCT_AUTH_PROXY_SERVICE_NAME = "hermes-core-product-auth-proxy.service"
 PRODUCT_RUNTIME_IMAGE_TAG = "hermes-core-product-runtime:local"
 DOCKER_GROUP_RELOGIN_EXIT_CODE = 42
 APT_INSTALL_PACKAGES = [
@@ -84,6 +85,10 @@ def _run(
 
 def _product_app_service_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / PRODUCT_APP_SERVICE_NAME
+
+
+def _product_auth_proxy_service_path() -> Path:
+    return Path.home() / ".config" / "systemd" / "user" / PRODUCT_AUTH_PROXY_SERVICE_NAME
 
 
 def product_install_root() -> Path:
@@ -202,10 +207,51 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
     )
 
 
+def _render_product_auth_proxy_service_unit(config: dict[str, Any] | None = None) -> str:
+    product_config = config or load_product_config()
+    auth_port = int(product_config.get("network", {}).get("pocket_id_port", 1411))
+    _run_as_user, home_dir = _product_service_identity()
+    hermes_home = str(get_hermes_home())
+    install_root = str(product_install_root())
+    return "\n".join(
+        [
+            "[Unit]",
+            "Description=Hermes Core Product Auth Proxy",
+            "After=network-online.target docker.service",
+            "Wants=network-online.target",
+            "",
+            "[Service]",
+            "Type=simple",
+            f"WorkingDirectory={home_dir}",
+            f"Environment=HOME={home_dir}",
+            f"Environment=HERMES_HOME={hermes_home}",
+            f"Environment=HERMES_CORE_INSTALL_DIR={install_root}",
+            (
+                "ExecStart="
+                f"{sys.executable} -m uvicorn hermes_cli.product_app:create_product_auth_proxy_app "
+                f"--factory --host 127.0.0.1 --port {auth_port}"
+            ),
+            "Restart=always",
+            "RestartSec=3",
+            "",
+            "[Install]",
+            "WantedBy=default.target",
+            "",
+        ]
+    )
+
+
 def _write_product_app_service_unit(config: dict[str, Any] | None = None) -> None:
     service_path = _product_app_service_path()
     service_path.parent.mkdir(parents=True, exist_ok=True)
     rendered = _render_product_app_service_unit(config)
+    service_path.write_text(rendered, encoding="utf-8")
+
+
+def _write_product_auth_proxy_service_unit(config: dict[str, Any] | None = None) -> None:
+    service_path = _product_auth_proxy_service_path()
+    service_path.parent.mkdir(parents=True, exist_ok=True)
+    rendered = _render_product_auth_proxy_service_unit(config)
     service_path.write_text(rendered, encoding="utf-8")
 
 
@@ -215,11 +261,13 @@ def ensure_product_app_service_started(config: dict[str, Any] | None = None) -> 
     if not _systemd_available():
         raise RuntimeError("systemd is required to manage the Hermes Core product app service")
     _write_product_app_service_unit(config)
+    _write_product_auth_proxy_service_unit(config)
     _run(["systemctl", "--user", "daemon-reload"])
-    _run(["systemctl", "--user", "enable", PRODUCT_APP_SERVICE_NAME])
-    active = _run(["systemctl", "--user", "is-active", PRODUCT_APP_SERVICE_NAME], check=False)
-    action = "restart" if active.returncode == 0 else "start"
-    _run(["systemctl", "--user", action, PRODUCT_APP_SERVICE_NAME])
+    for service_name in (PRODUCT_APP_SERVICE_NAME, PRODUCT_AUTH_PROXY_SERVICE_NAME):
+        _run(["systemctl", "--user", "enable", service_name])
+        active = _run(["systemctl", "--user", "is-active", service_name], check=False)
+        action = "restart" if active.returncode == 0 else "start"
+        _run(["systemctl", "--user", action, service_name])
 
 
 def get_product_install_state_path() -> Path:
@@ -489,9 +537,13 @@ def perform_product_cleanup() -> dict[str, bool]:
         _remove_runtime_containers()
     if _is_linux() and _systemd_available():
         _run(["systemctl", "--user", "disable", "--now", PRODUCT_APP_SERVICE_NAME], check=False)
+        _run(["systemctl", "--user", "disable", "--now", PRODUCT_AUTH_PROXY_SERVICE_NAME], check=False)
         service_path = _product_app_service_path()
         if service_path.exists():
             service_path.unlink(missing_ok=True)
+        auth_proxy_path = _product_auth_proxy_service_path()
+        if auth_proxy_path.exists():
+            auth_proxy_path.unlink(missing_ok=True)
         _run(["systemctl", "--user", "daemon-reload"], check=False)
     removed_runsc_registration = _remove_runsc_registration_if_managed()
     shutil.rmtree(get_product_services_root(), ignore_errors=True)

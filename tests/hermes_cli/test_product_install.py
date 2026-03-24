@@ -7,10 +7,12 @@ import hermes_cli.product_install as product_install
 
 from hermes_cli.product_install import (
     APT_INSTALL_PACKAGES,
+    PRODUCT_AUTH_PROXY_SERVICE_NAME,
     DOCKER_GROUP_RELOGIN_EXIT_CODE,
     PRODUCT_APP_SERVICE_NAME,
     PRODUCT_RUNTIME_IMAGE_TAG,
     RUNSC_RUNTIME_CONFIG,
+    _render_product_auth_proxy_service_unit,
     _render_product_app_service_unit,
     _linux_distro_id,
     product_install_root,
@@ -236,7 +238,7 @@ def test_ensure_product_app_service_started_installs_and_restarts(tmp_path, monk
     monkeypatch.setattr("hermes_cli.product_install._product_service_identity", lambda: ("alice", "/home/alice"))
     monkeypatch.setattr("hermes_cli.product_install.Path.home", lambda: tmp_path)
     calls = []
-    responses = iter([1])
+    responses = iter([1, 1])
 
     def _fake_run(command, **kwargs):
         calls.append((command, kwargs))
@@ -248,12 +250,31 @@ def test_ensure_product_app_service_started_installs_and_restarts(tmp_path, monk
 
     ensure_product_app_service_started({"network": {"app_port": 8086}})
 
-    service_path = tmp_path / ".config" / "systemd" / "user" / PRODUCT_APP_SERVICE_NAME
-    assert service_path.exists()
+    service_dir = tmp_path / ".config" / "systemd" / "user"
+    assert (service_dir / PRODUCT_APP_SERVICE_NAME).exists()
+    assert (service_dir / PRODUCT_AUTH_PROXY_SERVICE_NAME).exists()
     assert calls[0][0] == ["systemctl", "--user", "daemon-reload"]
     assert calls[1][0] == ["systemctl", "--user", "enable", PRODUCT_APP_SERVICE_NAME]
     assert calls[2][0] == ["systemctl", "--user", "is-active", PRODUCT_APP_SERVICE_NAME]
     assert calls[3][0] == ["systemctl", "--user", "start", PRODUCT_APP_SERVICE_NAME]
+    assert calls[4][0] == ["systemctl", "--user", "enable", PRODUCT_AUTH_PROXY_SERVICE_NAME]
+    assert calls[5][0] == ["systemctl", "--user", "is-active", PRODUCT_AUTH_PROXY_SERVICE_NAME]
+    assert calls[6][0] == ["systemctl", "--user", "start", PRODUCT_AUTH_PROXY_SERVICE_NAME]
+
+
+def test_render_product_auth_proxy_service_unit_uses_non_root_identity(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_CORE_INSTALL_DIR", str(tmp_path / "checkout"))
+    monkeypatch.setattr("hermes_cli.product_install._product_service_identity", lambda: ("alice", "/home/alice"))
+
+    rendered = _render_product_auth_proxy_service_unit({"network": {"pocket_id_port": 1411}})
+
+    assert "WorkingDirectory=/home/alice" in rendered
+    assert "Environment=HOME=/home/alice" in rendered
+    assert f"Environment=HERMES_HOME={tmp_path}" in rendered
+    assert f"Environment=HERMES_CORE_INSTALL_DIR={tmp_path / 'checkout'}" in rendered
+    assert "create_product_auth_proxy_app" in rendered
+    assert "--port 1411" in rendered
 
 
 def test_start_and_enable_docker_service_starts_socket_and_service(monkeypatch):

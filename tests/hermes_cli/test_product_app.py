@@ -223,10 +223,6 @@ def test_product_app_callback_establishes_session(monkeypatch):
         "hermes_cli.product_app.mark_first_admin_bootstrap_completed",
         lambda: seen.append("marked"),
     )
-    monkeypatch.setattr(
-        "hermes_cli.product_app.ensure_product_tailnet_started",
-        lambda config=None: None,
-    )
 
     client = TestClient(create_product_app())
     client.get("/api/auth/login", follow_redirects=False)
@@ -253,7 +249,10 @@ def test_product_app_callback_establishes_session(monkeypatch):
 
 
 def test_product_app_blocks_setup_on_proxy_after_bootstrap_completion(monkeypatch):
-    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {"network": {"pocket_id_port": 1411}})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_product_config",
+        lambda: {"network": {"pocket_id_port": 1411}, "services": {"pocket_id": {"upstream_port": 19141}}},
+    )
     monkeypatch.setattr(
         "hermes_cli.product_app.resolve_product_urls",
         lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
@@ -289,10 +288,13 @@ def test_product_app_proxies_pocket_id_paths_when_not_completed(monkeypatch):
 
         async def request(self, method, url, headers=None, content=None):
             assert method == "GET"
-            assert url == "http://127.0.0.1:1411/.well-known/openid-configuration"
+            assert url == "http://127.0.0.1:19141/.well-known/openid-configuration"
             return _AsyncUpstreamResponse()
 
-    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {"network": {"pocket_id_port": 1411}})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_product_config",
+        lambda: {"network": {"pocket_id_port": 1411}, "services": {"pocket_id": {"upstream_port": 19141}}},
+    )
     monkeypatch.setattr(
         "hermes_cli.product_app.resolve_product_urls",
         lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},

@@ -84,6 +84,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
             "container_name": "hermes-pocket-id",
             "static_api_key_ref": "HERMES_POCKET_ID_STATIC_API_KEY",
             "encryption_key_ref": "HERMES_POCKET_ID_ENCRYPTION_KEY",
+            "upstream_port": 19141,
         },
     },
 }
