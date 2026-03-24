@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 import time
 import re
+from datetime import datetime
 from typing import Any
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from hermes_cli.product_stack import _api_headers, resolve_product_urls
+from hermes_cli.product_stack import _api_headers, _ensure_signup_mode_with_token, resolve_product_urls
 from hermes_cli.product_config import load_product_config
 
 logger = logging.getLogger(__name__)
@@ -277,6 +278,10 @@ def deactivate_product_user(user_id: str, config: dict[str, Any] | None = None) 
 
 def create_product_signup_token(config: dict[str, Any] | None = None) -> ProductSignupToken:
     product_config = config or load_product_config()
+    try:
+        _ensure_signup_mode_with_token(product_config)
+    except Exception as exc:  # pragma: no cover - defensive behavior for external API variance
+        logger.warning("Failed to enforce Pocket ID allowUserSignups=withToken before token creation: %s", exc)
     payload = {
         "ttl": _DEFAULT_SIGNUP_TOKEN_TTL,
         "usageLimit": _DEFAULT_SIGNUP_TOKEN_USAGE_LIMIT,
@@ -323,12 +328,37 @@ def list_active_product_signup_tokens(config: dict[str, Any] | None = None) -> s
     else:
         rows = []
     tokens: set[str] = set()
+    now_epoch = int(time.time())
     for item in rows:
         if not isinstance(item, dict):
             continue
         token = str(item.get("token", "")).strip()
-        if token:
-            tokens.add(token)
+        if not token:
+            continue
+        try:
+            usage_count = int(item.get("usageCount", 0))
+        except (TypeError, ValueError):
+            usage_count = 0
+        try:
+            usage_limit = int(item.get("usageLimit", 1))
+        except (TypeError, ValueError):
+            usage_limit = 1
+        expires_at_raw = item.get("expiresAt")
+        expires_at_epoch: int | None = None
+        if isinstance(expires_at_raw, (int, float)):
+            expires_at_epoch = int(expires_at_raw)
+        elif isinstance(expires_at_raw, str):
+            candidate = expires_at_raw.strip()
+            if candidate:
+                try:
+                    expires_at_epoch = int(datetime.fromisoformat(candidate.replace("Z", "+00:00")).timestamp())
+                except ValueError:
+                    expires_at_epoch = None
+        if usage_limit > 0 and usage_count >= usage_limit:
+            continue
+        if expires_at_epoch is not None and expires_at_epoch <= now_epoch:
+            continue
+        tokens.add(token)
     return tokens
 
 

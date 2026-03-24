@@ -209,6 +209,8 @@ def test_deactivate_product_user_sets_disabled(monkeypatch):
 def test_create_product_signup_token_returns_full_url(monkeypatch):
     client = DummyClient({("POST", "/api/signup-tokens"): (200, {"token": "signup-123"})})
     monkeypatch.setattr("hermes_cli.product_users._client", lambda config=None: client)
+    seen = []
+    monkeypatch.setattr("hermes_cli.product_users._ensure_signup_mode_with_token", lambda config: seen.append(True))
     monkeypatch.setattr(
         "hermes_cli.product_users.resolve_product_urls",
         lambda config=None: {"issuer_url": "http://localhost:1411"},
@@ -218,6 +220,7 @@ def test_create_product_signup_token_returns_full_url(monkeypatch):
 
     assert token.token == "signup-123"
     assert token.signup_url == "http://localhost:1411/st/signup-123"
+    assert seen == [True]
 
 
 def test_create_product_user_with_signup_combines_results(monkeypatch):
@@ -244,3 +247,44 @@ def test_list_active_product_signup_tokens_reads_data_rows(monkeypatch):
     tokens = list_active_product_signup_tokens()
 
     assert tokens == {"signup-1", "signup-2"}
+
+
+def test_list_active_product_signup_tokens_filters_used_and_expired(monkeypatch):
+    monkeypatch.setattr("time.time", lambda: 1700000000)
+    client = DummyClient(
+        {
+            (
+                "GET",
+                "/api/signup-tokens",
+            ): (
+                200,
+                {
+                    "data": [
+                        {
+                            "token": "signup-active",
+                            "usageCount": 0,
+                            "usageLimit": 1,
+                            "expiresAt": "2099-01-01T00:00:00Z",
+                        },
+                        {
+                            "token": "signup-used",
+                            "usageCount": 1,
+                            "usageLimit": 1,
+                            "expiresAt": "2099-01-01T00:00:00Z",
+                        },
+                        {
+                            "token": "signup-expired",
+                            "usageCount": 0,
+                            "usageLimit": 1,
+                            "expiresAt": "2000-01-01T00:00:00Z",
+                        },
+                    ]
+                },
+            )
+        }
+    )
+    monkeypatch.setattr("hermes_cli.product_users._client", lambda config=None: client)
+
+    tokens = list_active_product_signup_tokens()
+
+    assert tokens == {"signup-active"}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import secrets
 import subprocess
 import time
@@ -29,6 +30,7 @@ from utils import atomic_json_write, atomic_yaml_write
 
 POCKET_ID_IMAGE = "ghcr.io/pocket-id/pocket-id:v2"
 _READY_TIMEOUT_SECONDS = 45.0
+logger = logging.getLogger(__name__)
 
 
 def get_product_services_root() -> Path:
@@ -435,10 +437,48 @@ def _request_json(
     return response.json() if response.content else {}
 
 
+def _ensure_signup_mode_with_token(config: Dict[str, Any]) -> None:
+    base_url = _pocket_id_upstream_base_url(config)
+    headers = _api_headers(config)
+    with httpx.Client(base_url=base_url, headers=headers, timeout=10.0) as client:
+        current_response = client.get("/api/application-configuration/all")
+        if current_response.status_code != 200:
+            raise RuntimeError(
+                f"GET {base_url}/api/application-configuration/all failed with "
+                f"{current_response.status_code}: {current_response.text}"
+            )
+        rows = current_response.json() if current_response.content else []
+        if not isinstance(rows, list):
+            raise RuntimeError("Pocket ID returned invalid application configuration payload")
+        payload: Dict[str, str] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = str(row.get("key", "")).strip()
+            if not key:
+                continue
+            payload[key] = str(row.get("value", ""))
+        if not payload:
+            raise RuntimeError("Pocket ID application configuration payload was empty")
+        if payload.get("allowUserSignups") == "withToken":
+            return
+        payload["allowUserSignups"] = "withToken"
+        update_response = client.put("/api/application-configuration", json=payload)
+        if update_response.status_code != 200:
+            raise RuntimeError(
+                f"PUT {base_url}/api/application-configuration failed with "
+                f"{update_response.status_code}: {update_response.text}"
+            )
+
+
 def bootstrap_product_oidc_client(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
     product_config = initialize_product_stack(config or load_product_config())
     ensure_product_stack_started(product_config)
     _wait_for_pocket_id_ready(product_config)
+    try:
+        _ensure_signup_mode_with_token(product_config)
+    except Exception as exc:  # pragma: no cover - defensive behavior for external API variance
+        logger.warning("Failed to enforce Pocket ID allowUserSignups=withToken: %s", exc)
 
     urls = resolve_product_urls(product_config)
     client_payload = _oidc_client_payload(product_config)

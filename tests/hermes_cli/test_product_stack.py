@@ -8,6 +8,7 @@ import yaml
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_stack import (
     POCKET_ID_IMAGE,
+    _ensure_signup_mode_with_token,
     bootstrap_first_admin_enrollment,
     bootstrap_product_oidc_client,
     ensure_product_tailnet_started,
@@ -289,10 +290,71 @@ class _ClientStub:
         self.requests.append(("GET", path, None))
         return response
 
+    def put(self, path, **kwargs):
+        response = self.responses[("PUT", path)]
+        self.requests.append(("PUT", path, kwargs))
+        return response
+
     def request(self, method, path, **kwargs):
         response = self.responses[(method, path)]
         self.requests.append((method, path, kwargs))
         return response
+
+
+def test_ensure_signup_mode_with_token_updates_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = load_product_config()
+    stub = _ClientStub(
+        {
+            (
+                "GET",
+                "/api/application-configuration/all",
+            ): _Response(
+                200,
+                [
+                    {"key": "appName", "value": "Pocket ID"},
+                    {"key": "allowUserSignups", "value": "disabled"},
+                ],
+            ),
+            ("PUT", "/api/application-configuration"): _Response(200, []),
+        }
+    )
+    with (
+        patch("hermes_cli.product_stack.httpx.Client", return_value=stub),
+        patch("hermes_cli.product_stack.get_env_value", return_value="setup-static-key"),
+    ):
+        _ensure_signup_mode_with_token(config)
+
+    put_calls = [req for req in stub.requests if req[0] == "PUT" and req[1] == "/api/application-configuration"]
+    assert len(put_calls) == 1
+    assert put_calls[0][2]["json"]["allowUserSignups"] == "withToken"
+
+
+def test_ensure_signup_mode_with_token_skips_update_when_already_with_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = load_product_config()
+    stub = _ClientStub(
+        {
+            (
+                "GET",
+                "/api/application-configuration/all",
+            ): _Response(
+                200,
+                [
+                    {"key": "appName", "value": "Pocket ID"},
+                    {"key": "allowUserSignups", "value": "withToken"},
+                ],
+            ),
+        }
+    )
+    with (
+        patch("hermes_cli.product_stack.httpx.Client", return_value=stub),
+        patch("hermes_cli.product_stack.get_env_value", return_value="setup-static-key"),
+    ):
+        _ensure_signup_mode_with_token(config)
+
+    put_calls = [req for req in stub.requests if req[0] == "PUT"]
+    assert put_calls == []
 
 
 def test_bootstrap_product_oidc_client_creates_client_and_rotates_secret(tmp_path, monkeypatch):
