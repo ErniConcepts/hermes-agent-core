@@ -1,27 +1,27 @@
 # Hermes Core
 
-`hermes-core` is a product-oriented fork of [Hermes Agent](https://github.com/NousResearch/hermes-agent).
+`hermes-core` is a fork of [Hermes Agent](https://github.com/NousResearch/hermes-agent) focused on one use case:
 
-This repo keeps the upstream Hermes agent stack, but adds a fork-side product layer for:
+run a single local device that multiple people on your network can access, each with their own personalized agent session.
 
-- a local multi-user web app
-- Pocket ID based authentication
-- per-user isolated runtimes
-- a product-owned installer and setup flow
-- optional Tailscale exposure
+It keeps upstream Hermes as the core, and adds:
 
-The goal is to make the fork installable and operable like a real local product, not just a developer checkout.
+- multi-user web access on a local host
+- Pocket ID authentication
+- per-user isolated runtimes and workspaces
+- simple install/setup flow for deployment on Linux
+- optional Tailscale exposure for remote tailnet access
 
 ## What This Fork Adds
 
-The product layer lives primarily in `hermes_cli/product_*` and includes:
+The deployment layer lives primarily in `hermes_cli/product_*` and includes:
 
 - `hermes-core install`
-  - prepares a Linux host for the product path
+  - prepares a Linux host for local multi-user access
   - validates or installs Docker / `runsc` prerequisites on supported systems
-  - installs a user-level product app service
+  - installs user-level app/auth services
 - `hermes-core setup`
-  - configures product-owned settings such as:
+  - configures deployment settings such as:
     - public host
     - optional Tailscale mode
     - Pocket ID bootstrap
@@ -29,10 +29,10 @@ The product layer lives primarily in `hermes_cli/product_*` and includes:
     - runtime toolsets
     - workspace limits
 - `hermes-core uninstall`
-  - removes product data and services
-  - cleans up installer-managed product state
+  - removes deployment data and services
+  - cleans up installer-managed state
 
-The authenticated product surface is intentionally narrow:
+The authenticated web surface is intentionally narrow:
 
 - sign-in
 - chat
@@ -47,7 +47,7 @@ Current target:
 - Ubuntu/Debian are the supported installer target today
 - Windows is fine for development, but not the production target
 
-Current product assumptions:
+Current deployment assumptions:
 
 - Docker is used for Pocket ID and per-user runtimes
 - `runsc` is the preferred runtime isolation path
@@ -89,13 +89,13 @@ hermes-core setup
 
 Typical flow:
 
-1. choose the local public host
+1. choose the host users in your network will open
 2. enable or disable Tailscale exposure
 3. choose the model route
 4. choose the runtime toolsets
-5. let setup start Pocket ID and the product app
+5. let setup start Pocket ID and the app services
 6. open the first-admin setup URL
-7. sign in to the product web app
+7. sign in and start using personalized agent sessions
 
 Useful commands:
 
@@ -144,18 +144,18 @@ Upstream Hermes functionality still exists in the repo and remains the foundatio
 - memory and session search
 - gateway/platform integrations
 
-The fork policy is to prefer product-side adaptation over modifying upstream Hermes files unless an upstream-facing change is explicitly intended.
+The fork policy is to prefer sidecar adaptation over modifying upstream Hermes files unless an upstream-facing change is explicitly intended.
 
 ## Architecture Flow
 
-Current high-level product runtime flow:
+Current high-level runtime flow:
 
 1. `hermes-core install` prepares host prerequisites and installs product services.
 2. `hermes-core setup` writes `~/.hermes/product.yaml` and bootstraps Pocket ID + OIDC client.
-3. Product app (`hermes_cli/product_app.py`) serves auth/session, chat proxy, workspace APIs, and narrow admin APIs.
-4. Pocket ID provides identity and signup-token onboarding; product app stays an OIDC client.
-5. Per-user runtime containers are launched by product runtime orchestration (`hermes_cli/product_runtime.py` + `hermes_cli/product_runtime_service.py`).
-6. User workspace files are written to user-scoped product storage and live-mounted into the corresponding runtime.
+3. App service (`hermes_cli/product_app.py`) serves auth/session, chat proxy, workspace APIs, and narrow admin APIs.
+4. Pocket ID provides identity and signup-token onboarding; the app stays an OIDC client.
+5. Per-user runtime containers are launched by runtime orchestration (`hermes_cli/product_runtime.py` + `hermes_cli/product_runtime_service.py`).
+6. User workspace files are written to user-scoped storage and live-mounted into the corresponding runtime.
 
 Primary runtime surfaces:
 
