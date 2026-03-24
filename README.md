@@ -146,12 +146,66 @@ Upstream Hermes functionality still exists in the repo and remains the foundatio
 
 The fork policy is to prefer product-side adaptation over modifying upstream Hermes files unless an upstream-facing change is explicitly intended.
 
+## Architecture Flow
+
+Current high-level product runtime flow:
+
+1. `hermes-core install` prepares host prerequisites and installs product services.
+2. `hermes-core setup` writes `~/.hermes/product.yaml` and bootstraps Pocket ID + OIDC client.
+3. Product app (`hermes_cli/product_app.py`) serves auth/session, chat proxy, workspace APIs, and narrow admin APIs.
+4. Pocket ID provides identity and signup-token onboarding; product app stays an OIDC client.
+5. Per-user runtime containers are launched by product runtime orchestration (`hermes_cli/product_runtime.py` + `hermes_cli/product_runtime_service.py`).
+6. User workspace files are written to user-scoped product storage and live-mounted into the corresponding runtime.
+
+Primary runtime surfaces:
+
+- Product app HTTP surface (browser-facing)
+- Product runtime HTTP surface (`/healthz`, `/runtime/session`, `/runtime/turn`, `/runtime/turn/stream`)
+- Pocket ID service (provider-facing, proxied/controlled by product layer)
+
+## Fork File Map
+
+Main fork-owned code and assets (current):
+
+- Product app + APIs:
+  - `hermes_cli/product_app.py`
+  - `hermes_cli/product_web.py`
+  - `hermes_cli/product_web_template.py`
+  - `hermes_cli/product_web_style.py`
+  - `hermes_cli/product_web_script.py`
+- Product auth + users:
+  - `hermes_cli/product_oidc.py`
+  - `hermes_cli/product_users.py`
+  - `hermes_cli/product_invites.py`
+  - `hermes_cli/product_identity.py`
+- Product runtime + storage:
+  - `hermes_cli/product_runtime.py`
+  - `hermes_cli/product_runtime_service.py`
+  - `hermes_cli/product_workspace.py`
+  - `hermes_cli/product_config.py`
+  - `hermes_cli/product_stack.py`
+- Product CLI commands:
+  - `hermes_cli/product_main.py`
+  - `hermes_cli/product_install.py`
+  - `hermes_cli/product_setup.py`
+- Installer/runtime packaging:
+  - `scripts/install-product.sh`
+  - `Dockerfile.product`
+  - `Dockerfile.product-local`
+- Fork maintainer docs:
+  - `docs/fork/DEVELOPMENT.md`
+  - `docs/fork/SPEC.md`
+  - `docs/fork/UPSTREAM-SYNC.md`
+- Fork product tests:
+  - `tests/hermes_cli/test_product_*.py`
+
 ## Development
 
 Product development notes live in:
 
-- [DEVELOPMENT.md](DEVELOPMENT.md)
-- [SPEC.md](SPEC.md)
+- [DEVELOPMENT.md](docs/fork/DEVELOPMENT.md)
+- [SPEC.md](docs/fork/SPEC.md)
+- [UPSTREAM-SYNC.md](docs/fork/UPSTREAM-SYNC.md)
 
 Run the product test suite with:
 
