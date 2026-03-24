@@ -17,6 +17,7 @@ from hermes_cli.product_stack import (
     get_pocket_id_data_root,
     get_pocket_id_env_path,
     initialize_product_stack,
+    mark_first_admin_bootstrap_completed,
     resolve_product_urls,
 )
 
@@ -338,8 +339,11 @@ def test_bootstrap_first_admin_enrollment_stores_native_setup_state(tmp_path, mo
         "display_name": "Supplier Admin",
         "email": "admin@example.com",
         "auth_mode": "passkey",
+        "bootstrap_mode": "native_setup",
         "setup_url": "https://officebox.local:1411/setup",
         "oidc_client_id": "hermes-core",
+        "first_admin_login_seen": False,
+        "bootstrap_completed_at": None,
     }
 
     saved = json.loads(get_first_admin_enrollment_state_path().read_text(encoding="utf-8"))
@@ -356,8 +360,11 @@ def test_bootstrap_first_admin_enrollment_reuses_existing_state(tmp_path, monkey
         "display_name": "Administrator",
         "email": "",
         "auth_mode": "passkey",
+        "bootstrap_mode": "native_setup",
         "setup_url": "http://localhost:1411/setup",
         "oidc_client_id": "hermes-core",
+        "first_admin_login_seen": False,
+        "bootstrap_completed_at": None,
     }
     get_first_admin_enrollment_state_path().write_text(json.dumps(existing), encoding="utf-8")
 
@@ -368,3 +375,30 @@ def test_bootstrap_first_admin_enrollment_reuses_existing_state(tmp_path, monkey
         state = bootstrap_first_admin_enrollment(config)
 
     assert state == existing
+
+
+def test_mark_first_admin_bootstrap_completed_sets_completion_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    state_path = get_first_admin_enrollment_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "username": "admin",
+                "display_name": "Administrator",
+                "email": "",
+                "auth_mode": "passkey",
+                "bootstrap_mode": "native_setup",
+                "setup_url": "http://localhost:1411/setup",
+                "oidc_client_id": "hermes-core",
+                "first_admin_login_seen": False,
+                "bootstrap_completed_at": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    marked = mark_first_admin_bootstrap_completed()
+    assert marked is not None
+    assert marked["first_admin_login_seen"] is True
+    assert isinstance(marked["bootstrap_completed_at"], int)

@@ -284,8 +284,11 @@ def test_start_product_stack_ensures_linux_product_app_service(monkeypatch):
             "display_name": "Administrator",
             "email": "",
             "auth_mode": "passkey",
+            "bootstrap_mode": "native_setup",
             "setup_url": "https://example.ts.net:8443/setup",
             "oidc_client_id": "hermes-core",
+            "first_admin_login_seen": False,
+            "bootstrap_completed_at": None,
         },
     )
 
@@ -326,6 +329,36 @@ def test_product_setup_summary_includes_first_admin_signup_url(tmp_path, capsys,
     out = capsys.readouterr().out
     assert "First admin sign-up:" in out
     assert "http://localhost:1411/setup" in out
+
+
+def test_product_setup_summary_hides_first_admin_signup_url_after_completion(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    from hermes_cli.product_config import save_product_config
+
+    product_config = load_product_config()
+    save_product_config(product_config)
+    state_path = tmp_path / "product" / "bootstrap" / "first_admin_enrollment.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "bootstrap_mode": "native_setup",
+                "setup_url": "http://localhost:1411/setup",
+                "first_admin_login_seen": True,
+                "bootstrap_completed_at": 1710000000,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from hermes_cli.product_setup import _print_product_setup_summary
+
+    _print_product_setup_summary()
+
+    out = capsys.readouterr().out
+    assert "First admin bootstrap:  completed" in out
+    assert "First admin sign-up:" not in out
+    assert "http://localhost:1411/setup" not in out
 
 
 def test_product_setup_prints_install_handoff_when_started_from_install(tmp_path, capsys, monkeypatch):

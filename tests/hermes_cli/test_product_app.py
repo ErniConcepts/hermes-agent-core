@@ -169,6 +169,7 @@ def test_product_app_login_short_circuits_when_already_authenticated(monkeypatch
 
 
 def test_product_app_callback_establishes_session(monkeypatch):
+    seen = []
     monkeypatch.setattr(
         "hermes_cli.product_app.load_product_config",
         lambda: {"bootstrap": {"first_admin_username": "admin"}},
@@ -218,6 +219,10 @@ def test_product_app_callback_establishes_session(monkeypatch):
             },
         )(),
     )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.mark_first_admin_bootstrap_completed",
+        lambda: seen.append("marked"),
+    )
 
     client = TestClient(create_product_app())
     client.get("/api/auth/login", follow_redirects=False)
@@ -240,6 +245,7 @@ def test_product_app_callback_establishes_session(monkeypatch):
         "email_verified": True,
         "is_admin": True,
     }
+    assert seen == ["marked", "marked"]
 
 
 

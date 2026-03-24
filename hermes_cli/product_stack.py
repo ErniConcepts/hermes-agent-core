@@ -484,10 +484,36 @@ def load_first_admin_enrollment_state() -> Dict[str, Any] | None:
     return json.loads(state_path.read_text(encoding="utf-8"))
 
 
+def _first_admin_bootstrap_mode(config: Dict[str, Any]) -> str:
+    bootstrap_cfg = config.get("bootstrap", {})
+    forced_mode = str(bootstrap_cfg.get("first_admin_bootstrap_mode", "")).strip().lower()
+    if forced_mode in {"token", "native_setup"}:
+        return forced_mode
+    # Conservative default: native Pocket ID setup flow.
+    # We only switch to token mode when explicitly enabled and supported.
+    tokenized_supported = bool(bootstrap_cfg.get("tokenized_first_admin_supported", False))
+    return "token" if tokenized_supported else "native_setup"
+
+
+def mark_first_admin_bootstrap_completed() -> Dict[str, Any] | None:
+    state = load_first_admin_enrollment_state()
+    if not state:
+        return None
+    if bool(state.get("first_admin_login_seen")):
+        return state
+    state["first_admin_login_seen"] = True
+    state["bootstrap_completed_at"] = int(time.time())
+    state_path = get_first_admin_enrollment_state_path()
+    atomic_json_write(state_path, state)
+    _secure_file(state_path)
+    return state
+
+
 def bootstrap_first_admin_enrollment(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
     product_config = initialize_product_stack(config or load_product_config())
     oidc_state = bootstrap_product_oidc_client(product_config)
     existing_state = load_first_admin_enrollment_state()
+    bootstrap_mode = _first_admin_bootstrap_mode(product_config)
 
     username = str(product_config.get("bootstrap", {}).get("first_admin_username", "admin")).strip() or "admin"
     display_name = str(
@@ -499,8 +525,11 @@ def bootstrap_first_admin_enrollment(config: Dict[str, Any] | None = None) -> Di
         "display_name": display_name,
         "email": email,
         "auth_mode": str(product_config.get("auth", {}).get("mode", "passkey")).strip() or "passkey",
-        "setup_url": resolve_product_urls(product_config)["pocket_id_setup_url"],
+        "bootstrap_mode": bootstrap_mode,
+        "setup_url": resolve_product_urls(product_config)["pocket_id_setup_url"] if bootstrap_mode == "native_setup" else "",
         "oidc_client_id": oidc_state["client_id"],
+        "first_admin_login_seen": bool(existing_state.get("first_admin_login_seen", False)) if existing_state else False,
+        "bootstrap_completed_at": existing_state.get("bootstrap_completed_at") if existing_state else None,
     }
     if existing_state == state:
         return existing_state

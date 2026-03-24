@@ -434,9 +434,15 @@ def _print_product_setup_summary() -> None:
         print_info(f"Local debug URL:        {urls['local_app_base_url']}")
     if urls.get("local_issuer_url"):
         print_info(f"Local auth debug URL:   {urls['local_issuer_url']}")
+    bootstrap_mode = str(enrollment_state.get("bootstrap_mode", "native_setup")).strip() or "native_setup"
+    first_admin_login_seen = bool(enrollment_state.get("first_admin_login_seen", False))
     setup_url = str(enrollment_state.get("setup_url", "")).strip()
-    if setup_url:
-        print_info(f"First admin sign-up:    {setup_url}")
+    if first_admin_login_seen:
+        print_info("First admin bootstrap:  completed")
+    else:
+        print_info(f"First admin bootstrap:  {bootstrap_mode}")
+        if setup_url:
+            print_info(f"First admin sign-up:    {setup_url}")
     print_info(f"SOUL template:  {soul_template}")
     print_info(f"Workspace cap:  {workspace_limit_mb / 1024:.1f} GB per user")
 
@@ -464,7 +470,11 @@ def _start_product_stack() -> None:
     if state["email"]:
         print_info(f"  First admin email: {state['email']}")
     print_info(f"  Auth mode: {state['auth_mode']}")
-    print_info(f"  First admin setup URL: {state['setup_url']}")
+    print_info(f"  Bootstrap mode: {state.get('bootstrap_mode', 'native_setup')}")
+    if state.get("first_admin_login_seen"):
+        print_info("  First admin bootstrap already completed.")
+    elif state.get("setup_url"):
+        print_info(f"  First admin setup URL: {state['setup_url']}")
     print_info(f"  OIDC client: {state['oidc_client_id']}")
 
 

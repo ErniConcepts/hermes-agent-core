@@ -23,7 +23,7 @@ from hermes_cli.product_oidc import (
     validate_product_oidc_id_token,
 )
 from hermes_cli.product_runtime import delete_product_runtime, get_product_runtime_session, stream_product_runtime_turn
-from hermes_cli.product_stack import resolve_product_urls
+from hermes_cli.product_stack import mark_first_admin_bootstrap_completed, resolve_product_urls
 from hermes_cli.product_users import (
     ProductCreatedUser,
     ProductSignupToken,
@@ -193,6 +193,11 @@ def _require_admin_user(request: Request) -> dict[str, Any]:
     return user
 
 
+def _mark_bootstrap_completed_if_admin(user: dict[str, Any]) -> None:
+    if bool(user.get("is_admin")):
+        mark_first_admin_bootstrap_completed()
+
+
 def _canonical_request_redirect(request: Request, urls: dict[str, str]) -> str | None:
     tailnet_host = str(urls.get("tailnet_host", "")).strip().lower()
     if not tailnet_host:
@@ -302,7 +307,9 @@ def create_product_app() -> FastAPI:
         userinfo = fetch_product_oidc_userinfo(access_token, metadata)
         request.session.pop("oidc_pending", None)
         provider_user = get_product_user_by_id(str(userinfo.get("sub") or "").strip())
-        request.session["user"] = _session_user_payload(userinfo, provider_user)
+        session_user = _session_user_payload(userinfo, provider_user)
+        request.session["user"] = session_user
+        _mark_bootstrap_completed_if_admin(session_user)
         _csrf_token(request)
         return RedirectResponse(urls["app_base_url"], status_code=303)
 
@@ -316,6 +323,7 @@ def create_product_app() -> FastAPI:
             request.session.clear()
             return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
         request.session["user"] = refreshed
+        _mark_bootstrap_completed_if_admin(refreshed)
         return ProductSessionResponse(authenticated=True, user=refreshed, csrf_token=_csrf_token(request))
 
     @app.post("/api/auth/logout", response_model=ProductSessionResponse)
