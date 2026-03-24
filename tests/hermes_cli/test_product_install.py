@@ -228,6 +228,7 @@ def test_render_product_app_service_unit_uses_non_root_identity(tmp_path, monkey
     assert "Environment=HOME=/home/alice" in rendered
     assert f"Environment=HERMES_HOME={tmp_path}" in rendered
     assert f"Environment=HERMES_CORE_INSTALL_DIR={tmp_path / 'checkout'}" in rendered
+    assert "--host 0.0.0.0" in rendered
     assert "--port 18086" in rendered
     assert "WantedBy=default.target" in rendered
 
@@ -274,6 +275,7 @@ def test_render_product_auth_proxy_service_unit_uses_non_root_identity(tmp_path,
     assert f"Environment=HERMES_HOME={tmp_path}" in rendered
     assert f"Environment=HERMES_CORE_INSTALL_DIR={tmp_path / 'checkout'}" in rendered
     assert "create_product_auth_proxy_app" in rendered
+    assert "--host 0.0.0.0" in rendered
     assert "--port 1411" in rendered
 
 

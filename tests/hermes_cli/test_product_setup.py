@@ -361,6 +361,40 @@ def test_product_setup_summary_hides_first_admin_signup_url_after_completion(tmp
     assert "http://localhost:1411/setup" not in out
 
 
+def test_product_setup_summary_explains_tailnet_auth_is_pending_during_bootstrap(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    from hermes_cli.product_config import save_product_config
+
+    product_config = load_product_config()
+    product_config["network"]["tailscale"]["enabled"] = True
+    product_config["network"]["tailscale"]["tailnet_name"] = "corpnet"
+    product_config["network"]["tailscale"]["device_name"] = "hermes-box"
+    product_config["network"]["public_host"] = "localhost"
+    save_product_config(product_config)
+    state_path = tmp_path / "product" / "bootstrap" / "first_admin_enrollment.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "bootstrap_mode": "native_setup",
+                "setup_url": "https://hermes-box.corpnet.ts.net:4444/setup",
+                "first_admin_login_seen": False,
+                "bootstrap_completed_at": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from hermes_cli.product_setup import _print_product_setup_summary
+
+    _print_product_setup_summary()
+
+    out = capsys.readouterr().out
+    assert "Tailnet auth exposure:  pending first admin bootstrap" in out
+    assert "Pocket ID setup is intentionally local-only." in out
+    assert "Complete bootstrap at: http://localhost:1411/setup" in out
+
+
 def test_product_setup_prints_install_handoff_when_started_from_install(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 

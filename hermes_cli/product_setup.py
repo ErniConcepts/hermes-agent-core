@@ -90,7 +90,7 @@ def _validate_product_ports_available() -> None:
     app_port = int(network.get("app_port", 8086))
     pocket_id_port = int(network.get("pocket_id_port", 1411))
     _ensure_tcp_port_available(bind_host, pocket_id_port, "Pocket ID")
-    _ensure_tcp_port_available("127.0.0.1", app_port, "Product app")
+    _ensure_tcp_port_available(bind_host, app_port, "Product app")
 
 
 def _detect_tailscale_identity(command_path: str) -> tuple[str, str]:
@@ -420,6 +420,7 @@ def _print_product_setup_summary() -> None:
         or "(bundled default)"
     )
     workspace_limit_mb = int(product_config.get("storage", {}).get("user_workspace_limit_mb", 2048))
+    bind_host = str(product_config.get("network", {}).get("bind_host", "0.0.0.0")).strip() or "0.0.0.0"
 
     print()
     print_header("Product Setup Summary")
@@ -430,19 +431,31 @@ def _print_product_setup_summary() -> None:
     print_info(f"Install dir:    {PROJECT_ROOT}")
     print_info(f"Canonical app URL:       {urls['app_base_url']}")
     print_info(f"Canonical Pocket ID URL: {urls['issuer_url']}")
+    if bind_host in {"127.0.0.1", "localhost"}:
+        print_info(f"Service bind host:       {bind_host} (local-only)")
+    else:
+        print_info(f"Service bind host:       {bind_host} (LAN reachable)")
     if urls.get("local_app_base_url"):
         print_info(f"Local debug URL:        {urls['local_app_base_url']}")
     if urls.get("local_issuer_url"):
         print_info(f"Local auth debug URL:   {urls['local_issuer_url']}")
+    tailscale_enabled = bool(product_config.get("network", {}).get("tailscale", {}).get("enabled", False))
     bootstrap_mode = str(enrollment_state.get("bootstrap_mode", "native_setup")).strip() or "native_setup"
     first_admin_login_seen = bool(enrollment_state.get("first_admin_login_seen", False))
     setup_url = str(enrollment_state.get("setup_url", "")).strip()
     if first_admin_login_seen:
         print_info("First admin bootstrap:  completed")
+        if tailscale_enabled:
+            print_info("Tailnet auth exposure:  enabled")
     else:
         print_info(f"First admin bootstrap:  {bootstrap_mode}")
         if setup_url:
             print_info(f"First admin sign-up:    {setup_url}")
+        if tailscale_enabled:
+            print_info("Tailnet auth exposure:  pending first admin bootstrap")
+            print_info("  During bootstrap, Pocket ID setup is intentionally local-only.")
+            if urls.get("local_issuer_url"):
+                print_info(f"  Complete bootstrap at: {urls['local_issuer_url']}/setup")
     print_info(f"SOUL template:  {soul_template}")
     print_info(f"Workspace cap:  {workspace_limit_mb / 1024:.1f} GB per user")
 

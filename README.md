@@ -191,7 +191,6 @@ Main fork-owned code and assets (current):
 - Installer/runtime packaging:
   - `scripts/install-product.sh`
   - `Dockerfile.product`
-  - `Dockerfile.product-local`
 - Fork maintainer docs:
   - `docs/fork/DEVELOPMENT.md`
   - `docs/fork/SPEC.md`
@@ -206,6 +205,7 @@ Product development notes live in:
 - [DEVELOPMENT.md](docs/fork/DEVELOPMENT.md)
 - [SPEC.md](docs/fork/SPEC.md)
 - [UPSTREAM-SYNC.md](docs/fork/UPSTREAM-SYNC.md)
+- [PRE_PUBLISH_AUDIT.md](docs/fork/PRE_PUBLISH_AUDIT.md)
 
 Run the product test suite with:
 

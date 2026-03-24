@@ -3,6 +3,7 @@ from pathlib import Path
 from subprocess import CalledProcessError, CompletedProcess
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from hermes_cli.product_config import load_product_config
@@ -165,6 +166,25 @@ def test_initialize_product_stack_requires_public_host(tmp_path, monkeypatch):
         raise AssertionError("Expected missing public_host to fail")
 
 
+def test_initialize_product_stack_wraps_env_permission_error_with_actionable_message(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = load_product_config()
+
+    original_write_text = Path.write_text
+
+    def _raise_for_env(path_obj, *args, **kwargs):
+        if path_obj == get_pocket_id_env_path():
+            raise PermissionError("denied")
+        return original_write_text(path_obj, *args, **kwargs)
+
+    with (
+        patch("hermes_cli.product_stack.get_env_value", return_value="existing-secret"),
+        patch("pathlib.Path.write_text", _raise_for_env),
+    ):
+        with pytest.raises(RuntimeError, match="Permission denied while writing"):
+            initialize_product_stack(config)
+
+
 def test_ensure_product_stack_started_uses_generated_compose_file(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
@@ -216,12 +236,13 @@ def test_ensure_product_stack_started_attempts_tailscale_serve_when_enabled(tmp_
     with (
         patch("hermes_cli.product_stack.get_env_value", return_value="existing-secret"),
         patch("hermes_cli.product_stack.subprocess.run") as mock_run,
+        patch("hermes_cli.product_stack.load_first_admin_enrollment_state", return_value={"first_admin_login_seen": False}),
     ):
         ensure_product_stack_started(config)
 
     commands = [call.args[0] for call in mock_run.call_args_list]
     assert commands[1] == ["tailscale", "serve", "--bg", "--https=443", "http://127.0.0.1:8086"]
-    assert commands[2] == ["tailscale", "serve", "--bg", "--https=4444", "http://127.0.0.1:1411"]
+    assert len(commands) == 2
 
 
 def test_ensure_product_tailnet_started_noops_when_disabled(tmp_path, monkeypatch):
@@ -249,6 +270,7 @@ def test_ensure_product_stack_started_routes_tailnet_auth_through_proxy(
     with (
         patch("hermes_cli.product_stack.get_env_value", return_value="existing-secret"),
         patch("hermes_cli.product_stack.subprocess.run") as mock_run,
+        patch("hermes_cli.product_stack.load_first_admin_enrollment_state", return_value={"first_admin_login_seen": True}),
     ):
         ensure_product_stack_started(config)
 
@@ -261,6 +283,35 @@ def test_ensure_product_stack_started_routes_tailnet_auth_through_proxy(
         "--https=4444",
         "http://127.0.0.1:1411",
     ]
+
+
+def test_mark_first_admin_bootstrap_completed_refreshes_tailnet_exposure(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    state_path = get_first_admin_enrollment_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "username": "admin",
+                "display_name": "Administrator",
+                "email": "",
+                "auth_mode": "passkey",
+                "bootstrap_mode": "native_setup",
+                "setup_url": "http://localhost:1411/setup",
+                "oidc_client_id": "hermes-core",
+                "first_admin_login_seen": False,
+                "bootstrap_completed_at": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("hermes_cli.product_stack.ensure_product_tailnet_started") as mock_tailnet:
+        marked = mark_first_admin_bootstrap_completed()
+
+    assert marked is not None
+    assert marked["first_admin_login_seen"] is True
+    mock_tailnet.assert_called_once()
 
 
 class _Response:

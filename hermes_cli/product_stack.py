@@ -67,6 +67,15 @@ def _secure_tree(*paths: Path) -> None:
         _secure_dir(path)
 
 
+def _permission_error_message(path: Path) -> str:
+    return (
+        f"Permission denied while writing {path}. "
+        "This usually means files in ~/.hermes/product are owned by root from a previous sudo run. "
+        "Fix ownership and rerun install: "
+        "sudo chown -R \"$USER:$USER\" ~/.hermes/product ~/.hermes/product.yaml ~/.hermes/.env"
+    )
+
+
 def _public_host(config: Dict[str, Any]) -> str:
     host = str(config.get("network", {}).get("public_host", "")).strip()
     if not host:
@@ -200,6 +209,11 @@ def _tailscale_serve_command(config: Dict[str, Any], *, https_port: int, target_
     ]
 
 
+def _first_admin_bootstrap_completed() -> bool:
+    state = load_first_admin_enrollment_state() or {}
+    return bool(state.get("first_admin_login_seen", False))
+
+
 def ensure_product_tailnet_started(config: Dict[str, Any] | None = None) -> list[subprocess.CompletedProcess[str]]:
     product_config = config or load_product_config()
     if not _tailscale_enabled(product_config):
@@ -217,12 +231,15 @@ def ensure_product_tailnet_started(config: Dict[str, Any] | None = None) -> list
             https_port=app_https_port,
             target_url=f"http://127.0.0.1:{app_port}",
         ),
-        _tailscale_serve_command(
-            product_config,
-            https_port=auth_https_port,
-            target_url=auth_target_url,
-        ),
     ]
+    if _first_admin_bootstrap_completed():
+        commands.append(
+            _tailscale_serve_command(
+                product_config,
+                https_port=auth_https_port,
+                target_url=auth_target_url,
+            )
+        )
     results: list[subprocess.CompletedProcess[str]] = []
     for command in commands:
         results.append(subprocess.run(command, check=True, capture_output=True, text=True))
@@ -352,11 +369,17 @@ def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, 
     _ensure_client_secret(product_config)
 
     env_path = get_pocket_id_env_path()
-    env_path.write_text(_build_env_file(product_config), encoding="utf-8")
+    try:
+        env_path.write_text(_build_env_file(product_config), encoding="utf-8")
+    except PermissionError as exc:
+        raise RuntimeError(_permission_error_message(env_path)) from exc
     _secure_file(env_path)
 
     compose_path = get_pocket_id_compose_path()
-    atomic_yaml_write(compose_path, _build_compose_spec(product_config))
+    try:
+        atomic_yaml_write(compose_path, _build_compose_spec(product_config))
+    except PermissionError as exc:
+        raise RuntimeError(_permission_error_message(compose_path)) from exc
     _secure_file(compose_path)
 
     save_product_config(product_config)
@@ -562,6 +585,11 @@ def mark_first_admin_bootstrap_completed() -> Dict[str, Any] | None:
     state_path = get_first_admin_enrollment_state_path()
     atomic_json_write(state_path, state)
     _secure_file(state_path)
+    # Once first admin bootstrap is complete, expose auth on tailnet as well.
+    try:
+        ensure_product_tailnet_started()
+    except Exception as exc:  # pragma: no cover - defensive for external tailscale variance
+        logger.warning("Failed to refresh tailscale auth exposure after bootstrap completion: %s", exc)
     return state
 
 

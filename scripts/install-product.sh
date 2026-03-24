@@ -207,10 +207,10 @@ docker_access_ready() {
 }
 
 run_product_install() {
-    local install_cmd="\"$VENV_DIR/bin/hermes-core\" install"
+    local -a install_cmd=("$VENV_DIR/bin/hermes-core" "install")
     local status=0
     if [[ "$RUN_SETUP" == false ]]; then
-        install_cmd="$install_cmd --skip-setup"
+        install_cmd+=("--skip-setup")
     fi
     export HERMES_CORE_INSTALL_DIR="$INSTALL_DIR"
 
@@ -218,19 +218,25 @@ run_product_install() {
     log_info "This step may prompt for your sudo password."
 
     if docker_access_ready && command -v sg >/dev/null 2>&1 && ! id -nG "$USER" | tr ' ' '\n' | grep -qx docker; then
+        local quoted_cmd
+        printf -v quoted_cmd '%q ' "${install_cmd[@]}"
+        quoted_cmd="${quoted_cmd% }"
         log_info "Starting Hermes Core install in a docker group shell..."
-        sg docker -c "$install_cmd"
+        sg docker -c "$quoted_cmd"
     else
         set +e
-        eval "$install_cmd"
+        "${install_cmd[@]}"
         status=$?
         set -e
         if [[ $status -eq 0 ]]; then
             return
         fi
         if command -v sg >/dev/null 2>&1 && [[ $status -eq $DOCKER_GROUP_RELOGIN_EXIT_CODE ]]; then
+            local quoted_cmd
+            printf -v quoted_cmd '%q ' "${install_cmd[@]}"
+            quoted_cmd="${quoted_cmd% }"
             log_info "Retrying Hermes Core install in a docker group shell..."
-            sg docker -c "$install_cmd"
+            sg docker -c "$quoted_cmd"
             return
         fi
         return "$status"

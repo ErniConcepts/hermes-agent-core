@@ -175,6 +175,7 @@ def _user_in_group(group_name: str, user_name: str | None = None) -> bool:
 
 def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> str:
     product_config = config or load_product_config()
+    bind_host = str(product_config.get("network", {}).get("bind_host", "0.0.0.0")).strip() or "0.0.0.0"
     app_port = int(product_config.get("network", {}).get("app_port", 8086))
     _run_as_user, home_dir = _product_service_identity()
     hermes_home = str(get_hermes_home())
@@ -195,7 +196,7 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
             (
                 "ExecStart="
                 f"{sys.executable} -m uvicorn hermes_cli.product_app:create_product_app "
-                f"--factory --host 127.0.0.1 --port {app_port}"
+                f"--factory --host {bind_host} --port {app_port}"
             ),
             "Restart=always",
             "RestartSec=3",
@@ -209,6 +210,7 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
 
 def _render_product_auth_proxy_service_unit(config: dict[str, Any] | None = None) -> str:
     product_config = config or load_product_config()
+    bind_host = str(product_config.get("network", {}).get("bind_host", "0.0.0.0")).strip() or "0.0.0.0"
     auth_port = int(product_config.get("network", {}).get("pocket_id_port", 1411))
     _run_as_user, home_dir = _product_service_identity()
     hermes_home = str(get_hermes_home())
@@ -229,7 +231,7 @@ def _render_product_auth_proxy_service_unit(config: dict[str, Any] | None = None
             (
                 "ExecStart="
                 f"{sys.executable} -m uvicorn hermes_cli.product_app:create_product_auth_proxy_app "
-                f"--factory --host 127.0.0.1 --port {auth_port}"
+                f"--factory --host {bind_host} --port {auth_port}"
             ),
             "Restart=always",
             "RestartSec=3",
