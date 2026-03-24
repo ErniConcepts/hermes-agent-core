@@ -395,6 +395,41 @@ def test_product_setup_summary_explains_tailnet_auth_is_pending_during_bootstrap
     assert "Complete bootstrap at: http://localhost:1411/setup" in out
 
 
+def test_product_setup_summary_shows_lan_urls_when_bind_host_all_interfaces(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    from hermes_cli.product_config import save_product_config
+
+    product_config = load_product_config()
+    product_config["network"]["bind_host"] = "0.0.0.0"
+    product_config["network"]["app_port"] = 18086
+    product_config["network"]["pocket_id_port"] = 19111
+    save_product_config(product_config)
+
+    from hermes_cli.product_setup import _print_product_setup_summary
+
+    _print_product_setup_summary()
+    out = capsys.readouterr().out
+    assert "Service bind host:       0.0.0.0 (LAN reachable)" in out
+    assert "LAN app URL:             http://<HOST_IP>:18086" in out
+    assert "LAN auth URL:            http://<HOST_IP>:19111" in out
+
+
+def test_product_setup_summary_marks_lan_disabled_for_loopback_bind_host(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    from hermes_cli.product_config import save_product_config
+
+    product_config = load_product_config()
+    product_config["network"]["bind_host"] = "127.0.0.1"
+    save_product_config(product_config)
+
+    from hermes_cli.product_setup import _print_product_setup_summary
+
+    _print_product_setup_summary()
+    out = capsys.readouterr().out
+    assert "Service bind host:       127.0.0.1 (local-only)" in out
+    assert "LAN access URL:          disabled (set network.bind_host to 0.0.0.0)" in out
+
+
 def test_product_setup_prints_install_handoff_when_started_from_install(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 

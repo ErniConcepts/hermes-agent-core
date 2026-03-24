@@ -433,8 +433,13 @@ def _print_product_setup_summary() -> None:
     print_info(f"Canonical Pocket ID URL: {urls['issuer_url']}")
     if bind_host in {"127.0.0.1", "localhost"}:
         print_info(f"Service bind host:       {bind_host} (local-only)")
+        print_info("LAN access URL:          disabled (set network.bind_host to 0.0.0.0)")
     else:
         print_info(f"Service bind host:       {bind_host} (LAN reachable)")
+        app_port = int(product_config.get("network", {}).get("app_port", 8086))
+        auth_port = int(product_config.get("network", {}).get("pocket_id_port", 1411))
+        print_info(f"LAN app URL:             http://<HOST_IP>:{app_port}")
+        print_info(f"LAN auth URL:            http://<HOST_IP>:{auth_port}")
     if urls.get("local_app_base_url"):
         print_info(f"Local debug URL:        {urls['local_app_base_url']}")
     if urls.get("local_issuer_url"):
