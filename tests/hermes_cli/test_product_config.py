@@ -2,6 +2,7 @@ from pathlib import Path
 
 import yaml
 
+from hermes_cli.config import load_config, save_config
 from hermes_cli.product_config import (
     DEFAULT_PRODUCT_CONFIG,
     ensure_product_home,
@@ -33,8 +34,6 @@ def test_load_product_config_returns_defaults_when_missing(tmp_path, monkeypatch
 
     assert config["auth"]["provider"] == "pocket-id"
     assert config["auth"]["mode"] == "passkey"
-    assert config["tools"]["hermes_toolsets"] == DEFAULT_PRODUCT_CONFIG["tools"]["hermes_toolsets"]
-    assert config["models"]["default_route"]["context_length"] is None
     assert config["network"]["tailscale"]["enabled"] is False
     assert config["network"]["tailscale"]["app_https_port"] == 443
     assert config["network"]["tailscale"]["auth_https_port"] == 4444
@@ -46,12 +45,10 @@ def test_save_product_config_roundtrip_and_merge(tmp_path, monkeypatch):
 
     config = load_product_config()
     config["product"]["brand"]["name"] = "Erni Agent"
-    config["tools"]["hermes_toolsets"] = ["web", "memory"]
     save_product_config(config)
 
     reloaded = load_product_config()
     assert reloaded["product"]["brand"]["name"] == "Erni Agent"
-    assert reloaded["tools"]["hermes_toolsets"] == ["web", "memory"]
     assert reloaded["auth"]["provider"] == "pocket-id"
 
     saved = yaml.safe_load(get_product_config_path().read_text(encoding="utf-8"))
@@ -70,10 +67,14 @@ def test_initialize_product_config_file_creates_product_yaml(tmp_path, monkeypat
 def test_resolve_runtime_defaults_reads_product_config(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
-    config = load_product_config()
-    config["tools"]["hermes_toolsets"] = ["memory", "session_search"]
-    config["models"]["default_route"]["model"] = "custom-model"
-    save_product_config(config)
+    hermes_config = load_config()
+    hermes_config["model"] = {
+        "provider": "custom",
+        "base_url": "http://127.0.0.1:8080/v1",
+        "default": "custom-model",
+    }
+    hermes_config["platform_toolsets"] = {"cli": ["memory", "session_search"]}
+    save_config(hermes_config)
 
     defaults = resolve_runtime_defaults()
 

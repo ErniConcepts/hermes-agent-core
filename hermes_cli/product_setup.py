@@ -5,16 +5,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import socket
 import subprocess
 import sys
-import tempfile
-from contextlib import contextmanager
-from typing import Any
 from pathlib import Path
-
-import yaml
+from typing import Any
 
 from hermes_cli.config import ensure_hermes_home, get_config_path, get_env_path, get_hermes_home
 from hermes_cli.product_config import initialize_product_config_file, load_product_config, save_product_config
@@ -26,14 +21,10 @@ from hermes_cli.product_stack import (
     resolve_product_urls,
 )
 from hermes_cli.product_install import ensure_product_app_service_started, validate_product_host_prereqs
-from model_tools import get_available_toolsets
-from toolsets import validate_toolset
 from hermes_cli.setup import (
     PROJECT_ROOT,
     Colors,
     color,
-    get_env_path,
-    get_env_value,
     get_config_path,
     is_interactive_stdin,
     print_error,
@@ -43,9 +34,6 @@ from hermes_cli.setup import (
     print_success,
     print_warning,
     prompt,
-    prompt_choice,
-    setup_model_provider,
-    setup_tools,
 )
 
 
@@ -54,12 +42,8 @@ PRODUCT_SETUP_SECTIONS = [
     ("tailscale", "Tailscale"),
     ("identity", "Agent Identity"),
     ("storage", "Workspace Storage"),
-    ("model", "Model & Provider"),
-    ("tools", "Tools"),
     ("bootstrap", "Pocket ID & First Admin"),
 ]
-
-DEFAULT_PRODUCT_TOOLSETS = ["memory", "session_search"]
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -301,114 +285,6 @@ def setup_product_storage() -> None:
         print_info(f"  Per-user workspace limit: {limit_mb / 1024:.1f} GB")
         return
 
-def _sync_model_route_from_temp_config(temp_config: dict[str, Any]) -> None:
-    model_cfg = temp_config.get("model")
-    if isinstance(model_cfg, str):
-        model_cfg = {"default": model_cfg}
-    if not isinstance(model_cfg, dict):
-        raise RuntimeError("Product model setup did not return a valid model configuration")
-
-    provider = str(model_cfg.get("provider") or "").strip()
-    model_name = str(model_cfg.get("default") or "").strip()
-    if not provider or not model_name:
-        raise RuntimeError("Product model setup requires both provider and model")
-
-    product_config = load_product_config()
-    route = product_config.setdefault("models", {}).setdefault("default_route", {})
-    route["provider"] = provider
-    route["model"] = model_name
-
-    api_mode = str(model_cfg.get("api_mode") or "").strip()
-    if api_mode:
-        route["api_mode"] = api_mode
-    else:
-        route.pop("api_mode", None)
-
-    base_url = str(model_cfg.get("base_url") or "").strip()
-    if provider == "custom":
-        base_url = base_url or str(get_env_value("OPENAI_BASE_URL") or "").strip()
-        if not base_url:
-            raise RuntimeError("Custom product model routes require a base URL")
-    if base_url:
-        route["base_url"] = base_url.rstrip("/")
-    else:
-        route.pop("base_url", None)
-
-    save_product_config(product_config)
-
-
-def _seed_product_model_setup_config(product_config: dict[str, Any]) -> dict[str, Any]:
-    route = product_config.get("models", {}).get("default_route", {})
-    toolsets = product_config.get("tools", {}).get("hermes_toolsets", []) or list(DEFAULT_PRODUCT_TOOLSETS)
-    seeded_model: dict[str, Any] = {
-        "provider": str(route.get("provider", "custom")).strip() or "custom",
-        "default": str(route.get("model", "")).strip() or "qwen3.5-9b-local",
-    }
-    base_url = str(route.get("base_url", "")).strip()
-    if base_url:
-        seeded_model["base_url"] = base_url
-    api_mode = str(route.get("api_mode", "")).strip()
-    if api_mode:
-        seeded_model["api_mode"] = api_mode
-    return {
-        "model": seeded_model,
-        "platform_toolsets": {"cli": [str(toolset).strip() for toolset in toolsets if str(toolset).strip()]},
-    }
-
-
-@contextmanager
-def _isolated_product_setup_home() -> Any:
-    product_config = load_product_config()
-    real_home = get_hermes_home()
-    real_env_path = get_env_path()
-    real_auth_path = real_home / "auth.json"
-    original_home = os.environ.get("HERMES_HOME")
-    with tempfile.TemporaryDirectory(prefix="hermes-core-product-setup-") as temp_dir:
-        temp_home = Path(temp_dir)
-        try:
-            os.environ["HERMES_HOME"] = str(temp_home)
-            ensure_hermes_home()
-            if real_env_path.exists():
-                shutil.copyfile(real_env_path, get_env_path())
-            seeded_config = _seed_product_model_setup_config(product_config)
-            get_config_path().write_text(yaml.safe_dump(seeded_config, sort_keys=False), encoding="utf-8")
-            yield temp_home
-            temp_env_path = get_env_path()
-            if temp_env_path.exists():
-                real_home.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(temp_env_path, real_env_path)
-            temp_auth_path = temp_home / "auth.json"
-            if temp_auth_path.exists():
-                real_home.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(temp_auth_path, real_auth_path)
-        finally:
-            if original_home is None:
-                os.environ.pop("HERMES_HOME", None)
-            else:
-                os.environ["HERMES_HOME"] = original_home
-
-
-def _sync_toolsets_from_temp_config(temp_config: dict[str, Any]) -> None:
-    platform_toolsets = temp_config.get("platform_toolsets", {})
-    cli_toolsets = platform_toolsets.get("cli") if isinstance(platform_toolsets, dict) else None
-    if not isinstance(cli_toolsets, list):
-        raise RuntimeError("Product tool setup did not return a valid CLI toolset selection")
-
-    normalized = [str(toolset).strip() for toolset in cli_toolsets if str(toolset).strip()]
-    available_toolsets = set(get_available_toolsets().keys())
-    filtered = [toolset for toolset in normalized if validate_toolset(toolset) and toolset in available_toolsets]
-    dropped = [toolset for toolset in normalized if toolset not in filtered]
-    if dropped:
-        print_warning(
-            "Ignoring unavailable or unknown toolsets in product config sync: "
-            + ", ".join(dropped)
-        )
-    if not filtered:
-        raise RuntimeError("Product tools setup requires at least one valid Hermes toolset")
-    product_config = load_product_config()
-    product_config.setdefault("tools", {})["hermes_toolsets"] = filtered
-    save_product_config(product_config)
-
 
 def _print_product_setup_summary() -> None:
     product_config = load_product_config()
@@ -456,13 +332,18 @@ def _print_product_setup_summary() -> None:
         print_info(f"First admin bootstrap:  {bootstrap_mode}")
         if setup_url:
             print_info(f"First admin sign-up:    {setup_url}")
-        if tailscale_enabled:
+    if tailscale_enabled:
             print_info("Tailnet auth exposure:  pending first admin bootstrap")
             print_info("  During bootstrap, Pocket ID setup is intentionally local-only.")
             if urls.get("local_issuer_url"):
                 print_info(f"  Complete bootstrap at: {urls['local_issuer_url']}/setup")
     print_info(f"SOUL template:  {soul_template}")
     print_info(f"Workspace cap:  {workspace_limit_mb / 1024:.1f} GB per user")
+    print_info("Hermes agent setup:")
+    print_info("  Model/provider:        hermes setup model")
+    print_info("  Tools:                 hermes setup tools")
+    print_info("  Gateway/messaging:     hermes setup gateway")
+    print_info("  Agent defaults:        hermes setup agent")
 
 
 def _clear_terminal_screen() -> None:
@@ -494,45 +375,6 @@ def _start_product_stack() -> None:
     elif state.get("setup_url"):
         print_info(f"  First admin setup URL: {state['setup_url']}")
     print_info(f"  OIDC client: {state['oidc_client_id']}")
-
-
-def _run_model_section() -> None:
-    existing_route = dict(load_product_config().get("models", {}).get("default_route", {}))
-    temp_config: dict[str, Any] = _seed_product_model_setup_config(load_product_config())
-    with _isolated_product_setup_home() as temp_home:
-        setup_model_provider(temp_config)
-        disk_config = yaml.safe_load((temp_home / "config.yaml").read_text(encoding="utf-8")) or {}
-        if isinstance(disk_config, dict) and isinstance(disk_config.get("model"), (dict, str)):
-            merged_config = dict(disk_config)
-            if isinstance(disk_config.get("model"), dict) and isinstance(temp_config.get("model"), dict):
-                merged_model = dict(disk_config["model"])
-                merged_model.update(temp_config["model"])
-                merged_config["model"] = merged_model
-            elif isinstance(temp_config.get("model"), (dict, str)):
-                merged_config["model"] = temp_config["model"]
-            temp_config = merged_config
-        elif not isinstance(temp_config.get("model"), (dict, str)):
-            temp_config.update(disk_config if isinstance(disk_config, dict) else {})
-    try:
-        _sync_model_route_from_temp_config(temp_config)
-    except RuntimeError as exc:
-        if "valid model configuration" not in str(exc):
-            raise
-        provider = str(existing_route.get("provider", "")).strip()
-        model_name = str(existing_route.get("model", "")).strip()
-        if not provider or not model_name:
-            raise
-        print_info("  Kept current product model route.")
-
-
-def _run_tools_section() -> None:
-    temp_config: dict[str, Any] = {}
-    product_config = load_product_config()
-    selected_toolsets = product_config.get("tools", {}).get("hermes_toolsets", [])
-    normalized = [str(toolset).strip() for toolset in selected_toolsets if str(toolset).strip()]
-    temp_config.setdefault("platform_toolsets", {})["cli"] = normalized or list(DEFAULT_PRODUCT_TOOLSETS)
-    setup_tools(temp_config, first_install=False)
-    _sync_toolsets_from_temp_config(temp_config)
 
 
 def _run_bootstrap_section() -> None:
@@ -568,10 +410,6 @@ def run_product_setup_wizard(args: Any) -> None:
             setup_product_identity()
         elif section == "storage":
             setup_product_storage()
-        elif section == "model":
-            _run_model_section()
-        elif section == "tools":
-            _run_tools_section()
         elif section == "bootstrap":
             _run_bootstrap_section()
         else:
@@ -605,15 +443,13 @@ def run_product_setup_wizard(args: Any) -> None:
     )
     print()
     print_info("This configures the supplier-curated local product distribution.")
-    print_info("It leaves the generic 'hermes setup' flow untouched.")
+    print_info("Hermes-native agent configuration stays in the generic 'hermes setup' flow.")
     print()
 
     setup_product_network()
     setup_product_tailscale()
     setup_product_identity()
     setup_product_storage()
-    _run_model_section()
-    _run_tools_section()
     _run_bootstrap_section()
     _print_product_setup_summary()
     print()

@@ -18,9 +18,14 @@ from pydantic import BaseModel
 import yaml
 
 from hermes_cli.config import _secure_dir, _secure_file, ensure_hermes_home, get_hermes_home
-from hermes_cli.product_config import load_product_config, runtime_host_access_host
+from hermes_cli.product_config import (
+    load_product_config,
+    resolve_hermes_model_config,
+    resolve_hermes_runtime_toolsets,
+    runtime_host_access_host,
+)
 from hermes_cli.product_identity import render_product_soul
-from toolsets import validate_toolset
+from hermes_cli.runtime_provider import format_runtime_provider_error, resolve_runtime_provider
 
 logger = logging.getLogger(__name__)
 _RUNTIME_HEALTH_TTL_SECONDS = 10.0
@@ -130,17 +135,11 @@ def _runtime_config_path(config: dict[str, Any], user_id: str) -> Path:
 
 
 def _runtime_toolsets(config: dict[str, Any]) -> list[str]:
-    configured = config.get("tools", {}).get("hermes_toolsets", [])
-    if not isinstance(configured, list):
-        raise RuntimeError("product tools.hermes_toolsets must be a list")
-    normalized = [
-        str(item).strip()
-        for item in configured
-        if str(item).strip() and validate_toolset(str(item).strip())
-    ]
-    if not normalized:
-        raise RuntimeError("product tools.hermes_toolsets must contain at least one valid toolset")
-    return normalized
+    _ = config
+    try:
+        return resolve_hermes_runtime_toolsets()
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def _runtime_port_range(config: dict[str, Any]) -> tuple[int, int]:
@@ -226,9 +225,10 @@ def _write_runtime_record(record: ProductRuntimeRecord) -> None:
 
 
 def _write_runtime_cli_config(config: dict[str, Any], user_id: str, *, base_url: str, model: str) -> None:
-    route = config.get("models", {}).get("default_route", {})
+    _ = config
+    model_cfg = resolve_hermes_model_config()
     config_path = _runtime_config_path(config, user_id)
-    context_length = route.get("context_length")
+    context_length = model_cfg.get("context_length")
     try:
         normalized_context_length = int(context_length) if context_length is not None else None
     except (TypeError, ValueError):
@@ -243,7 +243,7 @@ def _write_runtime_cli_config(config: dict[str, Any], user_id: str, *, base_url:
         "model": {
             "default": model,
             "base_url": base_url,
-            "provider": str(route.get("provider") or "").strip() or "custom",
+            "provider": str(model_cfg.get("provider") or "").strip() or "custom",
             "context_length": normalized_context_length,
         }
     }
@@ -274,18 +274,28 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
     soul_path.write_text(render_product_soul(product_config), encoding="utf-8")
     _secure_runtime_file(soul_path)
 
-    route = product_config.get("models", {}).get("default_route", {})
+    try:
+        model_cfg = resolve_hermes_model_config()
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    try:
+        route = resolve_runtime_provider(requested=str(model_cfg.get("provider") or "").strip() or None)
+    except Exception as exc:
+        detail = format_runtime_provider_error(exc).strip()
+        message = "Hermes model/provider is not ready. Run 'hermes setup model'."
+        if detail:
+            message = f"{message} {detail}"
+        raise RuntimeError(message) from exc
+
+    model = str(model_cfg.get("default") or "").strip()
+    provider = str(route.get("provider") or model_cfg.get("provider") or "").strip() or "custom"
     base_url = str(route.get("base_url") or "").strip()
-    provider = str(route.get("provider") or "").strip()
-    api_mode = str(route.get("api_mode") or "chat_completions").strip() or "chat_completions"
-    model = str(route.get("model") or "").strip()
-    api_key = "product-local-route"
-    if not provider:
-        raise RuntimeError("product models.default_route.provider must be configured")
+    api_mode = str(route.get("api_mode") or model_cfg.get("api_mode") or "chat_completions").strip() or "chat_completions"
+    api_key = str(route.get("api_key") or "").strip() or "product-runtime"
     if not model:
-        raise RuntimeError("product models.default_route.model must be configured")
+        raise RuntimeError("Hermes model.default must be configured. Run 'hermes setup model'.")
     if not base_url:
-        raise RuntimeError("product models.default_route.base_url must be configured")
+        raise RuntimeError("Hermes runtime base URL is not available. Run 'hermes setup model'.")
     base_url = _resolve_runtime_model_base_url(product_config, base_url)
     _write_runtime_cli_config(product_config, user_id, base_url=base_url, model=model)
     session_id = existing.session_id if existing is not None else product_runtime_session_id(user_id)
@@ -337,6 +347,18 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
 
 def _docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) -> list[str]:
     internal_port = _runtime_internal_port(config)
+    hermes_home = Path(record.hermes_home)
+    mounts = [
+        f"type=bind,src={hermes_home.as_posix()},dst=/srv/hermes",
+        f"type=bind,src={(hermes_home / 'SOUL.md').as_posix()},dst=/srv/hermes/SOUL.md,readonly",
+        f"type=bind,src={Path(record.workspace_root).as_posix()},dst={_RUNTIME_WORKSPACE_PATH}",
+    ]
+    runtime_config = hermes_home / "config.yaml"
+    if runtime_config.exists():
+        mounts.insert(
+            2,
+            f"type=bind,src={runtime_config.as_posix()},dst=/srv/hermes/config.yaml,readonly",
+        )
     command = [
         "docker",
         "run",
@@ -365,10 +387,6 @@ def _docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) ->
         _RUNTIME_WORKSPACE_PATH,
         "--add-host",
         f"{runtime_host_access_host(config)}:host-gateway",
-        "--mount",
-        f"type=bind,src={Path(record.hermes_home).as_posix()},dst=/srv/hermes",
-        "--mount",
-        f"type=bind,src={Path(record.workspace_root).as_posix()},dst={_RUNTIME_WORKSPACE_PATH}",
         "--label",
         f"ch.hermes.product.user_id={record.user_id}",
         "--label",
@@ -378,6 +396,11 @@ def _docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) ->
         "-m",
         "hermes_cli.product_runtime_service",
     ]
+    label_index = command.index("--label")
+    mount_args: list[str] = []
+    for mount in mounts:
+        mount_args.extend(["--mount", mount])
+    command[label_index:label_index] = mount_args
     return command
 
 

@@ -12,9 +12,9 @@ def test_hermes_core_setup_dispatches(monkeypatch):
         lambda args: called.setdefault("section", args.section),
     )
 
-    product_main.main(["setup", "tools"])
+    product_main.main(["setup", "bootstrap"])
 
-    assert called["section"] == "tools"
+    assert called["section"] == "bootstrap"
 
 
 def test_hermes_core_install_dispatches(monkeypatch):

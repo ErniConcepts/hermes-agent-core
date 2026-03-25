@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from hermes_cli.default_soul import DEFAULT_SOUL_MD
-from hermes_cli.product_config import load_product_config
+from hermes_cli.product_config import load_product_config, resolve_hermes_runtime_toolsets
 from toolsets import resolve_toolset
 
 
@@ -22,10 +22,7 @@ def _runtime_tools_from_toolsets(toolsets: list[str]) -> list[str]:
 
 def _runtime_capability_overlay(config: dict | None = None) -> str:
     product_config = config or load_product_config()
-    toolsets = product_config.get("tools", {}).get("hermes_toolsets", [])
-    normalized = [str(item).strip() for item in toolsets if str(item).strip()]
-    if not normalized:
-        raise ValueError("product tools.hermes_toolsets must contain at least one toolset")
+    normalized = resolve_hermes_runtime_toolsets()
     rendered_toolsets = ", ".join(normalized)
     runtime_tools = _runtime_tools_from_toolsets(normalized)
     rendered_tools = ", ".join(runtime_tools) if runtime_tools else "none"

@@ -13,7 +13,14 @@ from typing import Any, Dict
 
 import yaml
 
-from hermes_cli.config import ensure_hermes_home, get_hermes_home, _secure_dir, _secure_file
+from hermes_cli.config import (
+    ensure_hermes_home,
+    get_hermes_home,
+    load_config,
+    _secure_dir,
+    _secure_file,
+)
+from toolsets import validate_toolset
 
 
 DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
@@ -47,17 +54,6 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
             "auth_https_port": 4444,
             "command_path": "tailscale",
         },
-    },
-    "models": {
-        "default_route": {
-            "provider": "custom",
-            "base_url": "http://127.0.0.1:8080/v1",
-            "model": "qwen3.5-9b-local",
-            "context_length": None,
-        },
-    },
-    "tools": {
-        "hermes_toolsets": ["memory", "session_search"],
     },
     "runtime": {
         "isolation_runtime": "runsc",
@@ -177,16 +173,43 @@ def initialize_product_config_file() -> Dict[str, Any]:
     return config
 
 
+def resolve_hermes_runtime_toolsets() -> list[str]:
+    config = load_config()
+    platform_toolsets = config.get("platform_toolsets", {})
+    configured = platform_toolsets.get("cli") if isinstance(platform_toolsets, dict) else None
+    if not isinstance(configured, list):
+        configured = config.get("toolsets", [])
+    if not isinstance(configured, list):
+        raise ValueError("Hermes CLI toolsets are invalid. Run 'hermes setup tools'.")
+    normalized = [
+        str(item).strip()
+        for item in configured
+        if str(item).strip() and validate_toolset(str(item).strip())
+    ]
+    if not normalized:
+        raise ValueError("Hermes CLI toolsets must contain at least one valid toolset. Run 'hermes setup tools'.")
+    return normalized
+
+
+def resolve_hermes_model_config() -> Dict[str, Any]:
+    config = load_config()
+    model_cfg = config.get("model")
+    if isinstance(model_cfg, dict):
+        resolved = copy.deepcopy(model_cfg)
+    elif isinstance(model_cfg, str) and model_cfg.strip():
+        resolved = {"default": model_cfg.strip()}
+    else:
+        resolved = {}
+
+    default_model = str(resolved.get("default", "")).strip()
+    if not default_model:
+        raise ValueError("Hermes model.default must be configured. Run 'hermes setup model'.")
+    return resolved
+
+
 def resolve_runtime_defaults(config: Dict[str, Any] | None = None) -> Dict[str, str]:
-    product_config = config or load_product_config()
-    model_cfg = product_config.get("models", {}).get("default_route", {})
-    toolsets = product_config.get("tools", {}).get("hermes_toolsets", [])
-    normalized_toolsets = [str(item).strip() for item in toolsets if str(item).strip()]
-    if not normalized_toolsets:
-        raise ValueError("product tools.hermes_toolsets must contain at least one toolset")
-    inference_model = str(model_cfg.get("model", "")).strip()
-    if not inference_model:
-        raise ValueError("product models.default_route.model must be configured")
+    normalized_toolsets = resolve_hermes_runtime_toolsets()
+    inference_model = str(resolve_hermes_model_config().get("default", "")).strip()
     return {
         "runtime_mode": "product",
         "runtime_toolsets": ",".join(normalized_toolsets),

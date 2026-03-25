@@ -322,6 +322,9 @@ def test_build_product_runtime_image_uses_local_checkout(tmp_path, monkeypatch):
     install_root = tmp_path / "hermes-core"
     install_root.mkdir()
     (install_root / "Dockerfile.product").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+    (install_root / "keep.txt").write_text("keep\n", encoding="utf-8")
+    (install_root / ".pytest-run-1").mkdir()
+    (install_root / ".pytest-run-1" / "junk.txt").write_text("junk\n", encoding="utf-8")
     monkeypatch.setenv("HERMES_CORE_INSTALL_DIR", str(install_root))
     monkeypatch.setattr(
         "hermes_cli.product_install._run",
@@ -330,20 +333,43 @@ def test_build_product_runtime_image_uses_local_checkout(tmp_path, monkeypatch):
 
     build_product_runtime_image()
 
-    assert calls == [
-        (
-            [
-                "docker",
-                "build",
-                "-t",
-                PRODUCT_RUNTIME_IMAGE_TAG,
-                "-f",
-                str(install_root / "Dockerfile.product"),
-                str(install_root),
-            ],
-            {"capture_output": False},
-        )
-    ]
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert command[:4] == ["docker", "build", "-t", PRODUCT_RUNTIME_IMAGE_TAG]
+    assert kwargs == {"capture_output": False}
+    staged_dockerfile = Path(command[5])
+    staged_root = Path(command[6])
+    assert staged_dockerfile.name == "Dockerfile.product"
+    assert staged_root != install_root
+    assert staged_dockerfile.exists()
+    assert (staged_root / "keep.txt").read_text(encoding="utf-8") == "keep\n"
+    assert not (staged_root / ".pytest-run-1").exists()
+
+
+def test_stage_product_build_context_skips_unreadable_entries(tmp_path, monkeypatch):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "Dockerfile.product").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+    (source_root / "good.txt").write_text("ok\n", encoding="utf-8")
+    unreadable = source_root / "blocked.txt"
+    unreadable.write_text("skip\n", encoding="utf-8")
+    destination_root = tmp_path / "staged"
+
+    original_copy2 = product_install.shutil.copy2
+
+    def _fake_copy2(src, dst, *args, **kwargs):
+        if Path(src) == unreadable:
+            raise PermissionError("blocked")
+        return original_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(product_install.shutil, "copy2", _fake_copy2)
+
+    staged_root = product_install._stage_product_build_context(source_root, destination_root)
+
+    assert staged_root == destination_root
+    assert (destination_root / "Dockerfile.product").exists()
+    assert (destination_root / "good.txt").read_text(encoding="utf-8") == "ok\n"
+    assert not (destination_root / "blocked.txt").exists()
 
 
 def test_product_install_root_defaults_under_hermes_home(tmp_path, monkeypatch):

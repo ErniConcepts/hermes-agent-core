@@ -13,12 +13,19 @@ Deliver a local, multi-user Hermes distribution that can be installed and operat
   - installs product services/assets
   - runs setup unless explicitly skipped
 - `hermes-core setup`
-  - configures product network/auth/model/tool/workspace settings
+  - configures product network/auth/identity/workspace settings
   - bootstraps Pocket ID + OIDC client
   - starts app/runtime stack
 - `hermes-core uninstall`
   - removes product-managed data/services
   - cleans up installer-managed state
+
+Hermes-native configuration remains on the upstream CLI surface:
+
+- `hermes setup model`
+- `hermes setup tools`
+- `hermes setup gateway`
+- `hermes setup agent`
 
 ## Configuration Model
 
@@ -27,13 +34,17 @@ Deliver a local, multi-user Hermes distribution that can be installed and operat
 - Product config controls:
   - host/origin settings
   - Pocket ID integration
-  - default model route
-  - runtime toolsets
   - workspace quota
+- Hermes config controls:
+  - model/provider selection
+  - enabled toolsets and tools
+  - gateway configuration
+  - general agent behavior
 
 ## Runtime Model
 
 - Per-user runtime containers.
+- Per-user runtimes resolve model/provider/tool behavior from the main Hermes config.
 - Product runtime API surface remains narrow:
   - `GET /healthz`
   - `GET /runtime/session`
@@ -66,6 +77,36 @@ Deliver a local, multi-user Hermes distribution that can be installed and operat
 - No LAN exposure for internal runtime control ports.
 - Product-side adaptation is preferred over upstream Hermes patching.
 - Keep browser admin scope narrow (users/invites/deactivate), not full platform config.
+- Current control plane is still host-installed and should be treated as an interim architecture.
+
+## Future Direction: Contained Control Plane
+
+The current fork installs the Hermes control plane on the host and runs user chat execution in separate runtime containers. This keeps the product practical today, but it is not the desired long-term isolation model.
+
+Target architecture:
+
+- The host runs only a thin bootstrap/launcher layer.
+- Hermes control-plane state moves into one dedicated product-managed container.
+- That control-plane container owns:
+  - Hermes config
+  - provider credentials and runtime routing
+  - tool policy
+  - runtime defaults/templates
+- Per-user runtimes remain separate containers derived from that server-managed configuration.
+- Pocket ID and the product app continue as separate services with explicit network boundaries.
+
+Why this is preferred over using the first admin runtime as the template/source of truth:
+
+- avoids coupling platform bootstrap to one user account
+- keeps model keys and provider settings in operator-owned infrastructure, not user-owned state
+- avoids drift when the first admin changes personal runtime settings
+- makes reset, migration, backup, and multi-user tenancy cleaner
+
+Status:
+
+- not implemented yet
+- current system-level Hermes install is the temporary control-plane implementation
+- future work should move toward a contained server control plane, not toward "first admin runtime = master runtime"
 
 ## Non-Goals (Current)
 

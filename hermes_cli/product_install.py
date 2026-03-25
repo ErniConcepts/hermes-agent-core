@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -45,6 +46,22 @@ APT_INSTALL_PACKAGES = [
     "docker-compose-v2",
     "runsc",
 ]
+PRODUCT_DOCKER_BUILD_IGNORE_PATTERNS = (
+    ".git",
+    ".git/**",
+    ".venv",
+    ".venv/**",
+    ".pytest-*",
+    ".pytest-*/**",
+    ".tmp-*",
+    ".tmp-*/**",
+    ".tmp-pytest",
+    ".tmp-pytest/**",
+    "artifacts",
+    "artifacts/**",
+    ".noncode_files.txt",
+    "Dockerfile.product-local",
+)
 
 
 def _is_linux() -> bool:
@@ -295,6 +312,53 @@ def _product_install_state() -> dict[str, Any]:
     return state
 
 
+def _product_build_context_ignored(relative_path: PurePosixPath, *, is_dir: bool) -> bool:
+    relative = relative_path.as_posix()
+    if not relative or relative == ".":
+        return False
+    for pattern in PRODUCT_DOCKER_BUILD_IGNORE_PATTERNS:
+        if fnmatch(relative, pattern):
+            return True
+        if is_dir and fnmatch(f"{relative}/", f"{pattern.rstrip('/')}/"):
+            return True
+    return False
+
+
+def _stage_product_build_context(source_root: Path, destination_root: Path) -> Path:
+    destination_root.mkdir(parents=True, exist_ok=True)
+    pending: list[tuple[Path, Path]] = [(source_root, destination_root)]
+    while pending:
+        current_source, current_destination = pending.pop()
+        try:
+            entries = list(os.scandir(current_source))
+        except OSError:
+            continue
+        for entry in entries:
+            source_path = Path(entry.path)
+            try:
+                relative = source_path.relative_to(source_root)
+            except ValueError:
+                continue
+            relative_posix = PurePosixPath(relative.as_posix())
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if _product_build_context_ignored(relative_posix, is_dir=is_dir):
+                continue
+            destination_path = destination_root / relative
+            if is_dir:
+                destination_path.mkdir(parents=True, exist_ok=True)
+                pending.append((source_path, destination_path))
+                continue
+            try:
+                destination_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, destination_path)
+            except OSError:
+                continue
+    return destination_root
+
+
 def _docker_compose_available() -> bool:
     if shutil.which("docker") is None:
         return False
@@ -516,18 +580,21 @@ def build_product_runtime_image() -> None:
     if not dockerfile_path.exists():
         raise RuntimeError(f"Product runtime Dockerfile not found: {dockerfile_path}")
     try:
-        _run(
-            [
-                "docker",
-                "build",
-                "-t",
-                PRODUCT_RUNTIME_IMAGE_TAG,
-                "-f",
-                str(dockerfile_path),
-                str(project_root),
-            ],
-            capture_output=False,
-        )
+        with tempfile.TemporaryDirectory(prefix="hermes-product-build-") as build_root:
+            staged_root = _stage_product_build_context(project_root, Path(build_root) / "context")
+            staged_dockerfile = staged_root / dockerfile_path.name
+            _run(
+                [
+                    "docker",
+                    "build",
+                    "-t",
+                    PRODUCT_RUNTIME_IMAGE_TAG,
+                    "-f",
+                    str(staged_dockerfile),
+                    str(staged_root),
+                ],
+                capture_output=False,
+            )
     except subprocess.CalledProcessError as exc:
         raise RuntimeError("Failed to build the local Hermes Core product runtime image") from exc
 

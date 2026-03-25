@@ -3,6 +3,7 @@ import os
 import pytest
 import yaml
 
+from hermes_cli.config import load_config, save_config, save_env_value
 from hermes_cli.product_runtime import (
     ProductRuntimeRecord,
     _RUNTIME_WORKSPACE_PATH,
@@ -17,6 +18,19 @@ from hermes_cli.product_runtime import (
 )
 
 
+def _configure_hermes_runtime(model_base_url: str = "http://127.0.0.1:8080/v1") -> None:
+    config = load_config()
+    config["model"] = {
+        "provider": "custom",
+        "base_url": model_base_url,
+        "default": "qwen3.5-9b-local",
+    }
+    config["platform_toolsets"] = {"cli": ["memory", "session_search"]}
+    save_config(config)
+    save_env_value("OPENAI_BASE_URL", model_base_url)
+    save_env_value("OPENAI_API_KEY", "")
+
+
 def test_product_runtime_session_id_is_stable():
     first = product_runtime_session_id("admin")
     second = product_runtime_session_id("admin")
@@ -27,6 +41,7 @@ def test_product_runtime_session_id_is_stable():
 
 def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
 
     record = stage_product_runtime({"preferred_username": "admin", "name": "Admin User", "is_admin": True})
 
@@ -48,6 +63,7 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are only meaningful on non-Windows hosts")
 def test_stage_product_runtime_uses_container_readable_permissions(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
 
     record = stage_product_runtime({"preferred_username": "admin"})
 
@@ -66,6 +82,7 @@ def test_stage_product_runtime_uses_container_readable_permissions(tmp_path, mon
 
 def test_stage_product_runtime_reuses_existing_runtime_token(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
 
     first = stage_product_runtime({"preferred_username": "admin", "name": "Admin User"})
     second = stage_product_runtime({"preferred_username": "admin", "name": "Admin User"})
@@ -77,6 +94,7 @@ def test_stage_product_runtime_reuses_existing_runtime_token(tmp_path, monkeypat
 
 def test_stage_product_runtime_uses_custom_soul_template(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
     template_path = tmp_path / "custom-soul.md"
     template_path.write_text("Custom runtime identity", encoding="utf-8")
 
@@ -212,11 +230,11 @@ def test_runtime_model_base_url_keeps_non_loopback_hosts():
 
 def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
 
     from hermes_cli.product_config import load_product_config, save_product_config
 
     config = load_product_config()
-    config["models"]["default_route"]["base_url"] = "http://127.0.0.1:8080/v1"
     config["runtime"]["host_access_host"] = "host.docker.internal"
     save_product_config(config)
 
@@ -230,16 +248,12 @@ def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, mo
 
 def test_stage_product_runtime_writes_runtime_context_override_config(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
+    config = load_config()
+    config["model"]["context_length"] = 32768
+    save_config(config)
 
-    from hermes_cli.product_config import load_product_config, save_product_config
-
-    config = load_product_config()
-    config["models"]["default_route"]["base_url"] = "http://127.0.0.1:8080/v1"
-    config["models"]["default_route"]["model"] = "qwen3.5-9b-local"
-    config["models"]["default_route"]["context_length"] = 32768
-    save_product_config(config)
-
-    stage_product_runtime({"preferred_username": "admin"})
+    record = stage_product_runtime({"preferred_username": "admin"})
 
     runtime_config = _runtime_config_path(load_product_config(), "admin")
     assert runtime_config.exists()
@@ -248,6 +262,7 @@ def test_stage_product_runtime_writes_runtime_context_override_config(tmp_path, 
     assert payload["model"]["base_url"] == "http://host.docker.internal:8080/v1"
     assert payload["model"]["provider"] == "custom"
     assert payload["model"]["context_length"] == 32768
+    assert Path(record.env_file).exists()
 
 
 def test_docker_run_command_adds_host_gateway_mapping():
@@ -281,20 +296,64 @@ def test_docker_run_command_adds_host_gateway_mapping():
     assert "--workdir" in command
     assert _RUNTIME_WORKSPACE_PATH in command
     assert "host.docker.internal:host-gateway" in command
+    assert "type=bind,src=/tmp/runtime/hermes,dst=/srv/hermes" in command
+    assert "type=bind,src=/tmp/runtime/hermes/SOUL.md,dst=/srv/hermes/SOUL.md,readonly" in command
     assert f"type=bind,src=/tmp/workspace,dst={_RUNTIME_WORKSPACE_PATH}" in command
     assert "--read-only" in command
     assert "--cap-drop=ALL" in command
     assert "no-new-privileges" in command
 
 
-def test_stage_product_runtime_requires_explicit_model_base_url(tmp_path, monkeypatch):
+def test_docker_run_command_mounts_runtime_config_read_only_when_present(tmp_path):
+    config = {
+        "runtime": {
+            "internal_port": 8091,
+            "image": "hermes-product-local:dev",
+            "host_access_host": "host.docker.internal",
+        }
+    }
+    hermes_home = tmp_path / "runtime" / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("soul\n", encoding="utf-8")
+    (hermes_home / "config.yaml").write_text("model:\n  default: test\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    env_file = tmp_path / "runtime" / "runtime.env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("", encoding="utf-8")
+    record = ProductRuntimeRecord(
+        user_id="admin",
+        runtime_key="admin-deadbeef0000",
+        display_name="Admin",
+        session_id="product_admin_123",
+        container_name="runtime-admin",
+        runtime="runc",
+        runtime_port=18091,
+        runtime_root=str(tmp_path / "runtime"),
+        hermes_home=str(hermes_home),
+        workspace_root=str(workspace),
+        env_file=str(env_file),
+        manifest_file=str(tmp_path / "runtime" / "launch-spec.json"),
+        auth_token="runtime-token",
+        status="running",
+    )
+
+    command = _docker_run_command(record, config)
+
+    assert (
+        f"type=bind,src={hermes_home.as_posix()}/config.yaml,dst=/srv/hermes/config.yaml,readonly"
+        in command
+    )
+
+
+def test_stage_product_runtime_requires_ready_hermes_model_provider(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = load_config()
+    config["model"] = {"provider": "custom", "default": "qwen3.5-9b-local"}
+    config["platform_toolsets"] = {"cli": ["memory", "session_search"]}
+    save_config(config)
+    save_env_value("OPENAI_BASE_URL", "")
+    save_env_value("OPENAI_API_KEY", "")
 
-    from hermes_cli.product_config import load_product_config, save_product_config
-
-    config = load_product_config()
-    config["models"]["default_route"]["base_url"] = ""
-    save_product_config(config)
-
-    with pytest.raises(RuntimeError, match="base_url"):
+    with pytest.raises(RuntimeError, match="hermes setup model"):
         stage_product_runtime({"preferred_username": "admin"})
