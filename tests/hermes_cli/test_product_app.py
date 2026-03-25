@@ -683,6 +683,22 @@ def test_product_app_workspace_create_folder_requires_csrf(monkeypatch):
     assert response.json() == {"detail": "CSRF validation failed"}
 
 
+def test_product_app_workspace_create_folder_blocks_cross_origin(monkeypatch):
+    _patch_admin_session(monkeypatch)
+
+    client = TestClient(create_product_app())
+    _login_admin(client)
+
+    response = client.post(
+        "/api/workspace/folders",
+        json={"path": "", "name": "reports"},
+        headers={**_csrf_headers(client), "Origin": "https://evil.example"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Cross-origin request blocked"}
+
+
 def test_product_app_workspace_upload_file(monkeypatch):
     _patch_admin_session(monkeypatch)
     monkeypatch.setattr(
@@ -708,6 +724,58 @@ def test_product_app_workspace_upload_file(monkeypatch):
     assert response.status_code == 200
     assert response.json()["entries"][0]["name"] == "hello.txt"
     assert response.json()["used_bytes"] == 5
+
+
+def test_product_app_proxy_strips_forwarded_headers(monkeypatch):
+    seen: dict[str, object] = {}
+
+    class _AsyncUpstreamResponse:
+        def __init__(self):
+            self.content = b'{"ok":true}'
+            self.status_code = 200
+            self.headers = {"content-type": "application/json"}
+
+    class _AsyncClientStub:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, method, url, headers=None, content=None):
+            seen["headers"] = headers or {}
+            return _AsyncUpstreamResponse()
+
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_product_config",
+        lambda: {"network": {"pocket_id_port": 1411}, "services": {"pocket_id": {"upstream_port": 19141}}},
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_first_admin_enrollment_state",
+        lambda: {"first_admin_login_seen": False},
+    )
+    monkeypatch.setattr("hermes_cli.product_app.httpx.AsyncClient", lambda *args, **kwargs: _AsyncClientStub())
+
+    client = TestClient(create_product_app())
+    response = client.get(
+        "/__pocket_id_proxy/.well-known/openid-configuration",
+        headers={
+            "X-Forwarded-For": "203.0.113.1",
+            "X-Forwarded-Proto": "https",
+            "Forwarded": "for=203.0.113.1;proto=https",
+        },
+    )
+
+    assert response.status_code == 200
+    forwarded_headers = {str(key).lower(): value for key, value in dict(seen["headers"]).items()}
+    assert "x-forwarded-for" not in forwarded_headers
+    assert "x-forwarded-proto" not in forwarded_headers
+    assert "forwarded" not in forwarded_headers
 
 
 def test_product_app_index_shows_session_details_when_signed_in(monkeypatch):

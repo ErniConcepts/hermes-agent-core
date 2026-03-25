@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import logging
 import secrets
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -36,7 +38,6 @@ from hermes_cli.product_stack import (
 )
 from hermes_cli.product_users import (
     ProductCreatedUser,
-    ProductSignupToken,
     ProductUser,
     create_product_user_with_signup,
     deactivate_product_user,
@@ -53,6 +54,28 @@ from hermes_cli.product_workspace import (
 from hermes_cli.product_web import build_product_index_html
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ProductAppContext:
+    product_config: dict[str, Any]
+    urls: dict[str, str]
+    auth_provider: str
+    issuer_url: str
+    product_name: str
+
+    @property
+    def app_base_url(self) -> str:
+        return self.urls["app_base_url"]
+
+    @property
+    def account_url(self) -> str:
+        return f"{self.issuer_url.rstrip('/')}/settings/account"
+
+    @property
+    def app_origin(self) -> str:
+        return _origin_from_url(self.app_base_url)
+
 
 class ProductHealthResponse(BaseModel):
     status: str = "ok"
@@ -137,7 +160,41 @@ def _csrf_token(request: Request) -> str:
     return token
 
 
+def _origin_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").strip().lower()
+    hostname = (parsed.hostname or "").strip().lower()
+    if not scheme or not hostname:
+        return ""
+    port = parsed.port
+    if port is None:
+        return f"{scheme}://{hostname}"
+    if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+        return f"{scheme}://{hostname}"
+    return f"{scheme}://{hostname}:{port}"
+
+
+def _request_origin(request: Request) -> str:
+    origin = str(request.headers.get("origin", "")).strip()
+    if origin:
+        return _origin_from_url(origin)
+    referer = str(request.headers.get("referer", "")).strip()
+    if referer:
+        return _origin_from_url(referer)
+    return ""
+
+
+def _require_same_origin(request: Request) -> None:
+    expected_origin = _origin_from_url(str(request.base_url))
+    if not expected_origin:
+        return
+    request_origin = _request_origin(request)
+    if request_origin and request_origin != expected_origin:
+        raise HTTPException(status_code=403, detail="Cross-origin request blocked")
+
+
 def _require_csrf(request: Request) -> None:
+    _require_same_origin(request)
     session_token = _csrf_token(request)
     header_token = request.headers.get("X-Hermes-CSRF-Token", "").strip()
     if not header_token or header_token != session_token:
@@ -241,6 +298,14 @@ _HOP_BY_HOP_HEADERS = {
     "upgrade",
 }
 
+_BLOCKED_PROXY_REQUEST_HEADERS = {
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+}
+
 
 def _filter_proxy_response_headers(headers: dict[str, str]) -> dict[str, str]:
     filtered: dict[str, str] = {}
@@ -260,7 +325,11 @@ async def _proxy_pocket_id_request(request: Request, pocket_path: str) -> Respon
     if request.url.query:
         upstream_url = f"{upstream_url}?{request.url.query}"
     body = await request.body()
-    headers = dict(request.headers)
+    headers = {
+        key: value
+        for key, value in request.headers.items()
+        if key.lower() not in _BLOCKED_PROXY_REQUEST_HEADERS
+    }
     headers.pop("host", None)
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
         upstream = await client.request(
@@ -291,49 +360,116 @@ def _canonical_request_redirect(request: Request, urls: dict[str, str]) -> str |
     return target
 
 
-def create_product_app() -> FastAPI:
+def _build_product_app_context() -> ProductAppContext:
     product_config = load_product_config()
     urls = resolve_product_urls(product_config)
     auth_provider = str(product_config.get("auth", {}).get("provider", "unknown")).strip() or "unknown"
     issuer_url = str(product_config.get("auth", {}).get("issuer_url", "")).strip() or urls["issuer_url"]
-
-    app = FastAPI(title="Hermes Core Product App", version="0.1.0")
-    app.add_middleware(
-        SessionMiddleware,
-        secret_key=_session_secret(),
-        session_cookie="hermes_product_session",
-        same_site="lax",
-        https_only=urls["app_base_url"].startswith("https://"),
+    product_name = (
+        str(product_config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip()
+        or "Hermes Core"
+    )
+    return ProductAppContext(
+        product_config=product_config,
+        urls=urls,
+        auth_provider=auth_provider,
+        issuer_url=issuer_url,
+        product_name=product_name,
     )
 
-    @app.middleware("http")
-    async def enforce_canonical_origin(request: Request, call_next):
-        redirect_url = _canonical_request_redirect(request, urls)
-        if redirect_url is not None:
-            return RedirectResponse(redirect_url, status_code=307)
-        return await call_next(request)
 
+def _runtime_session_payload(user: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return get_product_runtime_session(user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc) or "Runtime session unavailable") from exc
+
+
+def _create_signup_user(payload: ProductCreateUserRequest) -> ProductCreatedUser:
+    try:
+        created = ProductCreatedUser.model_validate(
+            create_product_user_with_signup(
+                payload.username,
+                payload.display_name,
+                email=payload.email,
+            )
+        )
+        register_product_signup_invite(created.signup)
+        return created
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _deactivate_runtime_user(user_id: str) -> ProductUser:
+    try:
+        updated = deactivate_product_user(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    normalized = ProductUser.model_validate(updated)
+    delete_product_runtime(normalized.username)
+    return normalized
+
+
+def _list_admin_entries(admin_user: dict[str, Any]) -> ProductAdminUsersResponse:
+    users = list_product_users()
+    pending_invites = list_pending_product_signup_invites()
+    current_user_id = str(admin_user.get("sub") or "")
+    rows: list[ProductAdminEntry] = []
+    for user in users:
+        rows.append(
+            ProductAdminEntry(
+                id=user.id,
+                type="user",
+                username=user.username,
+                display_name=user.display_name,
+                email=user.email,
+                is_admin=user.is_admin,
+                disabled=user.disabled,
+                status="Disabled" if user.disabled else ("You" if user.id == current_user_id else "Active"),
+            )
+        )
+    for invite in pending_invites:
+        rows.append(
+            ProductAdminEntry(
+                id=invite.invite_id,
+                type="invite",
+                username=None,
+                display_name="User",
+                email=None,
+                is_admin=False,
+                disabled=False,
+                status="No signup",
+            )
+        )
+    return ProductAdminUsersResponse(users=rows)
+
+
+def _register_root_routes(app: FastAPI, context: ProductAppContext) -> None:
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
-        product_name = (
-            str(product_config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip()
-            or "Hermes Core"
-        )
         return HTMLResponse(
             build_product_index_html(
-                product_name=product_name,
-                account_url=f"{issuer_url.rstrip('/')}/settings/account",
+                product_name=context.product_name,
+                account_url=context.account_url,
             )
         )
 
     @app.get("/healthz", response_model=ProductHealthResponse)
     def healthz() -> ProductHealthResponse:
         return ProductHealthResponse(
-            auth_provider=auth_provider,
-            issuer_url=issuer_url,
-            app_base_url=urls["app_base_url"],
+            auth_provider=context.auth_provider,
+            issuer_url=context.issuer_url,
+            app_base_url=context.app_base_url,
         )
 
+
+def _register_proxy_routes(app: FastAPI) -> None:
     @app.api_route(
         "/__pocket_id_proxy/{pocket_path:path}",
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
@@ -341,6 +477,8 @@ def create_product_app() -> FastAPI:
     async def pocket_id_proxy(request: Request, pocket_path: str) -> Response:
         return await _proxy_pocket_id_request(request, pocket_path)
 
+
+def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
     @app.get("/api/auth/login")
     def auth_login(request: Request) -> RedirectResponse:
         _csrf_token(request)
@@ -349,9 +487,9 @@ def create_product_app() -> FastAPI:
             refreshed = _refresh_session_user(existing)
             if refreshed is not None:
                 request.session["user"] = refreshed
-                return RedirectResponse(urls["app_base_url"], status_code=303)
+                return RedirectResponse(context.app_base_url, status_code=303)
             request.session.clear()
-        settings = load_product_oidc_client_settings(config=product_config)
+        settings = load_product_oidc_client_settings(config=context.product_config)
         metadata = discover_product_oidc_provider_metadata(settings)
         login_request = create_oidc_login_request(settings, metadata)
         request.session["oidc_pending"] = {
@@ -365,12 +503,12 @@ def create_product_app() -> FastAPI:
     def auth_callback(request: Request, code: str, state: str) -> RedirectResponse:
         pending = request.session.get("oidc_pending")
         if not isinstance(pending, dict):
-            return RedirectResponse(urls["app_base_url"], status_code=303)
+            return RedirectResponse(context.app_base_url, status_code=303)
         if state != pending.get("state"):
             request.session.pop("oidc_pending", None)
-            return RedirectResponse(urls["app_base_url"], status_code=303)
+            return RedirectResponse(context.app_base_url, status_code=303)
 
-        settings = load_product_oidc_client_settings(config=product_config)
+        settings = load_product_oidc_client_settings(config=context.product_config)
         metadata = discover_product_oidc_provider_metadata(settings)
         token_response = exchange_product_oidc_code(
             settings,
@@ -396,7 +534,7 @@ def create_product_app() -> FastAPI:
         request.session["user"] = session_user
         _mark_bootstrap_completed_if_admin(session_user)
         _csrf_token(request)
-        return RedirectResponse(urls["app_base_url"], status_code=303)
+        return RedirectResponse(context.app_base_url, status_code=303)
 
     @app.get("/api/auth/session", response_model=ProductSessionResponse)
     def auth_session(request: Request) -> ProductSessionResponse:
@@ -418,16 +556,13 @@ def create_product_app() -> FastAPI:
         _csrf_token(request)
         return ProductSessionResponse(authenticated=False, csrf_token=request.session.get("csrf_token"))
 
+
+def _register_chat_routes(app: FastAPI) -> None:
     @app.get("/api/chat/session", response_model=ProductChatSessionResponse)
     def chat_session(request: Request) -> ProductChatSessionResponse:
         started = time.perf_counter()
         user = _require_product_user(request)
-        try:
-            payload = get_product_runtime_session(user)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=str(exc) or "Runtime session unavailable") from exc
+        payload = _runtime_session_payload(user)
         logger.info(
             "product_app /api/chat/session completed in %.0fms",
             (time.perf_counter() - started) * 1000,
@@ -451,6 +586,8 @@ def create_product_app() -> FastAPI:
             },
         )
 
+
+def _register_workspace_routes(app: FastAPI) -> None:
     @app.get("/api/workspace", response_model=ProductWorkspaceResponse)
     def workspace_state(request: Request, path: str = "") -> ProductWorkspaceResponse:
         started = time.perf_counter()
@@ -511,41 +648,13 @@ def create_product_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="At least one file is required")
         return _workspace_response_payload(current_state)
 
+
+def _register_admin_routes(app: FastAPI) -> None:
     @app.get("/api/admin/users", response_model=ProductAdminUsersResponse)
     def admin_list_users(request: Request) -> ProductAdminUsersResponse:
         started = time.perf_counter()
         admin_user = _require_admin_user(request)
-        users = list_product_users()
-        pending_invites = list_pending_product_signup_invites()
-        current_user_id = str(admin_user.get("sub") or "")
-        rows: list[ProductAdminEntry] = []
-        for user in users:
-            rows.append(
-                ProductAdminEntry(
-                    id=user.id,
-                    type="user",
-                    username=user.username,
-                    display_name=user.display_name,
-                    email=user.email,
-                    is_admin=user.is_admin,
-                    disabled=user.disabled,
-                    status="Disabled" if user.disabled else ("You" if user.id == current_user_id else "Active"),
-                )
-            )
-        for invite in pending_invites:
-            rows.append(
-                ProductAdminEntry(
-                    id=invite.invite_id,
-                    type="invite",
-                    username=None,
-                    display_name="User",
-                    email=None,
-                    is_admin=False,
-                    disabled=False,
-                    status="No signup",
-                )
-            )
-        response = ProductAdminUsersResponse(users=rows)
+        response = _list_admin_entries(admin_user)
         logger.info(
             "product_app /api/admin/users completed in %.0fms",
             (time.perf_counter() - started) * 1000,
@@ -556,21 +665,7 @@ def create_product_app() -> FastAPI:
     def admin_create_user(request: Request, payload: ProductCreateUserRequest | None = None) -> ProductCreatedUser:
         _require_admin_user(request)
         _require_csrf(request)
-        normalized_payload = payload or ProductCreateUserRequest()
-        try:
-            created = ProductCreatedUser.model_validate(
-                create_product_user_with_signup(
-                    normalized_payload.username,
-                    normalized_payload.display_name,
-                    email=normalized_payload.email,
-                )
-            )
-            register_product_signup_invite(created.signup)
-            return created
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return _create_signup_user(payload or ProductCreateUserRequest())
 
     @app.post("/api/admin/users/{user_id}/deactivate", response_model=ProductUser)
     def admin_deactivate_user(request: Request, user_id: str) -> ProductUser:
@@ -578,15 +673,34 @@ def create_product_app() -> FastAPI:
         _require_csrf(request)
         if user_id == str(admin_user.get("sub") or ""):
             raise HTTPException(status_code=400, detail="Admins cannot deactivate their own account")
-        try:
-            updated = deactivate_product_user(user_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        normalized = ProductUser.model_validate(updated)
-        delete_product_runtime(normalized.username)
-        return normalized
+        return _deactivate_runtime_user(user_id)
+
+
+def create_product_app() -> FastAPI:
+    context = _build_product_app_context()
+
+    app = FastAPI(title="Hermes Core Product App", version="0.1.0")
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=_session_secret(),
+        session_cookie="hermes_product_session",
+        same_site="lax",
+        https_only=context.app_base_url.startswith("https://"),
+    )
+
+    @app.middleware("http")
+    async def enforce_canonical_origin(request: Request, call_next):
+        redirect_url = _canonical_request_redirect(request, context.urls)
+        if redirect_url is not None:
+            return RedirectResponse(redirect_url, status_code=307)
+        return await call_next(request)
+
+    _register_root_routes(app, context)
+    _register_proxy_routes(app)
+    _register_auth_routes(app, context)
+    _register_chat_routes(app)
+    _register_workspace_routes(app)
+    _register_admin_routes(app)
 
     return app
 

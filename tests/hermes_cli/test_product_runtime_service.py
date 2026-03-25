@@ -104,6 +104,27 @@ def test_product_runtime_service_rejects_missing_runtime_token(monkeypatch, tmp_
     assert response.status_code == 401
 
 
+def test_product_runtime_service_rejects_mismatched_runtime_token(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+
+    client = TestClient(create_product_runtime_app())
+    response = client.get("/runtime/session", headers={"X-Hermes-Product-Runtime-Token": "runtime-token "})
+
+    assert response.status_code == 401
+
+
 def test_product_runtime_session_filters_blank_assistant_messages(monkeypatch, tmp_path):
     hermes_home = tmp_path / "hermes"
     hermes_home.mkdir(parents=True)

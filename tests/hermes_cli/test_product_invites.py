@@ -20,7 +20,9 @@ def test_register_product_signup_invite_creates_pending_entry(monkeypatch):
         )()
     )
 
-    assert invite.invite_id == "invite-signup-1"
+    assert invite.invite_id.startswith("invite-")
+    assert invite.invite_id != "invite-signup-1"
+    assert "signup-1" not in invite.invite_id
     assert invite.status == "pending"
     assert invite.expires_at == 4600
 

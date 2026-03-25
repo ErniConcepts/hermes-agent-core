@@ -12,6 +12,7 @@ from hermes_cli.product_runtime import (
     _normalize_runtime_session_payload,
     _resolve_runtime_model_base_url,
     _runtime_config_path,
+    _write_runtime_env_file,
     _wait_for_runtime_health,
     get_product_runtime_session,
     product_runtime_session_id,
@@ -411,3 +412,16 @@ def test_running_container_matches_record_detects_stale_runtime_env(tmp_path):
     }
 
     assert _running_container_matches_record(record, stale_container) is False
+
+
+def test_write_runtime_env_file_rejects_newlines(tmp_path):
+    env_path = tmp_path / "runtime.env"
+
+    with pytest.raises(RuntimeError, match="unsupported newline or NUL characters"):
+        _write_runtime_env_file(
+            env_path,
+            {
+                "OPENAI_API_KEY": "line-one\nline-two",
+                "HERMES_PRODUCT_MODEL": "qwen3.5-9b-local",
+            },
+        )

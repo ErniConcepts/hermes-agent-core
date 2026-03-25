@@ -34,6 +34,35 @@ The fork adds a product layer around upstream Hermes:
   - per-user workspace upload/folder UX
   - narrow admin user management
 
+Current internal cleanup direction:
+
+- `product_app.py` should act as the product HTTP composition layer:
+  - shared auth/session/proxy helpers
+  - route registration grouped by concern (`root`, `auth`, `chat`, `workspace`, `admin`)
+- `product_runtime.py` should center on:
+  - runtime launch setting resolution
+  - runtime file/env staging
+  - container lifecycle and health checks
+- `product_install.py` should center on:
+  - host prerequisite checks
+  - service unit rendering
+  - installer cleanup/build orchestration
+
+Current security hardening direction:
+
+- `product_app.py` is the server-side policy boundary for:
+  - session refresh and admin checks
+  - CSRF and same-origin enforcement on mutating browser routes
+  - canonical-origin redirects
+  - narrow Pocket ID proxying with blocked client-supplied forwarded headers
+- `product_invites.py` and `product_users.py` should keep signup tokens server-side:
+  - token-derived identifiers must not leak back into admin placeholder IDs
+  - invite reconciliation should stay authoritative on the server
+- `product_runtime.py` and `product_runtime_service.py` should treat runtime secrets/config as a narrow launch contract:
+  - runtime env files must reject unsafe values such as newline-delimited secrets
+  - runtime auth must stay constant-time and token-scoped
+  - generated runtime config inputs remain read-only mounts
+
 ## Current Auth and Admin Behavior
 
 - First admin onboarding uses native Pocket ID setup bootstrap.
@@ -92,6 +121,9 @@ For installer/runtime changes, also smoke-test:
 - No broad runtime filesystem access outside user workspace.
 - No accidental exposure of runtime ports to LAN.
 - Keep auth origin handling canonical (especially in Tailscale mode).
+- Enforce same-origin plus CSRF validation for browser mutations.
+- Do not trust browser-supplied forwarded headers when proxying Pocket ID.
+- Do not expose signup token material through admin placeholder identifiers or logs.
 - Keep admin UI narrow; avoid growing it into a full config console.
 - Keep runtime launch derived from the main Hermes config rather than adding a second hidden product-side source of truth.
 

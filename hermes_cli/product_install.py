@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 import shutil
@@ -16,7 +17,11 @@ except ModuleNotFoundError:  # pragma: no cover - Windows
     grp = None
 
 from hermes_cli.config import get_env_path, get_hermes_home
-from hermes_cli.product_config import ensure_product_home, get_product_config_path, get_product_storage_root
+from hermes_cli.product_config import (
+    ensure_product_home,
+    get_product_config_path,
+    get_product_storage_root,
+)
 from hermes_cli.product_stack import (
     get_pocket_id_compose_path,
     get_product_services_root,
@@ -43,8 +48,12 @@ PRODUCT_RUNTIME_IMAGE_TAG = "hermes-core-product-runtime:local"
 DOCKER_GROUP_RELOGIN_EXIT_CODE = 42
 APT_INSTALL_PACKAGES = [
     "docker.io",
-    "docker-compose-v2",
     "runsc",
+]
+APT_DOCKER_COMPOSE_PACKAGE_CANDIDATES = [
+    "docker-compose-v2",
+    "docker-compose-plugin",
+    "docker-compose",
 ]
 PRODUCT_DOCKER_BUILD_IGNORE_PATTERNS = (
     ".git",
@@ -62,6 +71,12 @@ PRODUCT_DOCKER_BUILD_IGNORE_PATTERNS = (
     ".noncode_files.txt",
     "Dockerfile.product-local",
 )
+@dataclass(frozen=True)
+class ProductServiceUnitSpec:
+    description: str
+    module: str
+    factory: str
+    port: int
 
 
 def _is_linux() -> bool:
@@ -190,17 +205,18 @@ def _user_in_group(group_name: str, user_name: str | None = None) -> bool:
     return primary_gid == group_info.gr_gid
 
 
-def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> str:
+def _service_bind_host_and_home(config: dict[str, Any] | None = None) -> tuple[str, str, str]:
     product_config = config or load_product_config()
     bind_host = str(product_config.get("network", {}).get("bind_host", "0.0.0.0")).strip() or "0.0.0.0"
-    app_port = int(product_config.get("network", {}).get("app_port", 8086))
+    return bind_host, str(get_hermes_home()), str(product_install_root())
+
+
+def _render_product_service_unit(spec: ProductServiceUnitSpec, *, bind_host: str, hermes_home: str, install_root: str) -> str:
     _run_as_user, home_dir = _product_service_identity()
-    hermes_home = str(get_hermes_home())
-    install_root = str(product_install_root())
     return "\n".join(
         [
             "[Unit]",
-            "Description=Hermes Core Product App",
+            f"Description={spec.description}",
             "After=network-online.target docker.service",
             "Wants=network-online.target",
             "",
@@ -212,8 +228,9 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
             f"Environment=HERMES_CORE_INSTALL_DIR={install_root}",
             (
                 "ExecStart="
-                f"{sys.executable} -m uvicorn hermes_cli.product_app:create_product_app "
-                f"--factory --host {bind_host} --port {app_port}"
+                "/usr/bin/sg docker -c "
+                f"'{sys.executable} -m uvicorn {spec.module}:{spec.factory} "
+                f"--factory --host {bind_host} --port {spec.port}'"
             ),
             "Restart=always",
             "RestartSec=3",
@@ -223,41 +240,30 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
             "",
         ]
     )
+
+
+def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> str:
+    product_config = config or load_product_config()
+    bind_host, hermes_home, install_root = _service_bind_host_and_home(product_config)
+    spec = ProductServiceUnitSpec(
+        description="Hermes Core Product App",
+        module="hermes_cli.product_app",
+        factory="create_product_app",
+        port=int(product_config.get("network", {}).get("app_port", 8086)),
+    )
+    return _render_product_service_unit(spec, bind_host=bind_host, hermes_home=hermes_home, install_root=install_root)
 
 
 def _render_product_auth_proxy_service_unit(config: dict[str, Any] | None = None) -> str:
     product_config = config or load_product_config()
-    bind_host = str(product_config.get("network", {}).get("bind_host", "0.0.0.0")).strip() or "0.0.0.0"
-    auth_port = int(product_config.get("network", {}).get("pocket_id_port", 1411))
-    _run_as_user, home_dir = _product_service_identity()
-    hermes_home = str(get_hermes_home())
-    install_root = str(product_install_root())
-    return "\n".join(
-        [
-            "[Unit]",
-            "Description=Hermes Core Product Auth Proxy",
-            "After=network-online.target docker.service",
-            "Wants=network-online.target",
-            "",
-            "[Service]",
-            "Type=simple",
-            f"WorkingDirectory={home_dir}",
-            f"Environment=HOME={home_dir}",
-            f"Environment=HERMES_HOME={hermes_home}",
-            f"Environment=HERMES_CORE_INSTALL_DIR={install_root}",
-            (
-                "ExecStart="
-                f"{sys.executable} -m uvicorn hermes_cli.product_app:create_product_auth_proxy_app "
-                f"--factory --host {bind_host} --port {auth_port}"
-            ),
-            "Restart=always",
-            "RestartSec=3",
-            "",
-            "[Install]",
-            "WantedBy=default.target",
-            "",
-        ]
+    bind_host, hermes_home, install_root = _service_bind_host_and_home(product_config)
+    spec = ProductServiceUnitSpec(
+        description="Hermes Core Product Auth Proxy",
+        module="hermes_cli.product_app",
+        factory="create_product_auth_proxy_app",
+        port=int(product_config.get("network", {}).get("pocket_id_port", 1411)),
     )
+    return _render_product_service_unit(spec, bind_host=bind_host, hermes_home=hermes_home, install_root=install_root)
 
 
 def _write_product_app_service_unit(config: dict[str, Any] | None = None) -> None:
@@ -458,6 +464,28 @@ def _apt_install(packages: list[str]) -> None:
     _run([*env_prefix, "apt-get", "install", "-y", *packages], sudo=True)
 
 
+def _apt_package_available(package_name: str) -> bool:
+    result = _run(["apt-cache", "policy", package_name], check=False)
+    if result.returncode != 0:
+        return False
+    stdout = (result.stdout or "").strip().lower()
+    if not stdout:
+        return False
+    return "candidate: (none)" not in stdout
+
+
+def _linux_host_prereq_packages() -> list[str]:
+    packages = list(APT_INSTALL_PACKAGES)
+    for package_name in APT_DOCKER_COMPOSE_PACKAGE_CANDIDATES:
+        if _apt_package_available(package_name):
+            packages.append(package_name)
+            return packages
+    raise RuntimeError(
+        "Could not find a Docker Compose package on this Linux host. "
+        "Expected one of: docker-compose-v2, docker-compose-plugin, docker-compose."
+    )
+
+
 def ensure_linux_product_host_prereqs() -> dict[str, bool]:
     if not _is_linux():
         return {"installed_packages": False, "added_docker_group_membership": False}
@@ -468,7 +496,7 @@ def ensure_linux_product_host_prereqs() -> dict[str, bool]:
 
     installed_packages = False
     if not _docker_available() or not _docker_compose_available() or not _runsc_available():
-        _apt_install(APT_INSTALL_PACKAGES)
+        _apt_install(_linux_host_prereq_packages())
         installed_packages = True
 
     if installed_packages or not _docker_service_active():
@@ -552,6 +580,20 @@ def _remove_pocket_id_stack() -> None:
     _run(["docker", "rm", "-f", "hermes-pocket-id"], check=False)
 
 
+def _remove_product_user_services() -> None:
+    if not (_is_linux() and _systemd_available()):
+        return
+    _run(["systemctl", "--user", "disable", "--now", PRODUCT_APP_SERVICE_NAME], check=False)
+    _run(["systemctl", "--user", "disable", "--now", PRODUCT_AUTH_PROXY_SERVICE_NAME], check=False)
+    service_path = _product_app_service_path()
+    if service_path.exists():
+        service_path.unlink(missing_ok=True)
+    auth_proxy_path = _product_auth_proxy_service_path()
+    if auth_proxy_path.exists():
+        auth_proxy_path.unlink(missing_ok=True)
+    _run(["systemctl", "--user", "daemon-reload"], check=False)
+
+
 def _remove_runsc_registration_if_managed() -> bool:
     state = _product_install_state()
     if not state.get("managed_runsc_registration"):
@@ -604,16 +646,7 @@ def perform_product_cleanup() -> dict[str, bool]:
     if _docker_available():
         _remove_pocket_id_stack()
         _remove_runtime_containers()
-    if _is_linux() and _systemd_available():
-        _run(["systemctl", "--user", "disable", "--now", PRODUCT_APP_SERVICE_NAME], check=False)
-        _run(["systemctl", "--user", "disable", "--now", PRODUCT_AUTH_PROXY_SERVICE_NAME], check=False)
-        service_path = _product_app_service_path()
-        if service_path.exists():
-            service_path.unlink(missing_ok=True)
-        auth_proxy_path = _product_auth_proxy_service_path()
-        if auth_proxy_path.exists():
-            auth_proxy_path.unlink(missing_ok=True)
-        _run(["systemctl", "--user", "daemon-reload"], check=False)
+    _remove_product_user_services()
     removed_runsc_registration = _remove_runsc_registration_if_managed()
     shutil.rmtree(get_product_services_root(), ignore_errors=True)
     shutil.rmtree(get_product_storage_root(), ignore_errors=True)
@@ -638,11 +671,11 @@ def run_product_install(args: Any) -> None:
             "Added your user to the docker group. Run 'newgrp docker' or start a new login shell, then rerun 'hermes-core install'."
         )
         raise SystemExit(DOCKER_GROUP_RELOGIN_EXIT_CODE)
-    if not _runsc_available():
-        raise SystemExit("runsc is not installed on this machine")
     if not _docker_compose_available():
         raise SystemExit("docker compose is not available")
 
+    if not _runsc_available():
+        raise SystemExit("runsc is not installed on this machine")
     try:
         changed = ensure_runsc_registered_with_docker()
     except RuntimeError as exc:

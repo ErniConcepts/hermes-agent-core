@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -55,8 +56,9 @@ def _save_invites(invites: list[ProductInviteRecord]) -> None:
 
 def register_product_signup_invite(signup: ProductSignupToken) -> ProductInviteRecord:
     now = int(time.time())
+    invite_digest = hashlib.sha256(signup.token.encode("utf-8")).hexdigest()[:16]
     invite = ProductInviteRecord(
-        invite_id=f"invite-{signup.token}",
+        invite_id=f"invite-{invite_digest}",
         token=signup.token,
         signup_url=signup.signup_url,
         created_at=now,

@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import re
+import secrets
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -94,7 +95,8 @@ def _runtime_token() -> str:
 
 
 def _require_runtime_token(header_value: str | None, expected: str) -> None:
-    if header_value != expected:
+    candidate = header_value or ""
+    if not candidate or not secrets.compare_digest(candidate, expected):
         raise HTTPException(status_code=401, detail="Unauthorized runtime request")
 
 

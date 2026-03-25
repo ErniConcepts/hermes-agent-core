@@ -82,6 +82,9 @@ Hermes-native configuration remains on the upstream CLI surface:
 
 - Runtime access remains user-scoped.
 - No LAN exposure for internal runtime control ports.
+- Browser-side mutations require both same-origin validation and CSRF validation.
+- Pocket ID proxying must not trust client-supplied forwarded headers.
+- Signup token material must stay server-side; admin placeholder IDs must not expose raw tokens.
 - Product-side adaptation is preferred over upstream Hermes patching.
 - Keep browser admin scope narrow (users/invites/deactivate), not full platform config.
 - Current control plane is still host-installed and should be treated as an interim architecture.

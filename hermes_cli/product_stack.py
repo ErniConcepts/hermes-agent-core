@@ -90,10 +90,7 @@ def _url_scheme(config: Dict[str, Any]) -> str:
         if configured not in {"http", "https"}:
             raise ValueError("product network.url_scheme must be http or https")
         return configured
-    public_host = _public_host(config).lower()
-    if public_host in {"localhost", "127.0.0.1", "::1"}:
-        return "http"
-    return "https"
+    return "http"
 
 
 def _validate_public_host(host: str) -> None:

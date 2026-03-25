@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
 import logging
@@ -31,6 +32,25 @@ logger = logging.getLogger(__name__)
 _RUNTIME_HEALTH_TTL_SECONDS = 10.0
 _RUNTIME_HEALTH_CACHE: dict[str, float] = {}
 _RUNTIME_WORKSPACE_PATH = "/workspace"
+_RUNTIME_ENV_MATCH_KEYS = {
+    "HERMES_PRODUCT_PROVIDER",
+    "HERMES_PRODUCT_MODEL",
+    "OPENAI_BASE_URL",
+    "OPENAI_API_KEY",
+    "HERMES_PRODUCT_TOOLSETS",
+    "HERMES_PRODUCT_API_MODE",
+    "HERMES_PRODUCT_RUNTIME_MODE",
+}
+
+
+@dataclass(frozen=True)
+class ProductRuntimeLaunchSettings:
+    model: str
+    provider: str
+    base_url: str
+    api_mode: str
+    api_key: str
+    toolsets: list[str]
 
 
 def _secure_runtime_dir(path: Path) -> None:
@@ -251,29 +271,7 @@ def _write_runtime_cli_config(config: dict[str, Any], user_id: str, *, base_url:
     _secure_runtime_file(config_path)
 
 
-def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord:
-    product_config = config or load_product_config()
-    ensure_hermes_home()
-    user_id = _user_id(user)
-    existing = load_runtime_record(user_id, config=product_config)
-    runtime_root = _runtime_root(product_config, user_id)
-    hermes_home = _hermes_home(product_config, user_id)
-    workspace_root = _workspace_root(product_config, user_id)
-    for path in (
-        _product_storage_root(product_config),
-        _product_users_root(product_config),
-        runtime_root,
-        hermes_home,
-        hermes_home / "memories",
-        workspace_root,
-    ):
-        path.mkdir(parents=True, exist_ok=True)
-        _secure_runtime_dir(path)
-
-    soul_path = hermes_home / "SOUL.md"
-    soul_path.write_text(render_product_soul(product_config), encoding="utf-8")
-    _secure_runtime_file(soul_path)
-
+def _resolve_runtime_launch_settings(product_config: dict[str, Any]) -> ProductRuntimeLaunchSettings:
     try:
         model_cfg = resolve_hermes_model_config()
     except ValueError as exc:
@@ -299,34 +297,116 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
         raise RuntimeError("Hermes model.default must be configured. Run 'hermes setup model'.")
     if not base_url:
         raise RuntimeError("Hermes runtime base URL is not available. Run 'hermes setup model'.")
-    base_url = _resolve_runtime_model_base_url(product_config, base_url)
-    _write_runtime_cli_config(product_config, user_id, base_url=base_url, model=model)
+
+    return ProductRuntimeLaunchSettings(
+        model=model,
+        provider=provider,
+        base_url=_resolve_runtime_model_base_url(product_config, base_url),
+        api_mode=api_mode,
+        api_key=api_key,
+        toolsets=_runtime_toolsets(product_config),
+    )
+
+
+def _runtime_environment(
+    settings: ProductRuntimeLaunchSettings,
+    *,
+    session_id: str,
+    auth_token: str,
+    internal_port: int,
+) -> dict[str, str]:
+    return {
+        "HERMES_HOME": "/srv/hermes",
+        "HERMES_WRITE_SAFE_ROOT": _RUNTIME_WORKSPACE_PATH,
+        "TERMINAL_CWD": _RUNTIME_WORKSPACE_PATH,
+        "OPENAI_BASE_URL": settings.base_url,
+        "OPENAI_API_KEY": settings.api_key,
+        "HERMES_PRODUCT_RUNTIME_MODE": "product",
+        "HERMES_RUNTIME_HOST": "0.0.0.0",
+        "HERMES_RUNTIME_PORT": str(internal_port),
+        "HERMES_PRODUCT_SESSION_ID": session_id,
+        "HERMES_PRODUCT_TOOLSETS": ",".join(settings.toolsets),
+        "HERMES_PRODUCT_PROVIDER": settings.provider,
+        "HERMES_PRODUCT_API_MODE": settings.api_mode,
+        "HERMES_PRODUCT_MODEL": settings.model,
+        "HERMES_PRODUCT_RUNTIME_TOKEN": auth_token,
+    }
+
+
+def _write_runtime_env_file(path: Path, env: dict[str, str]) -> None:
+    invalid_keys: list[str] = []
+    for key, value in env.items():
+        if any(char in value for char in ("\n", "\r", "\x00")):
+            invalid_keys.append(key)
+    if invalid_keys:
+        joined = ", ".join(sorted(invalid_keys))
+        raise RuntimeError(f"Runtime env contains unsupported newline or NUL characters: {joined}")
+    path.write_text("".join(f"{key}={value}\n" for key, value in sorted(env.items())), encoding="utf-8")
+    _secure_file(path)
+
+
+def _runtime_mounts(record: ProductRuntimeRecord) -> list[str]:
+    hermes_home = Path(record.hermes_home)
+    mounts = [
+        f"type=bind,src={hermes_home.as_posix()},dst=/srv/hermes",
+        f"type=bind,src={(hermes_home / 'SOUL.md').as_posix()},dst=/srv/hermes/SOUL.md,readonly",
+        f"type=bind,src={Path(record.workspace_root).as_posix()},dst={_RUNTIME_WORKSPACE_PATH}",
+    ]
+    runtime_config = hermes_home / "config.yaml"
+    if runtime_config.exists():
+        mounts.insert(
+            2,
+            f"type=bind,src={runtime_config.as_posix()},dst=/srv/hermes/config.yaml,readonly",
+        )
+    return mounts
+
+
+def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord:
+    product_config = config or load_product_config()
+    ensure_hermes_home()
+    user_id = _user_id(user)
+    existing = load_runtime_record(user_id, config=product_config)
+    runtime_root = _runtime_root(product_config, user_id)
+    hermes_home = _hermes_home(product_config, user_id)
+    workspace_root = _workspace_root(product_config, user_id)
+    for path in (
+        _product_storage_root(product_config),
+        _product_users_root(product_config),
+        runtime_root,
+        hermes_home,
+        hermes_home / "memories",
+        workspace_root,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+        _secure_runtime_dir(path)
+
+    soul_path = hermes_home / "SOUL.md"
+    soul_path.write_text(render_product_soul(product_config), encoding="utf-8")
+    _secure_runtime_file(soul_path)
+
+    launch_settings = _resolve_runtime_launch_settings(product_config)
+    _write_runtime_cli_config(
+        product_config,
+        user_id,
+        base_url=launch_settings.base_url,
+        model=launch_settings.model,
+    )
     session_id = existing.session_id if existing is not None else product_runtime_session_id(user_id)
     runtime_port = existing.runtime_port if existing is not None else _resolve_runtime_port(product_config, user_id)
     runtime_key = existing.runtime_key if existing is not None and existing.runtime_key else _runtime_key(user_id)
     container_name = existing.container_name if existing is not None else f"hermes-product-runtime-{runtime_key}"
-    toolsets = _runtime_toolsets(product_config)
     auth_token = existing.auth_token if existing is not None and existing.auth_token else secrets.token_urlsafe(32)
 
-    env = {
-        "HERMES_HOME": "/srv/hermes",
-        "HERMES_WRITE_SAFE_ROOT": _RUNTIME_WORKSPACE_PATH,
-        "TERMINAL_CWD": _RUNTIME_WORKSPACE_PATH,
-        "OPENAI_BASE_URL": base_url,
-        "OPENAI_API_KEY": api_key,
-        "HERMES_PRODUCT_RUNTIME_MODE": "product",
-        "HERMES_RUNTIME_HOST": "0.0.0.0",
-        "HERMES_RUNTIME_PORT": str(_runtime_internal_port(product_config)),
-        "HERMES_PRODUCT_SESSION_ID": session_id,
-        "HERMES_PRODUCT_TOOLSETS": ",".join(toolsets),
-        "HERMES_PRODUCT_PROVIDER": provider,
-        "HERMES_PRODUCT_API_MODE": api_mode,
-        "HERMES_PRODUCT_MODEL": model,
-        "HERMES_PRODUCT_RUNTIME_TOKEN": auth_token,
-    }
     env_path = _env_path(product_config, user_id)
-    env_path.write_text("".join(f"{key}={value}\n" for key, value in sorted(env.items())), encoding="utf-8")
-    _secure_file(env_path)
+    _write_runtime_env_file(
+        env_path,
+        _runtime_environment(
+            launch_settings,
+            session_id=session_id,
+            auth_token=auth_token,
+            internal_port=_runtime_internal_port(product_config),
+        ),
+    )
 
     record = ProductRuntimeRecord(
         user_id=user_id,
@@ -350,18 +430,7 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
 
 def _docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) -> list[str]:
     internal_port = _runtime_internal_port(config)
-    hermes_home = Path(record.hermes_home)
-    mounts = [
-        f"type=bind,src={hermes_home.as_posix()},dst=/srv/hermes",
-        f"type=bind,src={(hermes_home / 'SOUL.md').as_posix()},dst=/srv/hermes/SOUL.md,readonly",
-        f"type=bind,src={Path(record.workspace_root).as_posix()},dst={_RUNTIME_WORKSPACE_PATH}",
-    ]
-    runtime_config = hermes_home / "config.yaml"
-    if runtime_config.exists():
-        mounts.insert(
-            2,
-            f"type=bind,src={runtime_config.as_posix()},dst=/srv/hermes/config.yaml,readonly",
-        )
+    mounts = _runtime_mounts(record)
     command = [
         "docker",
         "run",
@@ -455,16 +524,7 @@ def _running_container_matches_record(record: ProductRuntimeRecord, container_st
     expected_env = _runtime_launch_env(record)
     if not container_env or not expected_env:
         return False
-    keys_to_match = {
-        "HERMES_PRODUCT_PROVIDER",
-        "HERMES_PRODUCT_MODEL",
-        "OPENAI_BASE_URL",
-        "OPENAI_API_KEY",
-        "HERMES_PRODUCT_TOOLSETS",
-        "HERMES_PRODUCT_API_MODE",
-        "HERMES_PRODUCT_RUNTIME_MODE",
-    }
-    for key in keys_to_match:
+    for key in _RUNTIME_ENV_MATCH_KEYS:
         if container_env.get(key, "") != expected_env.get(key, ""):
             return False
     return True
