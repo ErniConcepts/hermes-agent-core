@@ -191,6 +191,12 @@ export HERMES_CORE_INSTALL_DIR="$INSTALL_DIR"
 exec "$VENV_DIR/bin/hermes-core" "\$@"
 EOF
     chmod +x "$USER_BIN_DIR/hermes-core"
+    cat > "$USER_BIN_DIR/hermes" <<EOF
+#!/bin/bash
+export HERMES_CORE_INSTALL_DIR="$INSTALL_DIR"
+exec "$VENV_DIR/bin/hermes" "\$@"
+EOF
+    chmod +x "$USER_BIN_DIR/hermes"
 }
 
 docker_access_ready() {

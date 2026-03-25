@@ -21,8 +21,8 @@ from hermes_cli.product_stack import (
     resolve_product_urls,
 )
 from hermes_cli.product_install import ensure_product_app_service_started, validate_product_host_prereqs
+from hermes_cli.product_install import product_install_root
 from hermes_cli.setup import (
-    PROJECT_ROOT,
     Colors,
     color,
     get_config_path,
@@ -304,7 +304,7 @@ def _print_product_setup_summary() -> None:
     print_info(f"Secrets file:   {get_env_path()}")
     print_info(f"Product config: {hermes_home / 'product.yaml'}")
     print_info(f"Data folder:    {hermes_home}")
-    print_info(f"Install dir:    {PROJECT_ROOT}")
+    print_info(f"Install dir:    {product_install_root()}")
     print_info(f"Canonical app URL:       {urls['app_base_url']}")
     print_info(f"Canonical Pocket ID URL: {urls['issuer_url']}")
     if bind_host in {"127.0.0.1", "localhost"}:

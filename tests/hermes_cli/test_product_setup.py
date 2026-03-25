@@ -183,6 +183,7 @@ def test_product_setup_noninteractive_prints_guidance(tmp_path, capsys, monkeypa
 
 def test_product_setup_summary_includes_first_admin_signup_url(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_CORE_INSTALL_DIR", str(tmp_path / "checkout"))
     from hermes_cli.product_config import save_product_config
 
     product_config = load_product_config()
@@ -199,6 +200,7 @@ def test_product_setup_summary_includes_first_admin_signup_url(tmp_path, capsys,
     _print_product_setup_summary()
 
     out = capsys.readouterr().out
+    assert f"Install dir:    {tmp_path / 'checkout'}" in out
     assert "First admin sign-up:" in out
     assert "http://localhost:1411/setup" in out
     assert "hermes setup model" in out
