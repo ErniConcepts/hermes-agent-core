@@ -13,7 +13,7 @@ Deliver a local, multi-user Hermes distribution that can be installed and operat
   - installs product services/assets
   - runs setup unless explicitly skipped
 - `hermes-core setup`
-  - configures product network/auth/identity/workspace settings
+  - configures product network/auth/identity/workspace settings only
   - bootstraps Pocket ID + OIDC client
   - starts app/runtime stack
 - `hermes-core uninstall`
@@ -35,22 +35,28 @@ Hermes-native configuration remains on the upstream CLI surface:
   - host/origin settings
   - Pocket ID integration
   - workspace quota
+  - runtime container infrastructure
 - Hermes config controls:
   - model/provider selection
   - enabled toolsets and tools
   - gateway configuration
   - general agent behavior
+- Product uninstall preserves the generic Hermes config by design.
+- A reinstall therefore reuses prior model/provider settings unless the operator explicitly removes `~/.hermes/config.yaml` and related non-product env entries.
 
 ## Runtime Model
 
 - Per-user runtime containers.
 - Per-user runtimes resolve model/provider/tool behavior from the main Hermes config.
+- Runtime reuse is config-aware:
+  - if staged runtime env differs from the running container env, the runtime container is recreated automatically
 - Product runtime API surface remains narrow:
   - `GET /healthz`
   - `GET /runtime/session`
   - `POST /runtime/turn`
   - `POST /runtime/turn/stream`
 - Runtime workspace is user-scoped and live-mounted for user uploads.
+- Runtime-local `SOUL.md` and generated runtime `config.yaml` are mounted read-only inside the container.
 
 ## Auth and Access Contract
 
@@ -58,6 +64,7 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Product app is an OIDC client.
 - In Tailscale mode, Tailnet URL is canonical browser/login origin.
 - Native first-admin bootstrap is Pocket ID setup flow.
+- First admin bootstrap can complete before any Hermes model is configured.
 - Post-bootstrap, setup exposure is blocked through product auth ingress.
 
 ## Admin User Management Contract
@@ -78,6 +85,7 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Product-side adaptation is preferred over upstream Hermes patching.
 - Keep browser admin scope narrow (users/invites/deactivate), not full platform config.
 - Current control plane is still host-installed and should be treated as an interim architecture.
+- Product setup must not silently override Hermes-native model or tool configuration.
 
 ## Future Direction: Contained Control Plane
 

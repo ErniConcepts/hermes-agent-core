@@ -53,5 +53,8 @@ Keep fork behavior when upstream changes would break one of these product guaran
 - auth-origin correctness (localhost/tailscale contract)
 - runtime isolation and user workspace boundaries
 - narrow product runtime/app API surface
+- clean setup boundary:
+  - `hermes-core` owns product install/auth/network/storage
+  - `hermes setup ...` owns model/tools/gateway/agent behavior
 
 Document any retained divergence in commit messages and product-side tests.

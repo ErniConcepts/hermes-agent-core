@@ -25,12 +25,17 @@ The deployment layer lives primarily in `hermes_cli/product_*` and includes:
     - public host
     - optional Tailscale mode
     - Pocket ID bootstrap
-    - model route
-    - runtime toolsets
     - workspace limits
 - `hermes-core uninstall`
   - removes deployment data and services
   - cleans up installer-managed state
+
+Hermes-native configuration stays on the upstream CLI:
+
+- `hermes setup model`
+- `hermes setup tools`
+- `hermes setup gateway`
+- `hermes setup agent`
 
 The authenticated web surface is intentionally narrow:
 
@@ -81,21 +86,25 @@ If `~/.local/bin` is not on your `PATH` yet, use the full launcher path after in
 
 ## Quick Start
 
-After install:
+Typical install flow:
 
-```bash
-hermes-core setup
-```
+1. run the installer as your normal user
+2. answer the product questions:
+   - public host
+   - optional Tailscale exposure
+   - optional SOUL template path
+   - per-user workspace limit
+3. let `hermes-core install` start Pocket ID and the app/auth services
+4. open the first-admin sign-up URL from the setup summary
+5. create the first admin account in Pocket ID
+6. configure Hermes itself with the upstream CLI:
+   - `hermes setup model`
+   - `hermes setup tools`
+   - optional: `hermes setup gateway`
+   - optional: `hermes setup agent`
+7. sign into the app and start using personalized agent sessions
 
-Typical flow:
-
-1. choose the host users in your network will open
-2. enable or disable Tailscale exposure
-3. choose the model route
-4. choose the runtime toolsets
-5. let setup start Pocket ID and the app services
-6. open the first-admin setup URL
-7. sign in and start using personalized agent sessions
+The first admin can be created before model configuration exists. In that state, auth works but chat runtimes will not answer until `hermes setup model` has been completed.
 
 Useful commands:
 
@@ -104,8 +113,9 @@ hermes-core install
 hermes-core install --skip-setup
 hermes-core setup
 hermes-core setup network
-hermes-core setup model
 hermes-core setup bootstrap
+hermes setup model
+hermes setup tools
 hermes-core uninstall --yes
 ```
 
@@ -118,6 +128,15 @@ To remove the product state and services:
 
 ```bash
 hermes-core uninstall --yes
+```
+
+This removes the product layer, but it intentionally preserves the main Hermes config in `~/.hermes/config.yaml` and the non-product secrets in `~/.hermes/.env`.
+
+That means a reinstall will reuse the previous model/provider configuration unless you also remove the generic Hermes config:
+
+```bash
+rm -f ~/.hermes/config.yaml
+rm -f ~/.hermes/.env
 ```
 
 Then rerun the installer command above.
@@ -152,10 +171,12 @@ Current high-level runtime flow:
 
 1. `hermes-core install` prepares host prerequisites and installs product services.
 2. `hermes-core setup` writes `~/.hermes/product.yaml` and bootstraps Pocket ID + OIDC client.
-3. App service (`hermes_cli/product_app.py`) serves auth/session, chat proxy, workspace APIs, and narrow admin APIs.
-4. Pocket ID provides identity and signup-token onboarding; the app stays an OIDC client.
-5. Per-user runtime containers are launched by runtime orchestration (`hermes_cli/product_runtime.py` + `hermes_cli/product_runtime_service.py`).
-6. User workspace files are written to user-scoped storage and live-mounted into the corresponding runtime.
+3. `hermes setup ...` configures Hermes-native model/tools/gateway/agent behavior in `~/.hermes/config.yaml`.
+4. App service (`hermes_cli/product_app.py`) serves auth/session, chat proxy, workspace APIs, and narrow admin APIs.
+5. Pocket ID provides identity and signup-token onboarding; the app stays an OIDC client.
+6. Per-user runtime containers are launched by runtime orchestration (`hermes_cli/product_runtime.py` + `hermes_cli/product_runtime_service.py`).
+7. Runtime launch settings are derived from the main Hermes config, while product infrastructure comes from `product.yaml`.
+8. User workspace files are written to user-scoped storage and live-mounted into the corresponding runtime.
 
 Primary runtime surfaces:
 

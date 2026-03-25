@@ -17,6 +17,11 @@ The fork adds a product layer around upstream Hermes:
   - `hermes-core install`
   - `hermes-core setup`
   - `hermes-core uninstall`
+- Hermes-native operator CLI:
+  - `hermes setup model`
+  - `hermes setup tools`
+  - `hermes setup gateway`
+  - `hermes setup agent`
 - Auth:
   - Pocket ID (bundled, Docker-managed)
   - Product app uses OIDC client flow
@@ -45,6 +50,24 @@ The fork adds a product layer around upstream Hermes:
 - Primary production target: Linux (Ubuntu/Debian installer path).
 - Windows is acceptable for development, not the deployment baseline.
 - Product services are user-level where possible; host-level changes require explicit sudo.
+- `hermes-core uninstall` removes the product layer only. It does not wipe the main Hermes config unless the operator does that separately.
+
+## Current Setup Boundary
+
+- `hermes-core install` / `hermes-core setup` own:
+  - public host / LAN exposure
+  - optional Tailscale exposure
+  - Pocket ID bootstrap and OIDC client wiring
+  - SOUL template selection
+  - per-user workspace quota
+  - product service startup
+- `hermes setup ...` owns:
+  - model/provider configuration
+  - tool policy
+  - gateway/messaging setup
+  - agent defaults
+
+Product runtimes are considered ready when the Hermes config resolves to a runnable model/provider configuration. Readiness is determined from config state, not from whether a user happened to run every setup command.
 
 ## Maintainer Workflow
 
@@ -57,12 +80,20 @@ For any change:
 5. Update `README.md` (if user-facing) and `docs/fork/*` (if maintainer-facing).
 6. Commit only intended files; avoid bundling unrelated local artifacts.
 
+For installer/runtime changes, also smoke-test:
+
+1. `hermes-core install` on a clean Linux or WSL environment
+2. first-admin signup flow
+3. `hermes setup model`
+4. one real runtime turn through `/runtime/turn` or the web chat UI
+
 ## Security Defaults to Preserve
 
 - No broad runtime filesystem access outside user workspace.
 - No accidental exposure of runtime ports to LAN.
 - Keep auth origin handling canonical (especially in Tailscale mode).
 - Keep admin UI narrow; avoid growing it into a full config console.
+- Keep runtime launch derived from the main Hermes config rather than adding a second hidden product-side source of truth.
 
 ## Related Docs
 
