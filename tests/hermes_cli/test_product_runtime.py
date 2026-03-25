@@ -7,6 +7,7 @@ from hermes_cli.config import load_config, save_config, save_env_value
 from hermes_cli.product_runtime import (
     ProductRuntimeRecord,
     _RUNTIME_WORKSPACE_PATH,
+    _running_container_matches_record,
     _docker_run_command,
     _normalize_runtime_session_payload,
     _resolve_runtime_model_base_url,
@@ -243,6 +244,7 @@ def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, mo
 
     assert f"HERMES_WRITE_SAFE_ROOT={_RUNTIME_WORKSPACE_PATH}" in env_text
     assert f"TERMINAL_CWD={_RUNTIME_WORKSPACE_PATH}" in env_text
+    assert "HERMES_PRODUCT_PROVIDER=custom" in env_text
     assert "OPENAI_BASE_URL=http://host.docker.internal:8080/v1" in env_text
 
 
@@ -357,3 +359,55 @@ def test_stage_product_runtime_requires_ready_hermes_model_provider(tmp_path, mo
 
     with pytest.raises(RuntimeError, match="hermes setup model"):
         stage_product_runtime({"preferred_username": "admin"})
+
+
+def test_running_container_matches_record_detects_stale_runtime_env(tmp_path):
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    env_file = runtime_root / "runtime.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "HERMES_PRODUCT_PROVIDER=custom",
+                "HERMES_PRODUCT_MODEL=qwen3.5-9b-local",
+                "OPENAI_BASE_URL=http://host.docker.internal:11437/v1",
+                "OPENAI_API_KEY=product-runtime",
+                "HERMES_PRODUCT_TOOLSETS=hermes-cli",
+                "HERMES_PRODUCT_API_MODE=chat_completions",
+                "HERMES_PRODUCT_RUNTIME_MODE=product",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    record = ProductRuntimeRecord(
+        user_id="admin",
+        runtime_key="admin-deadbeef0000",
+        display_name="Admin",
+        session_id="product_admin_123",
+        container_name="runtime-admin",
+        runtime="runc",
+        runtime_port=18091,
+        runtime_root=str(runtime_root),
+        hermes_home=str(runtime_root / "hermes"),
+        workspace_root=str(tmp_path / "workspace"),
+        env_file=str(env_file),
+        manifest_file=str(runtime_root / "launch-spec.json"),
+        auth_token="runtime-token",
+        status="running",
+    )
+    stale_container = {
+        "Config": {
+            "Env": [
+                "HERMES_PRODUCT_PROVIDER=openrouter",
+                "HERMES_PRODUCT_MODEL=anthropic/claude-opus-4.6",
+                "OPENAI_BASE_URL=https://openrouter.ai/api/v1",
+                "OPENAI_API_KEY=product-runtime",
+                "HERMES_PRODUCT_TOOLSETS=hermes-cli",
+                "HERMES_PRODUCT_API_MODE=chat_completions",
+                "HERMES_PRODUCT_RUNTIME_MODE=product",
+            ]
+        }
+    }
+
+    assert _running_container_matches_record(record, stale_container) is False

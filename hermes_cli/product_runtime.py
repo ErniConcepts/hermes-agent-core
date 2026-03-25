@@ -288,7 +288,10 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
         raise RuntimeError(message) from exc
 
     model = str(model_cfg.get("default") or "").strip()
-    provider = str(route.get("provider") or model_cfg.get("provider") or "").strip() or "custom"
+    configured_provider = str(model_cfg.get("provider") or "").strip().lower()
+    provider = str(route.get("provider") or configured_provider or "").strip().lower() or "custom"
+    if configured_provider == "custom":
+        provider = "custom"
     base_url = str(route.get("base_url") or "").strip()
     api_mode = str(route.get("api_mode") or model_cfg.get("api_mode") or "chat_completions").strip() or "chat_completions"
     api_key = str(route.get("api_key") or "").strip() or "product-runtime"
@@ -419,6 +422,54 @@ def _docker_inspect_state(container_name: str) -> dict[str, Any] | None:
     return payload[0]
 
 
+def _container_env_map(container_state: dict[str, Any] | None) -> dict[str, str]:
+    if not isinstance(container_state, dict):
+        return {}
+    raw_env = container_state.get("Config", {}).get("Env", [])
+    if not isinstance(raw_env, list):
+        return {}
+    env_map: dict[str, str] = {}
+    for item in raw_env:
+        if not isinstance(item, str) or "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        env_map[key] = value
+    return env_map
+
+
+def _runtime_launch_env(record: ProductRuntimeRecord) -> dict[str, str]:
+    env_path = Path(record.env_file)
+    if not env_path.exists():
+        return {}
+    env_map: dict[str, str] = {}
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        env_map[key] = value
+    return env_map
+
+
+def _running_container_matches_record(record: ProductRuntimeRecord, container_state: dict[str, Any] | None) -> bool:
+    container_env = _container_env_map(container_state)
+    expected_env = _runtime_launch_env(record)
+    if not container_env or not expected_env:
+        return False
+    keys_to_match = {
+        "HERMES_PRODUCT_PROVIDER",
+        "HERMES_PRODUCT_MODEL",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_KEY",
+        "HERMES_PRODUCT_TOOLSETS",
+        "HERMES_PRODUCT_API_MODE",
+        "HERMES_PRODUCT_RUNTIME_MODE",
+    }
+    for key in keys_to_match:
+        if container_env.get(key, "") != expected_env.get(key, ""):
+            return False
+    return True
+
+
 def _remove_container_if_exists(container_name: str) -> None:
     subprocess.run(
         ["docker", "rm", "-f", container_name],
@@ -463,16 +514,21 @@ def ensure_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | Non
     record = stage_product_runtime(user, config=product_config)
     container_state = _docker_inspect_state(record.container_name)
     if container_state and bool(container_state.get("State", {}).get("Running")):
-        running = ProductRuntimeRecord(**{**record.model_dump(), "status": "running"})
-        last_healthy_at = _RUNTIME_HEALTH_CACHE.get(running.container_name, 0.0)
-        if time.monotonic() - last_healthy_at > _RUNTIME_HEALTH_TTL_SECONDS:
-            _wait_for_runtime_health(running)
-        logger.info(
-            "product_runtime ensure for %s reused running container in %.0fms",
-            running.container_name,
-            (time.perf_counter() - started) * 1000,
-        )
-        return running
+        if not _running_container_matches_record(record, container_state):
+            _remove_container_if_exists(record.container_name)
+            container_state = None
+            _RUNTIME_HEALTH_CACHE.pop(record.container_name, None)
+        else:
+            running = ProductRuntimeRecord(**{**record.model_dump(), "status": "running"})
+            last_healthy_at = _RUNTIME_HEALTH_CACHE.get(running.container_name, 0.0)
+            if time.monotonic() - last_healthy_at > _RUNTIME_HEALTH_TTL_SECONDS:
+                _wait_for_runtime_health(running)
+            logger.info(
+                "product_runtime ensure for %s reused running container in %.0fms",
+                running.container_name,
+                (time.perf_counter() - started) * 1000,
+            )
+            return running
 
     _remove_container_if_exists(record.container_name)
     result = subprocess.run(
