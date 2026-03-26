@@ -431,9 +431,17 @@ def test_product_install_root_defaults_under_hermes_home(tmp_path, monkeypatch):
 
 def test_perform_product_cleanup_removes_product_files_and_env_keys(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_CORE_INSTALL_DIR", str(tmp_path / "hermes-core"))
+    monkeypatch.setattr("hermes_cli.product_install.Path.home", lambda: tmp_path)
     product_root = tmp_path / "product"
     product_root.mkdir(parents=True)
     (product_root / "services").mkdir()
+    install_root = tmp_path / "hermes-core"
+    install_root.mkdir()
+    launcher_dir = tmp_path / ".local" / "bin"
+    launcher_dir.mkdir(parents=True)
+    (launcher_dir / "hermes").write_text("launcher\n", encoding="utf-8")
+    (launcher_dir / "hermes-core").write_text("launcher\n", encoding="utf-8")
     (tmp_path / "product.yaml").write_text("product: {}\n", encoding="utf-8")
     (tmp_path / ".env").write_text(
         "HERMES_PRODUCT_OIDC_CLIENT_SECRET=one\n"
@@ -450,8 +458,31 @@ def test_perform_product_cleanup_removes_product_files_and_env_keys(tmp_path, mo
 
     assert result["removed_runsc_registration"] is False
     assert not product_root.exists()
+    assert not install_root.exists()
+    assert not (launcher_dir / "hermes").exists()
+    assert not (launcher_dir / "hermes-core").exists()
     assert not (tmp_path / "product.yaml").exists()
     assert (tmp_path / ".env").read_text(encoding="utf-8").strip() == "OTHER_KEY=keep"
+
+
+def test_remove_path_uses_sudo_when_product_storage_is_root_owned(tmp_path, monkeypatch):
+    target = tmp_path / "product"
+    target.mkdir()
+    calls = []
+
+    def _fake_rmtree(path):
+        raise PermissionError("blocked")
+
+    monkeypatch.setattr(product_install.shutil, "rmtree", _fake_rmtree)
+    monkeypatch.setattr("hermes_cli.product_install._is_linux", lambda: True)
+    monkeypatch.setattr(
+        "hermes_cli.product_install._run",
+        lambda command, **kwargs: calls.append((command, kwargs)) or type("_Result", (), {"returncode": 0})(),
+    )
+
+    product_install._remove_path(target)
+
+    assert calls == [(["rm", "-rf", str(target)], {"sudo": True})]
 
 
 def test_remove_runsc_registration_if_managed_updates_state(tmp_path, monkeypatch):

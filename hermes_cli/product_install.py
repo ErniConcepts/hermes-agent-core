@@ -609,6 +609,10 @@ def _remove_runtime_containers() -> None:
         _run(["docker", "rm", "-f", container_id], check=False)
 
 
+def _remove_runtime_image() -> None:
+    _run(["docker", "rmi", "-f", PRODUCT_RUNTIME_IMAGE_TAG], check=False)
+
+
 def _remove_pocket_id_stack() -> None:
     compose_path = get_pocket_id_compose_path()
     if compose_path.exists():
@@ -617,6 +621,32 @@ def _remove_pocket_id_stack() -> None:
             check=False,
         )
     _run(["docker", "rm", "-f", "hermes-pocket-id"], check=False)
+
+
+def _remove_path(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+        return
+    except PermissionError:
+        pass
+    if not (_is_linux() and path.is_absolute()):
+        raise
+    command = ["rm", "-rf" if path.is_dir() and not path.is_symlink() else "-f", str(path)]
+    _run(command, sudo=True)
+
+
+def _remove_install_tree_and_launchers() -> None:
+    for launcher_path in (
+        Path.home() / ".local" / "bin" / "hermes",
+        Path.home() / ".local" / "bin" / "hermes-core",
+    ):
+        _remove_path(launcher_path)
+    _remove_path(product_install_root())
 
 
 def _remove_product_user_services() -> None:
@@ -685,12 +715,14 @@ def perform_product_cleanup() -> dict[str, bool]:
     if _docker_available():
         _remove_pocket_id_stack()
         _remove_runtime_containers()
+        _remove_runtime_image()
     _remove_product_user_services()
     removed_runsc_registration = _remove_runsc_registration_if_managed()
-    shutil.rmtree(get_product_services_root(), ignore_errors=True)
-    shutil.rmtree(get_product_storage_root(), ignore_errors=True)
+    _remove_path(get_product_services_root())
+    _remove_path(get_product_storage_root())
     get_product_config_path().unlink(missing_ok=True)
     _remove_env_keys(PRODUCT_SECRET_KEYS)
+    _remove_install_tree_and_launchers()
     return {
         "removed_runsc_registration": removed_runsc_registration,
     }
