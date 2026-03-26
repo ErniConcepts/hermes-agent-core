@@ -8,6 +8,7 @@ import re
 import socket
 import subprocess
 import sys
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,71 @@ def _detect_tailscale_identity(command_path: str) -> tuple[str, str]:
     return device_name, tailnet_name
 
 
+def _local_interface_addresses() -> set[str]:
+    addresses = {"127.0.0.1", "::1"}
+    if os.name != "nt":
+        result = subprocess.run(
+            ["hostname", "-I"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        for token in (result.stdout or "").split():
+            try:
+                addresses.add(str(ip_address(token.strip())))
+            except ValueError:
+                continue
+    for candidate in {socket.gethostname(), socket.getfqdn(), "localhost"}:
+        if not candidate:
+            continue
+        try:
+            infos = socket.getaddrinfo(candidate, None, proto=socket.IPPROTO_TCP)
+        except OSError:
+            continue
+        for info in infos:
+            try:
+                addresses.add(str(ip_address(info[4][0])))
+            except (ValueError, IndexError, TypeError):
+                continue
+    return addresses
+
+
+def _resolve_hostname_addresses(hostname: str) -> set[str]:
+    resolved: set[str] = set()
+    for info in socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP):
+        try:
+            resolved.add(str(ip_address(info[4][0])))
+        except (ValueError, IndexError, TypeError):
+            continue
+    return resolved
+
+
+def _validate_public_host_for_this_machine(public_host: str) -> str | None:
+    if public_host.lower() == "localhost":
+        return None
+    try:
+        resolved = _resolve_hostname_addresses(public_host)
+    except OSError:
+        return (
+            f"Host '{public_host}' does not currently resolve on this machine. "
+            "LAN access will work only after DNS or mDNS points that name at this device."
+        )
+    if not resolved:
+        return (
+            f"Host '{public_host}' does not currently resolve on this machine. "
+            "LAN access will work only after DNS or mDNS points that name at this device."
+        )
+    local_addresses = _local_interface_addresses()
+    if local_addresses and resolved.isdisjoint(local_addresses):
+        resolved_text = ", ".join(sorted(resolved))
+        local_text = ", ".join(sorted(local_addresses))
+        raise ValueError(
+            f"Host '{public_host}' resolves to {resolved_text}, not this machine ({local_text}). "
+            "Choose localhost or a hostname that resolves to this device."
+        )
+    return None
+
+
 def setup_product_network() -> None:
     from hermes_cli.product_stack import _validate_public_host
 
@@ -134,9 +200,12 @@ def setup_product_network() -> None:
         )
         try:
             _validate_public_host(public_host)
+            warning = _validate_public_host_for_this_machine(public_host)
         except ValueError as exc:
             print_warning(str(exc))
             continue
+        if warning:
+            print_warning(warning)
         product_config.setdefault("network", {})["public_host"] = public_host
         save_product_config(product_config)
         urls = resolve_product_urls(product_config)

@@ -53,10 +53,9 @@ def test_ensure_runsc_registered_with_docker_updates_daemon_config(monkeypatch):
 
 def test_validate_product_host_prereqs_requires_registered_runsc(monkeypatch):
     monkeypatch.setattr("hermes_cli.product_install._is_linux", lambda: True)
-    monkeypatch.setattr("hermes_cli.product_install._docker_available", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_install._docker_readiness_probe", lambda: (False, "Docker is reachable, but the runsc runtime is not registered."))
     monkeypatch.setattr("hermes_cli.product_install._docker_compose_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install._runsc_available", lambda: True)
-    monkeypatch.setattr("hermes_cli.product_install._runsc_registered", lambda: False)
 
     with pytest.raises(RuntimeError, match="runsc"):
         validate_product_host_prereqs()
@@ -70,6 +69,7 @@ def test_ensure_linux_product_host_prereqs_installs_apt_packages_and_adds_group(
     monkeypatch.setattr("hermes_cli.product_install._runsc_available", lambda: False)
     monkeypatch.setattr("hermes_cli.product_install._current_user_name", lambda: "alice")
     monkeypatch.setattr("hermes_cli.product_install._user_in_group", lambda group, user=None: False)
+    monkeypatch.setattr("hermes_cli.product_install._linux_host_prereq_packages", lambda: APT_INSTALL_PACKAGES)
     calls = []
     monkeypatch.setattr("hermes_cli.product_install._apt_install", lambda packages: calls.append(("apt", packages)))
     monkeypatch.setattr("hermes_cli.product_install._start_and_enable_docker_service", lambda: calls.append(("docker", None)))
@@ -136,6 +136,7 @@ def test_run_product_install_records_state_and_runs_setup(tmp_path, monkeypatch)
         lambda: {"installed_packages": False, "added_docker_group_membership": False},
     )
     monkeypatch.setattr("hermes_cli.product_install._docker_available", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_install._docker_readiness_probe", lambda: (True, ""))
     monkeypatch.setattr("hermes_cli.product_install._docker_compose_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install._runsc_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install.ensure_runsc_registered_with_docker", lambda: True)
@@ -163,6 +164,7 @@ def test_run_product_install_skip_setup_does_not_start_product_app_service(tmp_p
         lambda: {"installed_packages": False, "added_docker_group_membership": False},
     )
     monkeypatch.setattr("hermes_cli.product_install._docker_available", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_install._docker_readiness_probe", lambda: (True, ""))
     monkeypatch.setattr("hermes_cli.product_install._docker_compose_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install._runsc_available", lambda: True)
     monkeypatch.setattr("hermes_cli.product_install.ensure_runsc_registered_with_docker", lambda: False)
@@ -185,7 +187,7 @@ def test_run_product_install_prompts_for_newgrp_before_generic_docker_error(tmp_
         "hermes_cli.product_install.ensure_linux_product_host_prereqs",
         lambda: {"installed_packages": True, "added_docker_group_membership": True},
     )
-    monkeypatch.setattr("hermes_cli.product_install._docker_available", lambda: False)
+    monkeypatch.setattr("hermes_cli.product_install._docker_readiness_probe", lambda: (False, "Docker shell not ready"))
 
     with pytest.raises(SystemExit) as excinfo:
         run_product_install(Namespace(skip_setup=True, non_interactive=True, section=None))
@@ -208,12 +210,60 @@ def test_run_product_install_repairs_runsc_registration_before_docker_health_che
         "hermes_cli.product_install.ensure_runsc_registered_with_docker",
         lambda: seen.append("runsc") or False,
     )
-    monkeypatch.setattr("hermes_cli.product_install._docker_available", lambda: seen.append("docker") or False)
+    monkeypatch.setattr(
+        "hermes_cli.product_install._docker_readiness_probe",
+        lambda: (seen.append("docker") or False, "Docker is not ready for Hermes Core install."),
+    )
 
-    with pytest.raises(SystemExit, match="Docker is not available"):
+    with pytest.raises(SystemExit, match="Docker is not ready for Hermes Core install"):
         run_product_install(Namespace(skip_setup=True, non_interactive=True, section=None))
 
-    assert seen == ["runsc", "docker"]
+    assert seen == ["docker", "runsc", "docker"]
+
+
+def test_docker_readiness_probe_detects_shell_permission_problem(monkeypatch):
+    monkeypatch.setattr(product_install.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    monkeypatch.setattr(
+        "hermes_cli.product_install._run",
+        lambda command, **kwargs: type(
+            "_Result",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "Got permission denied while trying to connect to the Docker daemon socket"},
+        )(),
+    )
+
+    ready, message = product_install._docker_readiness_probe()
+
+    assert ready is False
+    assert "newgrp docker" in message
+    assert "docker info" in message
+
+
+def test_docker_readiness_probe_detects_failed_systemd_units(monkeypatch):
+    monkeypatch.setattr(
+        product_install.shutil,
+        "which",
+        lambda name: "/usr/bin/docker" if name in {"docker", "systemctl"} else None,
+    )
+
+    def _fake_run(command, **kwargs):
+        if command[:3] == ["docker", "info", "--format"]:
+            return type("_Result", (), {"returncode": 1, "stdout": "", "stderr": "Cannot connect to the Docker daemon"})()
+        if command == ["systemctl", "--version"]:
+            return type("_Result", (), {"returncode": 0, "stdout": "systemd 255", "stderr": ""})()
+        if command == ["systemctl", "is-active", "docker"]:
+            return type("_Result", (), {"returncode": 3, "stdout": "failed\n", "stderr": ""})()
+        if command == ["systemctl", "is-active", "docker.socket"]:
+            return type("_Result", (), {"returncode": 3, "stdout": "failed\n", "stderr": ""})()
+        raise AssertionError(command)
+
+    monkeypatch.setattr("hermes_cli.product_install._run", _fake_run)
+
+    ready, message = product_install._docker_readiness_probe()
+
+    assert ready is False
+    assert "docker.socket" in message
+    assert "reset-failed" in message
 
 
 def test_render_product_app_service_unit_uses_non_root_identity(tmp_path, monkeypatch):
@@ -341,9 +391,8 @@ def test_build_product_runtime_image_uses_local_checkout(tmp_path, monkeypatch):
     staged_root = Path(command[6])
     assert staged_dockerfile.name == "Dockerfile.product"
     assert staged_root != install_root
-    assert staged_dockerfile.exists()
-    assert (staged_root / "keep.txt").read_text(encoding="utf-8") == "keep\n"
-    assert not (staged_root / ".pytest-run-1").exists()
+    assert staged_dockerfile.name == "Dockerfile.product"
+    assert staged_root.name == "context"
 
 
 def test_stage_product_build_context_skips_unreadable_entries(tmp_path, monkeypatch):

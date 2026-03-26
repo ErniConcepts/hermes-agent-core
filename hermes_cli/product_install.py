@@ -379,6 +379,46 @@ def _docker_available() -> bool:
     return result.returncode == 0
 
 
+def _docker_readiness_probe() -> tuple[bool, str]:
+    if shutil.which("docker") is None:
+        return False, "Docker CLI is not installed."
+
+    probe = _run(["docker", "info", "--format", "{{json .Runtimes}}"], check=False)
+    if probe.returncode == 0:
+        runtimes = _docker_runtimes()
+        if not _runsc_runtime_matches(runtimes.get(RUNSC_RUNTIME_NAME)):
+            return False, "Docker is reachable, but the runsc runtime is not registered."
+        return True, ""
+
+    detail = " ".join(part.strip() for part in (probe.stderr, probe.stdout) if part and part.strip()).strip()
+    detail_lower = detail.lower()
+    if any(token in detail_lower for token in ("permission denied", "got permission denied", "docker.sock")):
+        return (
+            False,
+            "Docker is installed, but this user shell cannot access the Docker daemon yet. "
+            "Run 'newgrp docker' or start a new login shell, verify with 'docker info', then rerun 'hermes-core install'.",
+        )
+    if _systemd_available():
+        docker_state = (_run(["systemctl", "is-active", "docker"], check=False).stdout or "").strip().lower()
+        socket_state = (_run(["systemctl", "is-active", "docker.socket"], check=False).stdout or "").strip().lower()
+        failed_units: list[str] = []
+        if docker_state == "failed":
+            failed_units.append("docker")
+        if socket_state == "failed":
+            failed_units.append("docker.socket")
+        if failed_units:
+            joined = " and ".join(failed_units)
+            return (
+                False,
+                f"Docker is installed, but {joined} is unhealthy. "
+                "Run 'sudo systemctl reset-failed docker docker.socket', "
+                "'sudo systemctl start docker.socket docker', verify with 'docker info', then rerun 'hermes-core install'.",
+            )
+    if detail:
+        return False, f"Docker is not ready for Hermes Core install: {detail}"
+    return False, "Docker is not ready for Hermes Core install. Verify with 'docker info' and rerun 'hermes-core install'."
+
+
 def _runsc_available() -> bool:
     if shutil.which("runsc") is None:
         return False
@@ -531,14 +571,13 @@ def ensure_runsc_registered_with_docker() -> bool:
 def validate_product_host_prereqs() -> None:
     if not _is_linux():
         raise RuntimeError("hermes-core product host prerequisites are only supported on Linux")
-    if not _docker_available():
-        raise RuntimeError("Docker is not available or the daemon is not running")
+    docker_ready, docker_message = _docker_readiness_probe()
+    if not docker_ready:
+        raise RuntimeError(docker_message)
     if not _docker_compose_available():
         raise RuntimeError("docker compose is not available")
     if not _runsc_available():
         raise RuntimeError("runsc is not installed on this machine")
-    if not _runsc_registered():
-        raise RuntimeError("Docker does not have the runsc runtime registered")
 
 
 def _remove_env_keys(keys: list[str]) -> None:
@@ -666,7 +705,8 @@ def run_product_install(args: Any) -> None:
         prereq_state = ensure_linux_product_host_prereqs()
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
-    if prereq_state.get("added_docker_group_membership") and not _docker_available():
+    docker_ready, docker_message = _docker_readiness_probe()
+    if prereq_state.get("added_docker_group_membership") and not docker_ready:
         print(
             "Added your user to the docker group. Run 'newgrp docker' or start a new login shell, then rerun 'hermes-core install'."
         )
@@ -680,8 +720,9 @@ def run_product_install(args: Any) -> None:
         changed = ensure_runsc_registered_with_docker()
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
-    if not _docker_available():
-        raise SystemExit("Docker is not available or the daemon is not running")
+    docker_ready, docker_message = _docker_readiness_probe()
+    if not docker_ready:
+        raise SystemExit(docker_message)
     state = _product_install_state()
     state["managed_runsc_registration"] = bool(changed or state.get("managed_runsc_registration"))
     save_product_install_state(state)

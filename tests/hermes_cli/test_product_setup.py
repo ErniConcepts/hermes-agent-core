@@ -34,6 +34,7 @@ def test_product_setup_rejects_removed_model_section(tmp_path, monkeypatch):
 def test_product_setup_network_section_updates_public_host(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: "officebox.local")
+    monkeypatch.setattr("hermes_cli.product_setup._validate_public_host_for_this_machine", lambda host: None)
 
     setup_product_network()
 
@@ -47,11 +48,51 @@ def test_product_setup_network_section_strips_terminal_escape_sequences(tmp_path
         "hermes_cli.product_setup.prompt",
         lambda *args, **kwargs: "\x1b[A\x1b[Alocalhost\x1b[B",
     )
+    monkeypatch.setattr("hermes_cli.product_setup._validate_public_host_for_this_machine", lambda host: None)
 
     setup_product_network()
 
     product_config = load_product_config()
     assert product_config["network"]["public_host"] == "localhost"
+
+
+def test_product_setup_network_section_rejects_host_resolving_to_other_machine(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    answers = iter(["LaptopJannis.local", "localhost"])
+    warnings = []
+    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: next(answers))
+    monkeypatch.setattr(
+        "hermes_cli.product_setup._validate_public_host_for_this_machine",
+        lambda host: (_ for _ in ()).throw(
+            ValueError("Host 'LaptopJannis.local' resolves to 192.168.1.155, not this machine (192.168.1.27).")
+        )
+        if host == "LaptopJannis.local"
+        else None,
+    )
+    monkeypatch.setattr("hermes_cli.product_setup.print_warning", lambda message: warnings.append(message))
+
+    setup_product_network()
+
+    product_config = load_product_config()
+    assert product_config["network"]["public_host"] == "localhost"
+    assert any("resolves to 192.168.1.155" in message for message in warnings)
+
+
+def test_product_setup_network_section_warns_when_host_does_not_resolve_yet(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    warnings = []
+    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: "officebox.local")
+    monkeypatch.setattr(
+        "hermes_cli.product_setup._validate_public_host_for_this_machine",
+        lambda host: "Host 'officebox.local' does not currently resolve on this machine. LAN access will work only after DNS or mDNS points that name at this device.",
+    )
+    monkeypatch.setattr("hermes_cli.product_setup.print_warning", lambda message: warnings.append(message))
+
+    setup_product_network()
+
+    product_config = load_product_config()
+    assert product_config["network"]["public_host"] == "officebox.local"
+    assert any("does not currently resolve" in message for message in warnings)
 
 
 def test_product_setup_identity_section_updates_soul_template_path(tmp_path, monkeypatch):
