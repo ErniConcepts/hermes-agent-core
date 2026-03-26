@@ -72,9 +72,10 @@ The installer is designed to:
 
 - bootstrap Python via `uv` if needed
 - install the repo into `~/.hermes/hermes-core`
-- expose a `hermes-core` launcher
+- expose `hermes-core` and `hermes` launchers
 - run the product install flow
 - prompt for `sudo` only when host-level changes are required
+- stop early if Docker is installed but the current shell still cannot use it
 
 Do not run the installer itself with `sudo`.
 
@@ -82,6 +83,14 @@ If `~/.local/bin` is not on your `PATH` yet, use the full launcher path after in
 
 ```bash
 ~/.local/bin/hermes-core setup
+~/.local/bin/hermes setup model
+```
+
+If the installer reports that Docker is installed but your current shell cannot access it yet, refresh the shell and verify Docker before rerunning:
+
+```bash
+newgrp docker
+docker info
 ```
 
 ## Quick Start
@@ -103,6 +112,12 @@ Typical install flow:
    - optional: `hermes setup gateway`
    - optional: `hermes setup agent`
 7. sign into the app and start using personalized agent sessions
+
+For LAN/public host selection:
+
+- `localhost` is always safe for a local-only install
+- `.local` or DNS hostnames are accepted only if they resolve to the current machine
+- if a hostname resolves somewhere else on your network, setup will reject it and ask again because auth/session refresh would break
 
 The first admin can be created before model configuration exists. In that state, auth works but chat runtimes will not answer until `hermes setup model` has been completed.
 
