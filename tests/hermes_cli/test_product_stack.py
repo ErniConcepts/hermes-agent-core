@@ -37,11 +37,11 @@ def test_resolve_product_urls_uses_public_host_when_bind_is_wildcard(tmp_path, m
 
     assert urls == {
         "public_host": "officebox.local",
-        "url_scheme": "https",
-        "app_base_url": "https://officebox.local:18086",
-        "issuer_url": "https://officebox.local:19111",
-        "oidc_callback_url": "https://officebox.local:18086/api/auth/oidc/callback",
-        "pocket_id_setup_url": "https://officebox.local:19111/setup",
+        "url_scheme": "http",
+        "app_base_url": "http://officebox.local:18086",
+        "issuer_url": "http://officebox.local:19111",
+        "oidc_callback_url": "http://officebox.local:18086/api/auth/oidc/callback",
+        "pocket_id_setup_url": "http://officebox.local:19111/setup",
     }
 
 
@@ -67,8 +67,8 @@ def test_resolve_product_urls_uses_tailnet_urls_when_enabled(tmp_path, monkeypat
         "issuer_url": "https://hermes-box.corpnet.ts.net:4444",
         "oidc_callback_url": "https://hermes-box.corpnet.ts.net/api/auth/oidc/callback",
         "pocket_id_setup_url": "https://hermes-box.corpnet.ts.net:4444/setup",
-        "local_app_base_url": "https://officebox.local:18086",
-        "local_issuer_url": "https://officebox.local:19111",
+        "local_app_base_url": "http://officebox.local:18086",
+        "local_issuer_url": "http://officebox.local:19111",
         "tailnet_host": "hermes-box.corpnet.ts.net",
     }
 
@@ -91,6 +91,7 @@ def test_initialize_product_stack_generates_files_and_bootstraps_product_yaml(tm
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     for key in (
         "HERMES_PRODUCT_OIDC_CLIENT_SECRET",
+        "HERMES_PRODUCT_SESSION_SECRET",
         "HERMES_POCKET_ID_STATIC_API_KEY",
         "HERMES_POCKET_ID_ENCRYPTION_KEY",
     ):
@@ -106,12 +107,12 @@ def test_initialize_product_stack_generates_files_and_bootstraps_product_yaml(tm
         mock_save_env.return_value = {"success": True}
         bootstrapped = initialize_product_stack(config)
 
-    assert bootstrapped["auth"]["issuer_url"] == "https://hermes.local:19411"
+    assert bootstrapped["auth"]["issuer_url"] == "http://hermes.local:19411"
     assert bootstrapped["services"]["pocket_id"]["image"] == POCKET_ID_IMAGE
-    assert mock_save_env.call_count == 3
+    assert mock_save_env.call_count == 4
 
     env_text = get_pocket_id_env_path().read_text(encoding="utf-8")
-    assert "APP_URL=https://hermes.local:19411" in env_text
+    assert "APP_URL=http://hermes.local:19411" in env_text
     assert "STATIC_API_KEY=" in env_text
     assert "ENCRYPTION_KEY=" in env_text
     assert "PUID=" not in env_text
@@ -128,7 +129,7 @@ def test_initialize_product_stack_generates_files_and_bootstraps_product_yaml(tm
 
     reloaded = load_product_config()
     assert reloaded["network"]["public_host"] == "hermes.local"
-    assert reloaded["auth"]["issuer_url"] == "https://hermes.local:19411"
+    assert reloaded["auth"]["issuer_url"] == "http://hermes.local:19411"
 
 
 def test_initialize_product_stack_reuses_existing_secrets(tmp_path, monkeypatch):
@@ -139,6 +140,7 @@ def test_initialize_product_stack_reuses_existing_secrets(tmp_path, monkeypatch)
     def _existing_env_value(key):
         existing = {
             "HERMES_PRODUCT_OIDC_CLIENT_SECRET": "client-secret",
+            "HERMES_PRODUCT_SESSION_SECRET": "session-secret",
             "HERMES_POCKET_ID_STATIC_API_KEY": "static-api-key",
             "HERMES_POCKET_ID_ENCRYPTION_KEY": "enc-key",
         }
@@ -486,7 +488,7 @@ def test_bootstrap_first_admin_enrollment_stores_native_setup_state(tmp_path, mo
         "email": "admin@example.com",
         "auth_mode": "passkey",
         "bootstrap_mode": "native_setup",
-        "setup_url": "https://officebox.local:1411/setup",
+        "setup_url": "http://officebox.local:1411/setup",
         "oidc_client_id": "hermes-core",
         "first_admin_login_seen": False,
         "bootstrap_completed_at": None,

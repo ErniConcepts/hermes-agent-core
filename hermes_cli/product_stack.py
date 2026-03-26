@@ -267,6 +267,13 @@ def _ensure_client_secret(config: Dict[str, Any]) -> str:
     return _required_secret(env_key)
 
 
+def _ensure_session_secret(config: Dict[str, Any]) -> str:
+    env_key = str(config.get("auth", {}).get("session_secret_ref", "")).strip()
+    if not env_key:
+        raise ValueError("auth.session_secret_ref must be configured in product.yaml")
+    return _required_secret(env_key)
+
+
 def _ensure_static_api_key(config: Dict[str, Any]) -> str:
     env_key = str(
         config.get("services", {}).get("pocket_id", {}).get("static_api_key_ref", "")
@@ -364,6 +371,7 @@ def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, 
     services_cfg.pop("user", None)
 
     _ensure_client_secret(product_config)
+    _ensure_session_secret(product_config)
 
     env_path = get_pocket_id_env_path()
     try:

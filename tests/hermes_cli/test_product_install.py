@@ -445,6 +445,7 @@ def test_perform_product_cleanup_removes_product_files_and_env_keys(tmp_path, mo
     (tmp_path / "product.yaml").write_text("product: {}\n", encoding="utf-8")
     (tmp_path / ".env").write_text(
         "HERMES_PRODUCT_OIDC_CLIENT_SECRET=one\n"
+        "HERMES_PRODUCT_SESSION_SECRET=four\n"
         "HERMES_POCKET_ID_STATIC_API_KEY=two\n"
         "HERMES_POCKET_ID_ENCRYPTION_KEY=three\n"
         "OTHER_KEY=keep\n",

@@ -55,7 +55,7 @@ class ProductRuntimeLaunchSettings:
 
 def _secure_runtime_dir(path: Path) -> None:
     try:
-        path.chmod(0o777)
+        path.chmod(0o700)
     except (OSError, NotImplementedError):
         pass
 
@@ -63,7 +63,7 @@ def _secure_runtime_dir(path: Path) -> None:
 def _secure_runtime_file(path: Path) -> None:
     try:
         if path.exists():
-            path.chmod(0o644)
+            path.chmod(0o600)
     except (OSError, NotImplementedError):
         pass
 
@@ -101,10 +101,19 @@ class ProductRuntimeEvent(BaseModel):
 
 
 def _user_id(user: dict[str, Any]) -> str:
-    username = str(user.get("preferred_username") or user.get("sub") or "").strip()
-    if not username:
-        raise ValueError("Signed-in user is missing a usable username")
-    return username
+    stable_id = str(user.get("sub") or user.get("id") or "").strip()
+    if not stable_id:
+        raise ValueError("Signed-in user is missing a stable user identifier")
+    return stable_id
+
+
+def _legacy_user_ids(user: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    for value in (user.get("preferred_username"), user.get("username")):
+        normalized = str(value or "").strip()
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+    return candidates
 
 
 def _runtime_key(user_id: str) -> str:
@@ -132,6 +141,10 @@ def _product_users_root(config: dict[str, Any]) -> Path:
 
 def _runtime_root(config: dict[str, Any], user_id: str) -> Path:
     return _product_users_root(config) / _runtime_key(user_id) / "runtime"
+
+
+def _user_storage_root(config: dict[str, Any], user_id: str) -> Path:
+    return _product_users_root(config) / _runtime_key(user_id)
 
 
 def _workspace_root(config: dict[str, Any], user_id: str) -> Path:
@@ -241,7 +254,15 @@ def load_runtime_record(user_id: str, *, config: dict[str, Any] | None = None) -
 def _write_runtime_record(record: ProductRuntimeRecord) -> None:
     manifest_path = Path(record.manifest_file)
     manifest_path.write_text(json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    _secure_file(manifest_path)
+    _secure_runtime_file(manifest_path)
+
+
+def _write_runtime_text_if_changed(path: Path, content: str) -> bool:
+    existing = path.read_text(encoding="utf-8") if path.exists() else None
+    if existing == content:
+        return False
+    path.write_text(content, encoding="utf-8")
+    return True
 
 
 def _write_runtime_cli_config(config: dict[str, Any], user_id: str, *, base_url: str, model: str) -> None:
@@ -267,7 +288,7 @@ def _write_runtime_cli_config(config: dict[str, Any], user_id: str, *, base_url:
             "context_length": normalized_context_length,
         }
     }
-    config_path.write_text(yaml.safe_dump(runtime_config, sort_keys=False), encoding="utf-8")
+    _write_runtime_text_if_changed(config_path, yaml.safe_dump(runtime_config, sort_keys=False))
     _secure_runtime_file(config_path)
 
 
@@ -342,7 +363,7 @@ def _write_runtime_env_file(path: Path, env: dict[str, str]) -> None:
         joined = ", ".join(sorted(invalid_keys))
         raise RuntimeError(f"Runtime env contains unsupported newline or NUL characters: {joined}")
     path.write_text("".join(f"{key}={value}\n" for key, value in sorted(env.items())), encoding="utf-8")
-    _secure_file(path)
+    _secure_runtime_file(path)
 
 
 def _runtime_mounts(record: ProductRuntimeRecord) -> list[str]:
@@ -361,11 +382,46 @@ def _runtime_mounts(record: ProductRuntimeRecord) -> list[str]:
     return mounts
 
 
+def _migrate_legacy_runtime(user: dict[str, Any], product_config: dict[str, Any], stable_user_id: str) -> ProductRuntimeRecord | None:
+    stable_root = _user_storage_root(product_config, stable_user_id)
+    if stable_root.exists():
+        return None
+    for legacy_user_id in _legacy_user_ids(user):
+        if legacy_user_id == stable_user_id:
+            continue
+        legacy_record = load_runtime_record(legacy_user_id, config=product_config)
+        if legacy_record is None:
+            continue
+        legacy_root = _user_storage_root(product_config, legacy_user_id)
+        if not legacy_root.exists():
+            continue
+        _remove_container_if_exists(legacy_record.container_name)
+        stable_root.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(legacy_root), str(stable_root))
+        migrated = legacy_record.model_copy(
+            update={
+                "user_id": stable_user_id,
+                "runtime_key": _runtime_key(stable_user_id),
+                "container_name": f"hermes-product-runtime-{_runtime_key(stable_user_id)}",
+                "runtime_root": str(_runtime_root(product_config, stable_user_id)),
+                "hermes_home": str(_hermes_home(product_config, stable_user_id)),
+                "workspace_root": str(_workspace_root(product_config, stable_user_id)),
+                "env_file": str(_env_path(product_config, stable_user_id)),
+                "manifest_file": str(_manifest_path(product_config, stable_user_id)),
+                "display_name": str(user.get("name") or user.get("preferred_username") or "").strip() or legacy_record.display_name,
+                "status": "staged",
+            }
+        )
+        _write_runtime_record(migrated)
+        return migrated
+    return None
+
+
 def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord:
     product_config = config or load_product_config()
     ensure_hermes_home()
     user_id = _user_id(user)
-    existing = load_runtime_record(user_id, config=product_config)
+    existing = load_runtime_record(user_id, config=product_config) or _migrate_legacy_runtime(user, product_config, user_id)
     runtime_root = _runtime_root(product_config, user_id)
     hermes_home = _hermes_home(product_config, user_id)
     workspace_root = _workspace_root(product_config, user_id)
@@ -381,7 +437,7 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
         _secure_runtime_dir(path)
 
     soul_path = hermes_home / "SOUL.md"
-    soul_path.write_text(render_product_soul(product_config), encoding="utf-8")
+    _write_runtime_text_if_changed(soul_path, render_product_soul(product_config))
     _secure_runtime_file(soul_path)
 
     launch_settings = _resolve_runtime_launch_settings(product_config)

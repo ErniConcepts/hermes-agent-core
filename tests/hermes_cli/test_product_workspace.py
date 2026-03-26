@@ -3,6 +3,7 @@ import pytest
 from hermes_cli.product_workspace import (
     ProductWorkspaceQuotaError,
     create_workspace_folder,
+    delete_workspace_path,
     get_workspace_state,
     humanize_bytes,
     store_workspace_file,
@@ -98,3 +99,46 @@ def test_workspace_rejects_invalid_quota_config(tmp_path, monkeypatch):
         context.setattr("hermes_cli.product_workspace.load_product_config", _config)
         with pytest.raises(ValueError, match="user_workspace_limit_mb"):
             get_workspace_state(_user())
+
+
+def test_workspace_upload_filename_is_reduced_to_final_segment(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    state = store_workspace_file(
+        _user(),
+        parent_path="",
+        filename="../nested/hello.txt",
+        content=b"hello",
+    )
+
+    assert [entry.name for entry in state.entries] == ["hello.txt"]
+
+
+def test_workspace_delete_file_returns_parent_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    create_workspace_folder(_user(), parent_path="", folder_name="reports")
+    store_workspace_file(_user(), parent_path="reports", filename="budget.txt", content=b"budget")
+
+    state = delete_workspace_path(_user(), path="reports/budget.txt")
+
+    assert state.current_path == "reports"
+    assert state.entries == []
+
+
+def test_workspace_delete_folder_is_recursive(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    create_workspace_folder(_user(), parent_path="", folder_name="reports")
+    create_workspace_folder(_user(), parent_path="reports", folder_name="nested")
+    store_workspace_file(_user(), parent_path="reports/nested", filename="budget.txt", content=b"budget")
+
+    state = delete_workspace_path(_user(), path="reports")
+
+    assert state.current_path == ""
+    assert state.entries == []
+
+
+def test_workspace_delete_rejects_empty_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        delete_workspace_path(_user(), path="")

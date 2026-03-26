@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -192,3 +193,26 @@ def store_workspace_file(
         )
     target.write_bytes(content)
     return get_workspace_state(user, path=normalized_parent, config=product_config)
+
+
+def delete_workspace_path(
+    user: dict[str, Any],
+    *,
+    path: str,
+    config: dict[str, Any] | None = None,
+) -> ProductWorkspaceState:
+    product_config = config or load_product_config()
+    root = _workspace_root_for_user(user, product_config)
+    target, normalized = _resolve_workspace_path(root, path)
+    if not normalized:
+        raise ValueError("Workspace delete path must not be empty")
+    if not target.exists():
+        raise ValueError("Workspace path does not exist")
+    parent_normalized = str(PurePosixPath(normalized).parent)
+    if parent_normalized == ".":
+        parent_normalized = ""
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    return get_workspace_state(user, path=parent_normalized, config=product_config)

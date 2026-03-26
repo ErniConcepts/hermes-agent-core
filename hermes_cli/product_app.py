@@ -7,16 +7,18 @@ import hashlib
 import logging
 import secrets
 import time
+from collections import deque
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
+from hermes_cli.config import get_env_value
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_invites import (
     list_pending_product_signup_invites,
@@ -48,12 +50,17 @@ from hermes_cli.product_workspace import (
     ProductWorkspaceEntry,
     ProductWorkspaceQuotaError,
     create_workspace_folder,
+    delete_workspace_path,
     get_workspace_state,
     store_workspace_file,
 )
 from hermes_cli.product_web import build_product_index_html
 
 logger = logging.getLogger(__name__)
+_SESSION_REFRESH_TTL_SECONDS = 30
+_AUTH_RATE_LIMIT_WINDOW_SECONDS = 300.0
+_AUTH_RATE_LIMIT_MAX_REQUESTS = 10
+_AUTH_RATE_LIMITS: dict[tuple[str, str], deque[float]] = {}
 
 
 @dataclass(frozen=True)
@@ -122,7 +129,7 @@ class ProductChatSessionResponse(BaseModel):
 
 
 class ProductChatTurnRequest(BaseModel):
-    user_message: str
+    user_message: str = Field(min_length=1, max_length=16000)
 
 
 class ProductWorkspaceResponse(BaseModel):
@@ -137,6 +144,10 @@ class ProductCreateWorkspaceFolderRequest(BaseModel):
     name: str
 
 
+class ProductDeleteWorkspacePathRequest(BaseModel):
+    path: str
+
+
 def _workspace_response_payload(payload: Any) -> ProductWorkspaceResponse:
     if hasattr(payload, "model_dump"):
         data = payload.model_dump(mode="json")
@@ -146,6 +157,12 @@ def _workspace_response_payload(payload: Any) -> ProductWorkspaceResponse:
 
 
 def _session_secret() -> str:
+    product_config = load_product_config()
+    secret_ref = str(product_config.get("auth", {}).get("session_secret_ref", "")).strip()
+    if secret_ref:
+        configured = str(get_env_value(secret_ref) or "").strip()
+        if configured:
+            return configured
     settings = load_product_oidc_client_settings()
     digest = hashlib.sha256(settings.client_secret.encode("utf-8")).hexdigest()
     return f"hermes-product-session-{digest}"
@@ -184,12 +201,27 @@ def _request_origin(request: Request) -> str:
     return ""
 
 
+def _client_ip(request: Request) -> str:
+    client = getattr(request, "client", None)
+    host = getattr(client, "host", "") if client is not None else ""
+    return str(host or "unknown")
+
+
+def _expected_request_origin(request: Request) -> str:
+    context = getattr(request.app.state, "product_app_context", None)
+    if isinstance(context, ProductAppContext):
+        return context.app_origin
+    return _origin_from_url(str(request.base_url))
+
+
 def _require_same_origin(request: Request) -> None:
-    expected_origin = _origin_from_url(str(request.base_url))
+    expected_origin = _expected_request_origin(request)
     if not expected_origin:
         return
     request_origin = _request_origin(request)
-    if request_origin and request_origin != expected_origin:
+    if not request_origin:
+        raise HTTPException(status_code=403, detail="Missing request origin")
+    if request_origin != expected_origin:
         raise HTTPException(status_code=403, detail="Cross-origin request blocked")
 
 
@@ -252,16 +284,36 @@ def _refresh_session_user(user: dict[str, Any]) -> dict[str, Any] | None:
     return refreshed
 
 
-def _require_product_user(request: Request) -> dict[str, Any]:
+def _session_refresh_due(request: Request) -> bool:
+    raw_value = request.session.get("user_refreshed_at")
+    try:
+        refreshed_at = int(raw_value)
+    except (TypeError, ValueError):
+        return True
+    return time.time() - refreshed_at >= _SESSION_REFRESH_TTL_SECONDS
+
+
+def _store_session_user(request: Request, user: dict[str, Any]) -> dict[str, Any]:
+    request.session["user"] = user
+    request.session["user_refreshed_at"] = int(time.time())
+    return user
+
+
+def _resolve_session_user(request: Request) -> dict[str, Any]:
     user = request.session.get("user")
     if not isinstance(user, dict):
         raise HTTPException(status_code=401, detail="Not authenticated")
+    if not _session_refresh_due(request):
+        return user
     refreshed = _refresh_session_user(user)
     if refreshed is None:
         request.session.clear()
         raise HTTPException(status_code=401, detail="Not authenticated")
-    request.session["user"] = refreshed
-    return refreshed
+    return _store_session_user(request, refreshed)
+
+
+def _require_product_user(request: Request) -> dict[str, Any]:
+    return _resolve_session_user(request)
 
 
 def _require_admin_user(request: Request) -> dict[str, Any]:
@@ -274,6 +326,17 @@ def _require_admin_user(request: Request) -> dict[str, Any]:
 def _mark_bootstrap_completed_if_admin(user: dict[str, Any]) -> None:
     if bool(user.get("is_admin")):
         mark_first_admin_bootstrap_completed()
+
+
+def _enforce_auth_rate_limit(request: Request, route_key: str) -> None:
+    now = time.monotonic()
+    bucket = _AUTH_RATE_LIMITS.setdefault((_client_ip(request), route_key), deque())
+    cutoff = now - _AUTH_RATE_LIMIT_WINDOW_SECONDS
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+    if len(bucket) >= _AUTH_RATE_LIMIT_MAX_REQUESTS:
+        raise HTTPException(status_code=429, detail="Too many authentication requests")
+    bucket.append(now)
 
 
 def _pocket_id_proxy_base_url(config: dict[str, Any]) -> str:
@@ -412,7 +475,7 @@ def _deactivate_runtime_user(user_id: str) -> ProductUser:
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     normalized = ProductUser.model_validate(updated)
-    delete_product_runtime(normalized.username)
+    delete_product_runtime(normalized.id)
     return normalized
 
 
@@ -481,12 +544,16 @@ def _register_proxy_routes(app: FastAPI) -> None:
 def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
     @app.get("/api/auth/login")
     def auth_login(request: Request) -> RedirectResponse:
+        _enforce_auth_rate_limit(request, "login")
         _csrf_token(request)
         existing = request.session.get("user")
         if isinstance(existing, dict):
-            refreshed = _refresh_session_user(existing)
+            try:
+                refreshed = _resolve_session_user(request)
+            except HTTPException:
+                refreshed = None
             if refreshed is not None:
-                request.session["user"] = refreshed
+                _mark_bootstrap_completed_if_admin(refreshed)
                 return RedirectResponse(context.app_base_url, status_code=303)
             request.session.clear()
         settings = load_product_oidc_client_settings(config=context.product_config)
@@ -501,6 +568,7 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
 
     @app.get("/api/auth/oidc/callback")
     def auth_callback(request: Request, code: str, state: str) -> RedirectResponse:
+        _enforce_auth_rate_limit(request, "callback")
         pending = request.session.get("oidc_pending")
         if not isinstance(pending, dict):
             return RedirectResponse(context.app_base_url, status_code=303)
@@ -531,7 +599,7 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
         request.session.pop("oidc_pending", None)
         provider_user = get_product_user_by_id(str(userinfo.get("sub") or "").strip())
         session_user = _session_user_payload(userinfo, provider_user)
-        request.session["user"] = session_user
+        _store_session_user(request, session_user)
         _mark_bootstrap_completed_if_admin(session_user)
         _csrf_token(request)
         return RedirectResponse(context.app_base_url, status_code=303)
@@ -541,11 +609,10 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
         user = request.session.get("user")
         if not isinstance(user, dict):
             return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
-        refreshed = _refresh_session_user(user)
-        if refreshed is None:
-            request.session.clear()
+        try:
+            refreshed = _resolve_session_user(request)
+        except HTTPException:
             return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
-        request.session["user"] = refreshed
         _mark_bootstrap_completed_if_admin(refreshed)
         return ProductSessionResponse(authenticated=True, user=refreshed, csrf_token=_csrf_token(request))
 
@@ -648,6 +715,16 @@ def _register_workspace_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail="At least one file is required")
         return _workspace_response_payload(current_state)
 
+    @app.post("/api/workspace/delete", response_model=ProductWorkspaceResponse)
+    def workspace_delete(request: Request, payload: ProductDeleteWorkspacePathRequest) -> ProductWorkspaceResponse:
+        user = _require_product_user(request)
+        _require_csrf(request)
+        try:
+            state = delete_workspace_path(user, path=payload.path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _workspace_response_payload(state)
+
 
 def _register_admin_routes(app: FastAPI) -> None:
     @app.get("/api/admin/users", response_model=ProductAdminUsersResponse)
@@ -680,11 +757,13 @@ def create_product_app() -> FastAPI:
     context = _build_product_app_context()
 
     app = FastAPI(title="Hermes Core Product App", version="0.1.0")
+    app.state.product_app_context = context
     app.add_middleware(
         SessionMiddleware,
         secret_key=_session_secret(),
         session_cookie="hermes_product_session",
         same_site="lax",
+        max_age=43200,
         https_only=context.app_base_url.startswith("https://"),
     )
 

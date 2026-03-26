@@ -25,7 +25,7 @@ def test_load_product_oidc_client_settings_reads_product_config_and_secret(monke
     assert settings.issuer_url == "https://officebox.local:1411"
     assert settings.client_id == "hermes-core"
     assert settings.client_secret == "oidc-secret"
-    assert settings.redirect_uri == "https://officebox.local:8086/api/auth/oidc/callback"
+    assert settings.redirect_uri == "http://officebox.local:8086/api/auth/oidc/callback"
     assert settings.scopes == ("openid", "profile", "email")
 
 

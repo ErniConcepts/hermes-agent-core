@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from hermes_cli.product_app import create_product_app
@@ -5,7 +6,19 @@ from hermes_cli.product_app import create_product_app
 
 def _csrf_headers(client):
     payload = client.get("/api/auth/session").json()
-    return {"X-Hermes-CSRF-Token": payload["csrf_token"]}
+    return {
+        "X-Hermes-CSRF-Token": payload["csrf_token"],
+        "Origin": "http://officebox.local:8086",
+    }
+
+
+@pytest.fixture(autouse=True)
+def _clear_auth_rate_limits():
+    from hermes_cli import product_app
+
+    product_app._AUTH_RATE_LIMITS.clear()
+    yield
+    product_app._AUTH_RATE_LIMITS.clear()
 
 
 def test_product_app_index_shows_login_link_when_signed_out(monkeypatch):
@@ -52,6 +65,16 @@ def test_product_app_index_escapes_product_name(monkeypatch):
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in response.text
 
 
+def test_session_secret_prefers_dedicated_product_secret(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_product_config",
+        lambda: {"auth": {"session_secret_ref": "HERMES_PRODUCT_SESSION_SECRET"}},
+    )
+    monkeypatch.setattr("hermes_cli.product_app.get_env_value", lambda key: "dedicated-secret")
+
+    assert __import__("hermes_cli.product_app", fromlist=["_session_secret"])._session_secret() == "dedicated-secret"
+
+
 def test_product_app_uses_secure_session_cookie_for_https_urls(monkeypatch):
     monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
     monkeypatch.setattr(
@@ -65,6 +88,21 @@ def test_product_app_uses_secure_session_cookie_for_https_urls(monkeypatch):
 
     assert response.status_code == 200
     assert "secure" in response.headers["set-cookie"].lower()
+
+
+def test_product_app_configures_explicit_session_max_age(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+
+    client = TestClient(create_product_app())
+    response = client.get("/api/auth/session")
+
+    assert response.status_code == 200
+    assert "max-age=43200" in response.headers["set-cookie"].lower()
 
 
 def test_product_app_healthz_reports_auth_provider(monkeypatch):
@@ -132,6 +170,35 @@ def test_product_app_login_redirects_and_stores_pending_pkce(monkeypatch):
     assert payload["authenticated"] is False
     assert payload["user"] is None
     assert payload["csrf_token"]
+
+
+def test_product_app_login_rate_limits_after_repeated_attempts(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: object())
+    monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: object())
+    monkeypatch.setattr(
+        "hermes_cli.product_app.create_oidc_login_request",
+        lambda settings, metadata: {
+            "state": "state-123",
+            "nonce": "nonce-123",
+            "verifier": "verifier-123",
+            "authorization_url": "http://officebox.local:1411/authorize?client_id=hermes-core",
+        },
+    )
+
+    client = TestClient(create_product_app())
+    for _ in range(10):
+        response = client.get("/api/auth/login", follow_redirects=False)
+        assert response.status_code == 307
+    blocked = client.get("/api/auth/login", follow_redirects=False)
+
+    assert blocked.status_code == 429
+    assert blocked.json() == {"detail": "Too many authentication requests"}
 
 
 def test_product_app_redirects_localhost_to_tailnet_when_enabled(monkeypatch):
@@ -677,7 +744,11 @@ def test_product_app_workspace_create_folder_requires_csrf(monkeypatch):
     client = TestClient(create_product_app())
     _login_admin(client)
 
-    response = client.post("/api/workspace/folders", json={"path": "", "name": "reports"})
+    response = client.post(
+        "/api/workspace/folders",
+        json={"path": "", "name": "reports"},
+        headers={"Origin": "http://officebox.local:8086"},
+    )
 
     assert response.status_code == 403
     assert response.json() == {"detail": "CSRF validation failed"}
@@ -697,6 +768,23 @@ def test_product_app_workspace_create_folder_blocks_cross_origin(monkeypatch):
 
     assert response.status_code == 403
     assert response.json() == {"detail": "Cross-origin request blocked"}
+
+
+def test_product_app_workspace_create_folder_requires_origin(monkeypatch):
+    _patch_admin_session(monkeypatch)
+
+    client = TestClient(create_product_app())
+    _login_admin(client)
+    payload = client.get("/api/auth/session").json()
+
+    response = client.post(
+        "/api/workspace/folders",
+        json={"path": "", "name": "reports"},
+        headers={"X-Hermes-CSRF-Token": payload["csrf_token"]},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Missing request origin"}
 
 
 def test_product_app_workspace_upload_file(monkeypatch):
@@ -724,6 +812,31 @@ def test_product_app_workspace_upload_file(monkeypatch):
     assert response.status_code == 200
     assert response.json()["entries"][0]["name"] == "hello.txt"
     assert response.json()["used_bytes"] == 5
+
+
+def test_product_app_workspace_delete_path(monkeypatch):
+    _patch_admin_session(monkeypatch)
+    monkeypatch.setattr(
+        "hermes_cli.product_app.delete_workspace_path",
+        lambda user, path: {
+            "current_path": "",
+            "entries": [],
+            "used_bytes": 0,
+            "limit_bytes": 1024,
+        },
+    )
+
+    client = TestClient(create_product_app())
+    _login_admin(client)
+
+    response = client.post(
+        "/api/workspace/delete",
+        json={"path": "reports/hello.txt"},
+        headers=_csrf_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["entries"] == []
 
 
 def test_product_app_proxy_strips_forwarded_headers(monkeypatch):
@@ -1029,11 +1142,12 @@ def test_product_app_admin_deactivate_user_deletes_runtime(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["disabled"] is True
-    assert deleted == ["maria"]
+    assert deleted == ["user-2"]
 
 
 def test_product_app_session_clears_when_provider_user_is_disabled(monkeypatch):
     _patch_admin_session(monkeypatch)
+    monkeypatch.setattr("hermes_cli.product_app._SESSION_REFRESH_TTL_SECONDS", 0)
     monkeypatch.setattr("hermes_cli.product_app.get_product_user_by_id", lambda user_id: None)
 
     client = TestClient(create_product_app())

@@ -4,6 +4,7 @@ import pytest
 import yaml
 
 from hermes_cli.config import load_config, save_config, save_env_value
+from hermes_cli.product_config import load_product_config
 from hermes_cli.product_runtime import (
     ProductRuntimeRecord,
     _RUNTIME_WORKSPACE_PATH,
@@ -15,6 +16,7 @@ from hermes_cli.product_runtime import (
     _write_runtime_env_file,
     _wait_for_runtime_health,
     get_product_runtime_session,
+    load_runtime_record,
     product_runtime_session_id,
     stage_product_runtime,
 )
@@ -33,6 +35,10 @@ def _configure_hermes_runtime(model_base_url: str = "http://127.0.0.1:8080/v1") 
     save_env_value("OPENAI_API_KEY", "")
 
 
+def _runtime_user() -> dict[str, str]:
+    return {"sub": "user-1", "preferred_username": "admin", "name": "Admin User"}
+
+
 def test_product_runtime_session_id_is_stable():
     first = product_runtime_session_id("admin")
     second = product_runtime_session_id("admin")
@@ -45,7 +51,7 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _configure_hermes_runtime()
 
-    record = stage_product_runtime({"preferred_username": "admin", "name": "Admin User", "is_admin": True})
+    record = stage_product_runtime({**_runtime_user(), "is_admin": True})
 
     soul_path = Path(record.hermes_home) / "SOUL.md"
     assert soul_path.exists()
@@ -56,7 +62,7 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     manifest = Path(record.manifest_file)
     assert manifest.exists()
     loaded = ProductRuntimeRecord.model_validate_json(manifest.read_text(encoding="utf-8"))
-    assert loaded.user_id == "admin"
+    assert loaded.user_id == "user-1"
     assert loaded.runtime_key
     assert loaded.auth_token
     assert loaded.runtime == "runsc"
@@ -67,7 +73,7 @@ def test_stage_product_runtime_uses_container_readable_permissions(tmp_path, mon
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _configure_hermes_runtime()
 
-    record = stage_product_runtime({"preferred_username": "admin"})
+    record = stage_product_runtime(_runtime_user())
 
     runtime_root = Path(record.runtime_root)
     hermes_home = Path(record.hermes_home)
@@ -75,10 +81,10 @@ def test_stage_product_runtime_uses_container_readable_permissions(tmp_path, mon
     soul_path = hermes_home / "SOUL.md"
     env_path = Path(record.env_file)
 
-    assert oct(runtime_root.stat().st_mode & 0o777) == "0o777"
-    assert oct(hermes_home.stat().st_mode & 0o777) == "0o777"
-    assert oct(workspace_root.stat().st_mode & 0o777) == "0o777"
-    assert oct(soul_path.stat().st_mode & 0o777) == "0o644"
+    assert oct(runtime_root.stat().st_mode & 0o777) == "0o700"
+    assert oct(hermes_home.stat().st_mode & 0o777) == "0o700"
+    assert oct(workspace_root.stat().st_mode & 0o777) == "0o700"
+    assert oct(soul_path.stat().st_mode & 0o777) == "0o600"
     assert oct(env_path.stat().st_mode & 0o777) == "0o600"
 
 
@@ -86,8 +92,8 @@ def test_stage_product_runtime_reuses_existing_runtime_token(tmp_path, monkeypat
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _configure_hermes_runtime()
 
-    first = stage_product_runtime({"preferred_username": "admin", "name": "Admin User"})
-    second = stage_product_runtime({"preferred_username": "admin", "name": "Admin User"})
+    first = stage_product_runtime(_runtime_user())
+    second = stage_product_runtime(_runtime_user())
 
     assert second.auth_token == first.auth_token
     assert second.runtime_port == first.runtime_port
@@ -106,7 +112,7 @@ def test_stage_product_runtime_uses_custom_soul_template(tmp_path, monkeypatch):
     config["product"]["agent"]["soul_template_path"] = str(template_path)
     save_product_config(config)
 
-    record = stage_product_runtime({"preferred_username": "admin"})
+    record = stage_product_runtime(_runtime_user())
     soul_path = Path(record.hermes_home) / "SOUL.md"
     soul_text = soul_path.read_text(encoding="utf-8")
     assert "Custom runtime identity" in soul_text
@@ -153,7 +159,7 @@ def test_get_product_runtime_session_proxies_runtime(monkeypatch):
 
     monkeypatch.setattr("hermes_cli.product_runtime.httpx.get", _fake_get)
 
-    payload = get_product_runtime_session({"preferred_username": "admin"})
+    payload = get_product_runtime_session(_runtime_user())
     assert payload["session_id"] == "product_admin_123"
     assert payload["messages"][0]["content"] == "hello"
     assert seen["headers"]["X-Hermes-Product-Runtime-Token"] == "runtime-token"
@@ -240,7 +246,7 @@ def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, mo
     config["runtime"]["host_access_host"] = "host.docker.internal"
     save_product_config(config)
 
-    record = stage_product_runtime({"preferred_username": "admin"})
+    record = stage_product_runtime(_runtime_user())
     env_text = Path(record.env_file).read_text(encoding="utf-8")
 
     assert f"HERMES_WRITE_SAFE_ROOT={_RUNTIME_WORKSPACE_PATH}" in env_text
@@ -256,9 +262,9 @@ def test_stage_product_runtime_writes_runtime_context_override_config(tmp_path, 
     config["model"]["context_length"] = 32768
     save_config(config)
 
-    record = stage_product_runtime({"preferred_username": "admin"})
+    record = stage_product_runtime(_runtime_user())
 
-    runtime_config = _runtime_config_path(load_product_config(), "admin")
+    runtime_config = _runtime_config_path(load_product_config(), "user-1")
     assert runtime_config.exists()
     payload = yaml.safe_load(runtime_config.read_text(encoding="utf-8"))
     assert payload["model"]["default"] == "qwen3.5-9b-local"
@@ -351,15 +357,78 @@ def test_docker_run_command_mounts_runtime_config_read_only_when_present(tmp_pat
 
 def test_stage_product_runtime_requires_ready_hermes_model_provider(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    config = load_config()
-    config["model"] = {"provider": "custom", "default": "qwen3.5-9b-local"}
-    config["platform_toolsets"] = {"cli": ["memory", "session_search"]}
-    save_config(config)
-    save_env_value("OPENAI_BASE_URL", "")
-    save_env_value("OPENAI_API_KEY", "")
+    _configure_hermes_runtime()
+    monkeypatch.setattr(
+        "hermes_cli.product_runtime.resolve_runtime_provider",
+        lambda requested=None: {"provider": "custom", "base_url": "", "api_key": "", "api_mode": "chat_completions"},
+    )
 
     with pytest.raises(RuntimeError, match="hermes setup model"):
-        stage_product_runtime({"preferred_username": "admin"})
+        stage_product_runtime(_runtime_user())
+
+
+def test_stage_product_runtime_migrates_legacy_username_runtime(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
+
+    from hermes_cli.product_config import load_product_config
+
+    config = load_product_config()
+    legacy_root = tmp_path / "product" / "users" / "admin-8c6976e5b541"
+    runtime_root = legacy_root / "runtime"
+    hermes_home = runtime_root / "hermes"
+    workspace_root = legacy_root / "workspace"
+    hermes_home.mkdir(parents=True)
+    workspace_root.mkdir(parents=True)
+    (workspace_root / "notes.txt").write_text("hello", encoding="utf-8")
+    env_file = runtime_root / "runtime.env"
+    env_file.write_text("HERMES_PRODUCT_MODEL=qwen3.5-9b-local\n", encoding="utf-8")
+    manifest_file = runtime_root / "launch-spec.json"
+    manifest_file.write_text(
+        ProductRuntimeRecord(
+            user_id="admin",
+            runtime_key="admin-8c6976e5b541",
+            display_name="Admin User",
+            session_id="legacy-session",
+            container_name="hermes-product-runtime-admin-8c6976e5b541",
+            runtime="runsc",
+            runtime_port=18091,
+            runtime_root=str(runtime_root),
+            hermes_home=str(hermes_home),
+            workspace_root=str(workspace_root),
+            env_file=str(env_file),
+            manifest_file=str(manifest_file),
+            auth_token="legacy-token",
+            status="staged",
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("hermes_cli.product_runtime._remove_container_if_exists", lambda *_args, **_kwargs: None)
+
+    record = stage_product_runtime(_runtime_user(), config=config)
+
+    assert record.user_id == "user-1"
+    assert record.session_id == "legacy-session"
+    assert record.auth_token == "legacy-token"
+    assert record.runtime_port == 18091
+    assert Path(record.workspace_root, "notes.txt").read_text(encoding="utf-8") == "hello"
+    assert not legacy_root.exists()
+    assert load_runtime_record("user-1", config=config) is not None
+
+
+def test_stage_product_runtime_does_not_rewrite_soul_when_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
+
+    first = stage_product_runtime(_runtime_user())
+    soul_path = Path(first.hermes_home) / "SOUL.md"
+    before_mtime = soul_path.stat().st_mtime_ns
+
+    second = stage_product_runtime(_runtime_user())
+    after_mtime = soul_path.stat().st_mtime_ns
+
+    assert second.user_id == "user-1"
+    assert after_mtime == before_mtime
 
 
 def test_running_container_matches_record_detects_stale_runtime_env(tmp_path):

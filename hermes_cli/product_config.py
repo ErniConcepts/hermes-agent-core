@@ -39,6 +39,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         "issuer_url": "",
         "client_id": "hermes-core",
         "client_secret_ref": "HERMES_PRODUCT_OIDC_CLIENT_SECRET",
+        "session_secret_ref": "HERMES_PRODUCT_SESSION_SECRET",
     },
     "network": {
         "bind_host": "0.0.0.0",
