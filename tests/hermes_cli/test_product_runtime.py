@@ -9,6 +9,7 @@ from hermes_cli.product_runtime import (
     ProductRuntimeRecord,
     _RUNTIME_WORKSPACE_PATH,
     _running_container_matches_record,
+    _runtime_container_user,
     _docker_run_command,
     _normalize_runtime_session_payload,
     _resolve_runtime_model_base_url,
@@ -311,6 +312,62 @@ def test_docker_run_command_adds_host_gateway_mapping():
     assert "--read-only" in command
     assert "--cap-drop=ALL" in command
     assert "no-new-privileges" in command
+
+
+@pytest.mark.skipif(os.name == "nt", reason="UID/GID mapping is POSIX-specific")
+def test_runtime_container_user_uses_workspace_owner(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    record = ProductRuntimeRecord(
+        user_id="admin",
+        runtime_key="admin-deadbeef0000",
+        display_name="Admin",
+        session_id="product_admin_123",
+        container_name="runtime-admin",
+        runtime="runc",
+        runtime_port=18091,
+        runtime_root=str(tmp_path / "runtime"),
+        hermes_home=str(tmp_path / "runtime" / "hermes"),
+        workspace_root=str(workspace),
+        env_file=str(tmp_path / "runtime" / "runtime.env"),
+        manifest_file=str(tmp_path / "runtime" / "launch-spec.json"),
+        auth_token="runtime-token",
+        status="running",
+    )
+
+    assert _runtime_container_user(record) == f"{workspace.stat().st_uid}:{workspace.stat().st_gid}"
+
+
+def test_docker_run_command_adds_user_mapping_when_available(monkeypatch):
+    config = {
+        "runtime": {
+            "internal_port": 8091,
+            "image": "hermes-product-local:dev",
+            "host_access_host": "host.docker.internal",
+        }
+    }
+    record = ProductRuntimeRecord(
+        user_id="admin",
+        runtime_key="admin-deadbeef0000",
+        display_name="Admin",
+        session_id="product_admin_123",
+        container_name="runtime-admin",
+        runtime="runc",
+        runtime_port=18091,
+        runtime_root="/tmp/runtime",
+        hermes_home="/tmp/runtime/hermes",
+        workspace_root="/tmp/workspace",
+        env_file="/tmp/runtime/runtime.env",
+        manifest_file="/tmp/runtime/launch-spec.json",
+        auth_token="runtime-token",
+        status="running",
+    )
+    monkeypatch.setattr("hermes_cli.product_runtime._runtime_container_user", lambda _record: "1000:1000")
+
+    command = _docker_run_command(record, config)
+
+    assert "--user" in command
+    assert "1000:1000" in command
 
 
 def test_docker_run_command_mounts_runtime_config_read_only_when_present(tmp_path):

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import shutil
@@ -397,6 +398,27 @@ def _runtime_mounts(record: ProductRuntimeRecord) -> list[str]:
     return mounts
 
 
+def _runtime_container_user(record: ProductRuntimeRecord) -> str | None:
+    if os.name == "nt":
+        return None
+    try:
+        workspace_stat = Path(record.workspace_root).stat()
+        uid = int(workspace_stat.st_uid)
+        gid = int(workspace_stat.st_gid)
+        if uid >= 0 and gid >= 0:
+            return f"{uid}:{gid}"
+    except Exception:
+        pass
+    try:
+        uid = os.getuid()
+        gid = os.getgid()
+        if uid >= 0 and gid >= 0:
+            return f"{uid}:{gid}"
+    except Exception:
+        return None
+    return None
+
+
 def _migrate_legacy_runtime(user: dict[str, Any], product_config: dict[str, Any], stable_user_id: str) -> ProductRuntimeRecord | None:
     stable_root = _user_storage_root(product_config, stable_user_id)
     if stable_root.exists():
@@ -506,6 +528,7 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
 def _docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) -> list[str]:
     internal_port = _runtime_internal_port(config)
     mounts = _runtime_mounts(record)
+    user_spec = _runtime_container_user(record)
     command = [
         "docker",
         "run",
@@ -543,6 +566,9 @@ def _docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) ->
         "-m",
         "hermes_cli.product_runtime_service",
     ]
+    if user_spec:
+        workdir_index = command.index("--workdir")
+        command[workdir_index:workdir_index] = ["--user", user_spec]
     label_index = command.index("--label")
     mount_args: list[str] = []
     for mount in mounts:
