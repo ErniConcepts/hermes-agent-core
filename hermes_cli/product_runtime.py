@@ -60,6 +60,13 @@ def _secure_runtime_dir(path: Path) -> None:
         pass
 
 
+def _secure_runtime_writable_dir(path: Path) -> None:
+    try:
+        path.chmod(0o777)
+    except (OSError, NotImplementedError):
+        pass
+
+
 def _secure_runtime_file(path: Path) -> None:
     try:
         if path.exists():
@@ -437,12 +444,16 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
         _product_storage_root(product_config),
         _product_users_root(product_config),
         runtime_root,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+        _secure_runtime_dir(path)
+    for path in (
         hermes_home,
         hermes_home / "memories",
         workspace_root,
     ):
         path.mkdir(parents=True, exist_ok=True)
-        _secure_runtime_dir(path)
+        _secure_runtime_writable_dir(path)
 
     soul_path = hermes_home / "SOUL.md"
     _write_runtime_text_if_changed(soul_path, render_product_soul(product_config))
