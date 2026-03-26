@@ -81,10 +81,10 @@ def test_stage_product_runtime_uses_container_readable_permissions(tmp_path, mon
     soul_path = hermes_home / "SOUL.md"
     env_path = Path(record.env_file)
 
-    assert oct(runtime_root.stat().st_mode & 0o777) == "0o700"
-    assert oct(hermes_home.stat().st_mode & 0o777) == "0o700"
-    assert oct(workspace_root.stat().st_mode & 0o777) == "0o700"
-    assert oct(soul_path.stat().st_mode & 0o777) == "0o600"
+    assert oct(runtime_root.stat().st_mode & 0o777) == "0o755"
+    assert oct(hermes_home.stat().st_mode & 0o777) == "0o755"
+    assert oct(workspace_root.stat().st_mode & 0o777) == "0o755"
+    assert oct(soul_path.stat().st_mode & 0o777) == "0o644"
     assert oct(env_path.stat().st_mode & 0o777) == "0o600"
 
 

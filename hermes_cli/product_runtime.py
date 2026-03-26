@@ -55,7 +55,7 @@ class ProductRuntimeLaunchSettings:
 
 def _secure_runtime_dir(path: Path) -> None:
     try:
-        path.chmod(0o700)
+        path.chmod(0o755)
     except (OSError, NotImplementedError):
         pass
 
@@ -64,6 +64,14 @@ def _secure_runtime_file(path: Path) -> None:
     try:
         if path.exists():
             path.chmod(0o600)
+    except (OSError, NotImplementedError):
+        pass
+
+
+def _secure_container_readable_file(path: Path) -> None:
+    try:
+        if path.exists():
+            path.chmod(0o644)
     except (OSError, NotImplementedError):
         pass
 
@@ -289,7 +297,7 @@ def _write_runtime_cli_config(config: dict[str, Any], user_id: str, *, base_url:
         }
     }
     _write_runtime_text_if_changed(config_path, yaml.safe_dump(runtime_config, sort_keys=False))
-    _secure_runtime_file(config_path)
+    _secure_container_readable_file(config_path)
 
 
 def _resolve_runtime_launch_settings(product_config: dict[str, Any]) -> ProductRuntimeLaunchSettings:
@@ -438,7 +446,7 @@ def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None
 
     soul_path = hermes_home / "SOUL.md"
     _write_runtime_text_if_changed(soul_path, render_product_soul(product_config))
-    _secure_runtime_file(soul_path)
+    _secure_container_readable_file(soul_path)
 
     launch_settings = _resolve_runtime_launch_settings(product_config)
     _write_runtime_cli_config(
