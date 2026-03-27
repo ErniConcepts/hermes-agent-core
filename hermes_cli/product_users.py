@@ -293,11 +293,7 @@ def create_product_signup_token(config: dict[str, Any] | None = None) -> Product
     if not token:
         raise RuntimeError("Pocket ID did not return a signup token")
     urls = resolve_product_urls(product_config)
-    public_signup_base = (
-        str(urls.get("tailnet_app_base_url", "")).strip()
-        if bool(urls.get("tailnet_active"))
-        else str(urls.get("app_base_url", "")).strip()
-    )
+    public_signup_base = str(urls.get("app_base_url", "")).strip()
     if not public_signup_base:
         raise RuntimeError("Product app URL is not configured")
     return ProductSignupToken(

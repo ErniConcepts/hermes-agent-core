@@ -223,14 +223,14 @@ def test_create_product_signup_token_returns_full_url(monkeypatch):
     assert seen == [True]
 
 
-def test_create_product_signup_token_prefers_tailnet_app_url_when_active(monkeypatch):
+def test_create_product_signup_token_keeps_primary_app_url_when_tailnet_is_active(monkeypatch):
     client = DummyClient({("POST", "/api/signup-tokens"): (200, {"token": "signup-123"})})
     monkeypatch.setattr("hermes_cli.product_users._client", lambda config=None: client)
     monkeypatch.setattr("hermes_cli.product_users._ensure_signup_mode_with_token", lambda config: None)
     monkeypatch.setattr(
         "hermes_cli.product_users.resolve_product_urls",
         lambda config=None: {
-            "app_base_url": "http://localhost:8086",
+            "app_base_url": "http://officebox.local:8086",
             "tailnet_app_base_url": "https://hermes-box.corpnet.ts.net",
             "tailnet_active": True,
         },
@@ -238,7 +238,7 @@ def test_create_product_signup_token_prefers_tailnet_app_url_when_active(monkeyp
 
     token = create_product_signup_token({})
 
-    assert token.signup_url == "https://hermes-box.corpnet.ts.net/st/signup-123"
+    assert token.signup_url == "http://officebox.local:8086/st/signup-123"
 
 
 def test_create_product_user_with_signup_combines_results(monkeypatch):
