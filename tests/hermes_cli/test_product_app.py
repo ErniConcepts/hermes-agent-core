@@ -511,6 +511,51 @@ def test_product_app_account_bridge_returns_tailnet_app_redirect(monkeypatch):
     assert response.json() == {"redirect_url": "https://hermes-box.corpnet.ts.net/auth/bridge?token=abc"}
 
 
+def test_product_app_tailnet_bridge_auto_binds_detected_identity(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {
+            "app_base_url": "http://officebox.local:8086",
+            "issuer_url": "http://officebox.local:1411",
+            "local_app_base_url": "http://officebox.local:8086",
+            "local_issuer_url": "http://officebox.local:1411",
+            "tailnet_host": "hermes-box.corpnet.ts.net",
+            "tailnet_app_base_url": "https://hermes-box.corpnet.ts.net",
+            "tailnet_issuer_url": "https://hermes-box.corpnet.ts.net:4444",
+            "tailnet_activation_status": "active",
+            "tailnet_active": True,
+        },
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+    monkeypatch.setattr(
+        "hermes_cli.product_app.consume_tailnet_bridge_token",
+        lambda token, target_origin=None: {"user_id": "user-1"} if token == "abc" else None,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.get_product_user_by_id",
+        lambda user_id: type(
+            "U",
+            (),
+            {"id": user_id, "username": "admin", "display_name": "Admin", "email": "admin@example.com", "is_admin": True, "disabled": False},
+        )(),
+    )
+    monkeypatch.setattr("hermes_cli.product_app.get_user_id_for_tailnet_login", lambda login: None)
+    seen: list[tuple[str, str]] = []
+    monkeypatch.setattr("hermes_cli.product_app.bind_tailnet_login", lambda user_id, login: seen.append((user_id, login)))
+
+    client = TestClient(create_product_app())
+    response = client.get(
+        "https://hermes-box.corpnet.ts.net/auth/bridge?token=abc",
+        headers={"Tailscale-User-Login": "alice@example.com"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "https://hermes-box.corpnet.ts.net"
+    assert seen == [("user-1", "alice@example.com")]
+
+
 def test_product_app_auto_logs_in_from_bound_tailnet_identity(monkeypatch):
     monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
     monkeypatch.setattr(

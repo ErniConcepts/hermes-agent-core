@@ -132,14 +132,15 @@ PAGE_TEMPLATE = """<!doctype html>
 <div class="token-row" id="accountTailnetRow" hidden>
 <code class="token-link" id="accountTailnetUrl"></code>
 <button class="button" id="accountTailnetBridgeButton" type="button">Open Tailnet URL</button>
-<button class="button" id="accountTailnetBindButton" type="button" hidden>Use this Tailnet identity</button>
-<button class="button secondary-button" id="accountTailnetUnbindButton" type="button" hidden>Remove Tailnet link</button>
 </div>
 <div class="token-row" id="accountDetectedTailnetRow" hidden>
+<span class="table-badge">Detected Tailscale Identity:</span>
 <code class="token-link" id="accountDetectedTailnetLogin"></code>
 </div>
 <div class="token-row" id="accountBoundTailnetRow" hidden>
+<span class="table-badge is-success">Your current Tailscale Identity:</span>
 <code class="token-link" id="accountBoundTailnetLogin"></code>
+<button class="button secondary-button" id="accountTailnetUnbindButton" type="button" hidden>Revoke identity</button>
 </div>
 </section>
 </div>

@@ -374,6 +374,17 @@ def _detected_tailnet_login(request: Request) -> str | None:
     return login or None
 
 
+def _maybe_bind_detected_tailnet_identity(request: Request, user_id: str) -> str | None:
+    detected_login = _detected_tailnet_login(request)
+    if not detected_login or not user_id:
+        return None
+    existing_user_id = get_user_id_for_tailnet_login(detected_login)
+    if existing_user_id and existing_user_id != user_id:
+        return None
+    bind_tailnet_login(user_id, detected_login)
+    return detected_login
+
+
 def _maybe_auto_login_from_tailnet_identity(request: Request) -> dict[str, Any] | None:
     existing = request.session.get("user")
     if isinstance(existing, dict):
@@ -737,6 +748,7 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
         if provider_user is None or provider_user.disabled or not provider_user.is_admin:
             raise HTTPException(status_code=400, detail="Tailnet bridge link can no longer be used")
         _store_session_user(request, _provider_user_session_payload(provider_user))
+        _maybe_bind_detected_tailnet_identity(request, provider_user.id)
         request.session["tailnet_bridge_authenticated"] = True
         _csrf_token(request)
         return RedirectResponse(urls["tailnet_app_base_url"], status_code=303)

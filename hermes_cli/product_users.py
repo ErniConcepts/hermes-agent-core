@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import time
 import re
+import socket
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -293,7 +295,7 @@ def create_product_signup_token(config: dict[str, Any] | None = None) -> Product
     if not token:
         raise RuntimeError("Pocket ID did not return a signup token")
     urls = resolve_product_urls(product_config)
-    public_signup_base = str(urls.get("app_base_url", "")).strip()
+    public_signup_base = _signup_base_url(product_config, urls)
     if not public_signup_base:
         raise RuntimeError("Product app URL is not configured")
     return ProductSignupToken(
@@ -302,6 +304,33 @@ def create_product_signup_token(config: dict[str, Any] | None = None) -> Product
         ttl_seconds=_DEFAULT_SIGNUP_TOKEN_TTL,
         usage_limit=_DEFAULT_SIGNUP_TOKEN_USAGE_LIMIT,
     )
+
+
+def _signup_base_url(product_config: dict[str, Any], urls: dict[str, Any]) -> str:
+    app_base_url = str(urls.get("app_base_url", "")).strip()
+    if not app_base_url:
+        return ""
+    parsed = urlparse(app_base_url)
+    app_host = (parsed.hostname or "").strip().lower()
+    if app_host and app_host != "localhost":
+        return app_base_url
+    public_host = str(urls.get("public_host", "")).strip().lower()
+    if public_host and public_host != "localhost":
+        return app_base_url
+    if not parsed.scheme:
+        return app_base_url
+    lan_host = str(product_config.get("network", {}).get("lan_signup_host", "")).strip().lower()
+    if not lan_host:
+        lan_host = socket.gethostname().strip().lower()
+        if lan_host and "." not in lan_host:
+            lan_host = f"{lan_host}.local"
+    if not lan_host:
+        return app_base_url
+    default_port = 80 if parsed.scheme == "http" else 443 if parsed.scheme == "https" else None
+    port_suffix = ""
+    if parsed.port and parsed.port != default_port:
+        port_suffix = f":{parsed.port}"
+    return f"{parsed.scheme}://{lan_host}{port_suffix}"
 
 
 def list_active_product_signup_tokens(config: dict[str, Any] | None = None) -> set[str]:

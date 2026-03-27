@@ -209,6 +209,7 @@ def test_deactivate_product_user_sets_disabled(monkeypatch):
 def test_create_product_signup_token_returns_full_url(monkeypatch):
     client = DummyClient({("POST", "/api/signup-tokens"): (200, {"token": "signup-123"})})
     monkeypatch.setattr("hermes_cli.product_users._client", lambda config=None: client)
+    monkeypatch.setattr("hermes_cli.product_users.socket.gethostname", lambda: "laptopjannis")
     seen = []
     monkeypatch.setattr("hermes_cli.product_users._ensure_signup_mode_with_token", lambda config: seen.append(True))
     monkeypatch.setattr(
@@ -219,7 +220,7 @@ def test_create_product_signup_token_returns_full_url(monkeypatch):
     token = create_product_signup_token({})
 
     assert token.token == "signup-123"
-    assert token.signup_url == "http://localhost:8086/st/signup-123"
+    assert token.signup_url == "http://laptopjannis.local:8086/st/signup-123"
     assert seen == [True]
 
 
@@ -239,6 +240,26 @@ def test_create_product_signup_token_keeps_primary_app_url_when_tailnet_is_activ
     token = create_product_signup_token({})
 
     assert token.signup_url == "http://officebox.local:8086/st/signup-123"
+
+
+def test_create_product_signup_token_uses_lan_hostname_when_public_host_is_localhost(monkeypatch):
+    client = DummyClient({("POST", "/api/signup-tokens"): (200, {"token": "signup-123"})})
+    monkeypatch.setattr("hermes_cli.product_users._client", lambda config=None: client)
+    monkeypatch.setattr("hermes_cli.product_users._ensure_signup_mode_with_token", lambda config: None)
+    monkeypatch.setattr("hermes_cli.product_users.socket.gethostname", lambda: "laptopjannis")
+    monkeypatch.setattr(
+        "hermes_cli.product_users.resolve_product_urls",
+        lambda config=None: {
+            "public_host": "localhost",
+            "app_base_url": "http://localhost:8086",
+            "tailnet_app_base_url": "https://hermes-box.corpnet.ts.net",
+            "tailnet_active": True,
+        },
+    )
+
+    token = create_product_signup_token({})
+
+    assert token.signup_url == "http://laptopjannis.local:8086/st/signup-123"
 
 
 def test_create_product_user_with_signup_combines_results(monkeypatch):
