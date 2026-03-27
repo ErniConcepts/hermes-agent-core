@@ -66,14 +66,21 @@ _AUTH_RATE_LIMITS: dict[tuple[str, str], deque[float]] = {}
 @dataclass(frozen=True)
 class ProductAppContext:
     product_config: dict[str, Any]
-    urls: dict[str, str]
     auth_provider: str
-    issuer_url: str
     product_name: str
+
+    @property
+    def urls(self) -> dict[str, str]:
+        return _current_product_urls()
 
     @property
     def app_base_url(self) -> str:
         return self.urls["app_base_url"]
+
+    @property
+    def issuer_url(self) -> str:
+        product_config = load_product_config()
+        return str(product_config.get("auth", {}).get("issuer_url", "")).strip() or self.urls["issuer_url"]
 
     @property
     def account_url(self) -> str:
@@ -210,7 +217,7 @@ def _client_ip(request: Request) -> str:
 def _expected_request_origin(request: Request) -> str:
     context = getattr(request.app.state, "product_app_context", None)
     if isinstance(context, ProductAppContext):
-        return context.app_origin
+        return _origin_from_url(_current_app_base_url())
     return _origin_from_url(str(request.base_url))
 
 
@@ -425,20 +432,33 @@ def _canonical_request_redirect(request: Request, urls: dict[str, str]) -> str |
 
 def _build_product_app_context() -> ProductAppContext:
     product_config = load_product_config()
-    urls = resolve_product_urls(product_config)
     auth_provider = str(product_config.get("auth", {}).get("provider", "unknown")).strip() or "unknown"
-    issuer_url = str(product_config.get("auth", {}).get("issuer_url", "")).strip() or urls["issuer_url"]
     product_name = (
         str(product_config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip()
         or "Hermes Core"
     )
     return ProductAppContext(
         product_config=product_config,
-        urls=urls,
         auth_provider=auth_provider,
-        issuer_url=issuer_url,
         product_name=product_name,
     )
+
+
+def _current_product_urls() -> dict[str, str]:
+    return resolve_product_urls(load_product_config())
+
+
+def _current_app_base_url() -> str:
+    return _current_product_urls()["app_base_url"]
+
+
+def _current_issuer_url() -> str:
+    product_config = load_product_config()
+    return str(product_config.get("auth", {}).get("issuer_url", "")).strip() or _current_product_urls()["issuer_url"]
+
+
+def _current_account_url() -> str:
+    return f"{_current_issuer_url().rstrip('/')}/settings/account"
 
 
 def _runtime_session_payload(user: dict[str, Any]) -> dict[str, Any]:
@@ -519,7 +539,7 @@ def _register_root_routes(app: FastAPI, context: ProductAppContext) -> None:
         return HTMLResponse(
             build_product_index_html(
                 product_name=context.product_name,
-                account_url=context.account_url,
+                account_url=_current_account_url(),
             )
         )
 
@@ -527,8 +547,8 @@ def _register_root_routes(app: FastAPI, context: ProductAppContext) -> None:
     def healthz() -> ProductHealthResponse:
         return ProductHealthResponse(
             auth_provider=context.auth_provider,
-            issuer_url=context.issuer_url,
-            app_base_url=context.app_base_url,
+            issuer_url=_current_issuer_url(),
+            app_base_url=_current_app_base_url(),
         )
 
 
@@ -554,7 +574,7 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
                 refreshed = None
             if refreshed is not None:
                 _mark_bootstrap_completed_if_admin(refreshed)
-                return RedirectResponse(context.app_base_url, status_code=303)
+                return RedirectResponse(_current_app_base_url(), status_code=303)
             request.session.clear()
         settings = load_product_oidc_client_settings(config=context.product_config)
         metadata = discover_product_oidc_provider_metadata(settings)
@@ -571,10 +591,10 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
         _enforce_auth_rate_limit(request, "callback")
         pending = request.session.get("oidc_pending")
         if not isinstance(pending, dict):
-            return RedirectResponse(context.app_base_url, status_code=303)
+            return RedirectResponse(_current_app_base_url(), status_code=303)
         if state != pending.get("state"):
             request.session.pop("oidc_pending", None)
-            return RedirectResponse(context.app_base_url, status_code=303)
+            return RedirectResponse(_current_app_base_url(), status_code=303)
 
         settings = load_product_oidc_client_settings(config=context.product_config)
         metadata = discover_product_oidc_provider_metadata(settings)
@@ -602,7 +622,7 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
         _store_session_user(request, session_user)
         _mark_bootstrap_completed_if_admin(session_user)
         _csrf_token(request)
-        return RedirectResponse(context.app_base_url, status_code=303)
+        return RedirectResponse(_current_app_base_url(), status_code=303)
 
     @app.get("/api/auth/session", response_model=ProductSessionResponse)
     def auth_session(request: Request) -> ProductSessionResponse:
@@ -769,7 +789,7 @@ def create_product_app() -> FastAPI:
 
     @app.middleware("http")
     async def enforce_canonical_origin(request: Request, call_next):
-        redirect_url = _canonical_request_redirect(request, context.urls)
+        redirect_url = _canonical_request_redirect(request, _current_product_urls())
         if redirect_url is not None:
             return RedirectResponse(redirect_url, status_code=307)
         return await call_next(request)
