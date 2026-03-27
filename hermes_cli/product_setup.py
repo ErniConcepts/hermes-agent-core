@@ -376,6 +376,13 @@ def _print_product_setup_summary() -> None:
     print_info(f"Install dir:    {product_install_root()}")
     print_info(f"Canonical app URL:       {urls['app_base_url']}")
     print_info(f"Canonical Pocket ID URL: {urls['issuer_url']}")
+    if tailscale_enabled := bool(product_config.get("network", {}).get("tailscale", {}).get("enabled", False)):
+        tailnet_app_url = str(urls.get("tailnet_app_base_url", "")).strip()
+        tailnet_auth_url = str(urls.get("tailnet_issuer_url", "")).strip()
+        if tailnet_app_url:
+            print_info(f"Tailnet app URL:         {tailnet_app_url}")
+        if tailnet_auth_url:
+            print_info(f"Tailnet auth URL:        {tailnet_auth_url}")
     if bind_host in {"127.0.0.1", "localhost"}:
         print_info(f"Service bind host:       {bind_host} (local-only)")
         print_info("LAN access URL:          disabled (set network.bind_host to 0.0.0.0)")
@@ -389,7 +396,6 @@ def _print_product_setup_summary() -> None:
         print_info(f"Local debug URL:        {urls['local_app_base_url']}")
     if urls.get("local_issuer_url"):
         print_info(f"Local auth debug URL:   {urls['local_issuer_url']}")
-    tailscale_enabled = bool(product_config.get("network", {}).get("tailscale", {}).get("enabled", False))
     bootstrap_mode = str(enrollment_state.get("bootstrap_mode", "native_setup")).strip() or "native_setup"
     first_admin_login_seen = bool(enrollment_state.get("first_admin_login_seen", False))
     setup_url = str(enrollment_state.get("setup_url", "")).strip()
@@ -401,7 +407,7 @@ def _print_product_setup_summary() -> None:
         print_info(f"First admin bootstrap:  {bootstrap_mode}")
         if setup_url:
             print_info(f"First admin sign-up:    {setup_url}")
-    if tailscale_enabled:
+        if tailscale_enabled:
             print_info("Tailnet auth exposure:  pending first admin bootstrap")
             print_info("  During bootstrap, Pocket ID setup is intentionally local-only.")
             if urls.get("local_issuer_url"):

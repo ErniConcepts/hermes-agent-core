@@ -308,9 +308,48 @@ def test_product_setup_summary_explains_tailnet_auth_is_pending_during_bootstrap
     _print_product_setup_summary()
 
     out = capsys.readouterr().out
+    assert "Tailnet app URL:         https://hermes-box.corpnet.ts.net" in out
+    assert "Tailnet auth URL:        https://hermes-box.corpnet.ts.net:4444" in out
     assert "Tailnet auth exposure:  pending first admin bootstrap" in out
     assert "Pocket ID setup is intentionally local-only." in out
     assert "Complete bootstrap at: http://localhost:1411/setup" in out
+
+
+def test_product_setup_summary_shows_tailnet_urls_after_bootstrap_completion(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    from hermes_cli.product_config import save_product_config
+
+    product_config = load_product_config()
+    product_config["network"]["tailscale"]["enabled"] = True
+    product_config["network"]["tailscale"]["tailnet_name"] = "corpnet"
+    product_config["network"]["tailscale"]["device_name"] = "hermes-box"
+    product_config["network"]["public_host"] = "localhost"
+    save_product_config(product_config)
+    state_path = tmp_path / "product" / "bootstrap" / "first_admin_enrollment.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "bootstrap_mode": "native_setup",
+                "setup_url": "http://localhost:1411/setup",
+                "first_admin_login_seen": True,
+                "bootstrap_completed_at": 1710000000,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from hermes_cli.product_setup import _print_product_setup_summary
+
+    _print_product_setup_summary()
+
+    out = capsys.readouterr().out
+    assert "Canonical app URL:       https://hermes-box.corpnet.ts.net" in out
+    assert "Canonical Pocket ID URL: https://hermes-box.corpnet.ts.net:4444" in out
+    assert "Tailnet app URL:         https://hermes-box.corpnet.ts.net" in out
+    assert "Tailnet auth URL:        https://hermes-box.corpnet.ts.net:4444" in out
+    assert "Tailnet auth exposure:  enabled" in out
+    assert "pending first admin bootstrap" not in out
 
 
 def test_product_setup_summary_shows_lan_urls_when_bind_host_all_interfaces(tmp_path, capsys, monkeypatch):
