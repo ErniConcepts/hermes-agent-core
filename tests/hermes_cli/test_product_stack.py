@@ -14,6 +14,7 @@ from hermes_cli.product_stack import (
     bootstrap_product_oidc_client,
     create_tailnet_bridge_token,
     disable_tailnet_activation,
+    enable_tailnet_activation,
     ensure_product_tailnet_started,
     ensure_product_tailnet_stopped,
     ensure_product_stack_started,
@@ -24,7 +25,6 @@ from hermes_cli.product_stack import (
     get_tailnet_activation_state_path,
     initialize_product_stack,
     mark_first_admin_bootstrap_completed,
-    mark_tailnet_activation_completed,
     resolve_product_urls,
     consume_tailnet_bridge_token,
 )
@@ -51,7 +51,7 @@ def test_resolve_product_urls_uses_public_host_when_bind_is_wildcard(tmp_path, m
     }
 
 
-def test_resolve_product_urls_uses_tailnet_urls_when_enabled(tmp_path, monkeypatch):
+def test_resolve_product_urls_keeps_local_urls_when_tailnet_enabled(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     config = load_product_config()
@@ -63,9 +63,6 @@ def test_resolve_product_urls_uses_tailnet_urls_when_enabled(tmp_path, monkeypat
     config["network"]["tailscale"]["device_name"] = "hermes-box"
     config["network"]["tailscale"]["app_https_port"] = 443
     config["network"]["tailscale"]["auth_https_port"] = 4444
-    state_path = get_first_admin_enrollment_state_path()
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({"first_admin_login_seen": True}), encoding="utf-8")
     get_tailnet_activation_state_path().write_text(
         json.dumps({"status": "active", "activated_at": 1710000000}),
         encoding="utf-8",
@@ -75,11 +72,11 @@ def test_resolve_product_urls_uses_tailnet_urls_when_enabled(tmp_path, monkeypat
 
     assert urls == {
         "public_host": "officebox.local",
-        "url_scheme": "https",
-        "app_base_url": "https://hermes-box.corpnet.ts.net",
-        "issuer_url": "https://hermes-box.corpnet.ts.net:4444",
-        "oidc_callback_url": "https://hermes-box.corpnet.ts.net/api/auth/oidc/callback",
-        "pocket_id_setup_url": "https://hermes-box.corpnet.ts.net:4444/setup",
+        "url_scheme": "http",
+        "app_base_url": "http://officebox.local:18086",
+        "issuer_url": "http://officebox.local:19111",
+        "oidc_callback_url": "http://officebox.local:18086/api/auth/oidc/callback",
+        "pocket_id_setup_url": "http://officebox.local:19111/setup",
         "local_app_base_url": "http://officebox.local:18086",
         "local_issuer_url": "http://officebox.local:19111",
         "tailnet_host": "hermes-box.corpnet.ts.net",
@@ -364,6 +361,33 @@ def test_ensure_product_tailnet_started_wraps_operator_permission_failure(tmp_pa
             ensure_product_tailnet_started(config)
 
 
+def test_enable_tailnet_activation_starts_only_tailnet_app_serve(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    config = load_product_config()
+    config["network"]["tailscale"]["enabled"] = True
+    config["network"]["tailscale"]["tailnet_name"] = "corpnet"
+    config["network"]["tailscale"]["device_name"] = "hermes-box"
+    save_product_config(config)
+
+    with (
+        patch("hermes_cli.product_stack.subprocess.run") as mock_run,
+    ):
+        state = enable_tailnet_activation()
+
+    assert state["status"] == "active"
+    commands = [call.args[0] for call in mock_run.call_args_list]
+    assert commands == [
+        [
+            "tailscale",
+            "serve",
+            "--bg",
+            "--https=443",
+            "http://127.0.0.1:8086",
+        ]
+    ]
+
+
 def test_mark_first_admin_bootstrap_completed_refreshes_tailnet_exposure(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     state_path = get_first_admin_enrollment_state_path()
@@ -645,7 +669,7 @@ def test_mark_first_admin_bootstrap_completed_sets_completion_fields(tmp_path, m
     assert reloaded["auth"]["issuer_url"] == "http://localhost:1411"
 
 
-def test_mark_tailnet_activation_completed_switches_canonical_urls(tmp_path, monkeypatch):
+def test_enable_tailnet_activation_keeps_localhost_canonical_urls(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     config = load_product_config()
     config["network"]["public_host"] = "officebox.local"
@@ -654,17 +678,13 @@ def test_mark_tailnet_activation_completed_switches_canonical_urls(tmp_path, mon
     config["network"]["tailscale"]["device_name"] = "hermes-box"
     save_product_config(config)
 
-    with (
-        patch("hermes_cli.product_stack.bootstrap_product_oidc_client"),
-        patch("hermes_cli.product_stack.ensure_product_tailnet_started"),
-        patch("hermes_cli.product_stack.get_env_value", return_value="existing-secret"),
-    ):
-        state = mark_tailnet_activation_completed()
+    with patch("hermes_cli.product_stack.ensure_product_tailnet_started"):
+        state = enable_tailnet_activation()
 
     assert state["status"] == "active"
     urls = resolve_product_urls(load_product_config())
-    assert urls["app_base_url"] == "https://hermes-box.corpnet.ts.net"
-    assert urls["issuer_url"] == "https://hermes-box.corpnet.ts.net:4444"
+    assert urls["app_base_url"] == "http://officebox.local:8086"
+    assert urls["issuer_url"] == "http://officebox.local:1411"
 
 
 def test_disable_tailnet_activation_restores_localhost_urls(tmp_path, monkeypatch):
@@ -678,11 +698,7 @@ def test_disable_tailnet_activation_restores_localhost_urls(tmp_path, monkeypatc
     get_tailnet_activation_state_path().parent.mkdir(parents=True, exist_ok=True)
     get_tailnet_activation_state_path().write_text(json.dumps({"status": "active"}), encoding="utf-8")
 
-    with (
-        patch("hermes_cli.product_stack.bootstrap_product_oidc_client"),
-        patch("hermes_cli.product_stack.ensure_product_tailnet_stopped"),
-        patch("hermes_cli.product_stack.get_env_value", return_value="existing-secret"),
-    ):
+    with patch("hermes_cli.product_stack.ensure_product_tailnet_stopped"):
         state = disable_tailnet_activation()
 
     assert state["status"] == "inactive"

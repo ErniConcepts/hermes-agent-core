@@ -118,6 +118,36 @@ PAGE_TEMPLATE = """<!doctype html>
 </div>
 </section>
 
+<section class="popup shell-card" id="accountCard" hidden>
+<div class="popup-inner">
+<div class="section-head">
+<div>
+<p class="eyebrow">Account</p>
+<h2>Network Access</h2>
+</div>
+</div>
+<p class="lead small" id="accountNetworkLead">Link your Tailnet identity here after Tailnet access is enabled.</p>
+<div id="accountNetworkMessage" class="message"></div>
+<section class="shell admin-token-shell">
+<div class="token-row">
+<code class="token-link" id="accountLocalUrl"></code>
+</div>
+<div class="token-row" id="accountTailnetRow" hidden>
+<code class="token-link" id="accountTailnetUrl"></code>
+<button class="button" id="accountTailnetBridgeButton" type="button">Link Tailnet</button>
+<button class="button" id="accountTailnetBindButton" type="button" hidden>Use this Tailnet identity</button>
+<button class="button secondary-button" id="accountTailnetUnbindButton" type="button" hidden>Remove Tailnet link</button>
+</div>
+<div class="token-row" id="accountDetectedTailnetRow" hidden>
+<code class="token-link" id="accountDetectedTailnetLogin"></code>
+</div>
+<div class="token-row" id="accountBoundTailnetRow" hidden>
+<code class="token-link" id="accountBoundTailnetLogin"></code>
+</div>
+</section>
+</div>
+</section>
+
 <section class="popup shell-card" id="adminCard" hidden>
 <div class="popup-inner">
 <div class="section-head">

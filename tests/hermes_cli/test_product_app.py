@@ -201,31 +201,7 @@ def test_product_app_login_rate_limits_after_repeated_attempts(monkeypatch):
     assert blocked.json() == {"detail": "Too many authentication requests"}
 
 
-def test_product_app_redirects_localhost_to_tailnet_when_enabled(monkeypatch):
-    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
-    monkeypatch.setattr(
-        "hermes_cli.product_app.resolve_product_urls",
-        lambda config: {
-            "app_base_url": "https://laptopjannis.tail5fd7a5.ts.net",
-            "issuer_url": "https://laptopjannis.tail5fd7a5.ts.net:8443",
-            "oidc_callback_url": "https://laptopjannis.tail5fd7a5.ts.net/api/auth/oidc/callback",
-            "local_app_base_url": "http://localhost:8086",
-            "local_issuer_url": "http://localhost:1411",
-            "tailnet_host": "laptopjannis.tail5fd7a5.ts.net",
-            "tailnet_activation_status": "active",
-            "tailnet_active": True,
-        },
-    )
-    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-
-    client = TestClient(create_product_app())
-    response = client.get("http://localhost:8086/", follow_redirects=False)
-
-    assert response.status_code == 307
-    assert response.headers["location"] == "https://laptopjannis.tail5fd7a5.ts.net/"
-
-
-def test_product_app_allows_tailnet_bridge_path_before_activation(monkeypatch):
+def test_product_app_allows_tailnet_bridge_path_when_enabled(monkeypatch):
     monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
     monkeypatch.setattr(
         "hermes_cli.product_app.resolve_product_urls",
@@ -237,8 +213,8 @@ def test_product_app_allows_tailnet_bridge_path_before_activation(monkeypatch):
             "tailnet_host": "laptopjannis.tail5fd7a5.ts.net",
             "tailnet_app_base_url": "https://laptopjannis.tail5fd7a5.ts.net",
             "tailnet_issuer_url": "https://laptopjannis.tail5fd7a5.ts.net:4444",
-            "tailnet_activation_status": "pending",
-            "tailnet_active": False,
+            "tailnet_activation_status": "active",
+            "tailnet_active": True,
         },
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
@@ -265,7 +241,7 @@ def test_product_app_allows_tailnet_bridge_path_before_activation(monkeypatch):
     assert response.headers["location"] == "https://laptopjannis.tail5fd7a5.ts.net"
 
 
-def test_product_app_pending_tailnet_request_is_allowed_during_activation(monkeypatch):
+def test_product_app_active_tailnet_request_is_allowed(monkeypatch):
     monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
     monkeypatch.setattr(
         "hermes_cli.product_app.resolve_product_urls",
@@ -277,8 +253,8 @@ def test_product_app_pending_tailnet_request_is_allowed_during_activation(monkey
             "tailnet_host": "laptopjannis.tail5fd7a5.ts.net",
             "tailnet_app_base_url": "https://laptopjannis.tail5fd7a5.ts.net",
             "tailnet_issuer_url": "https://laptopjannis.tail5fd7a5.ts.net:4444",
-            "tailnet_activation_status": "pending",
-            "tailnet_active": False,
+            "tailnet_activation_status": "active",
+            "tailnet_active": True,
         },
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
@@ -288,52 +264,6 @@ def test_product_app_pending_tailnet_request_is_allowed_during_activation(monkey
 
     assert response.status_code == 200
     assert "Sign in with Pocket ID" in response.text
-
-
-def test_product_app_pending_tailnet_csrf_accepts_tailnet_origin(monkeypatch):
-    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
-    monkeypatch.setattr(
-        "hermes_cli.product_app.resolve_product_urls",
-        lambda config: {
-            "app_base_url": "http://localhost:8086",
-            "issuer_url": "http://localhost:1411",
-            "local_app_base_url": "http://localhost:8086",
-            "local_issuer_url": "http://localhost:1411",
-            "tailnet_host": "laptopjannis.tail5fd7a5.ts.net",
-            "tailnet_app_base_url": "https://laptopjannis.tail5fd7a5.ts.net",
-            "tailnet_issuer_url": "https://laptopjannis.tail5fd7a5.ts.net:4444",
-            "tailnet_activation_status": "pending",
-            "tailnet_active": False,
-        },
-    )
-    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-    monkeypatch.setattr(
-        "hermes_cli.product_app.get_product_user_by_id",
-        lambda user_id: type(
-            "U",
-            (),
-            {"id": user_id, "username": "admin", "display_name": "Admin", "email": "admin@example.com", "is_admin": True, "disabled": False},
-        )(),
-    )
-    monkeypatch.setattr(
-        "hermes_cli.product_app.consume_tailnet_bridge_token",
-        lambda token, target_origin: {"user_id": "user-1"} if token == "good-token" else None,
-    )
-    monkeypatch.setattr("hermes_cli.product_app.mark_tailnet_activation_completed", lambda: None)
-
-    client = TestClient(create_product_app())
-    client.get("https://laptopjannis.tail5fd7a5.ts.net/auth/bridge?token=good-token", follow_redirects=False)
-    csrf = client.get("https://laptopjannis.tail5fd7a5.ts.net/api/auth/session").json()["csrf_token"]
-    response = client.post(
-        "https://laptopjannis.tail5fd7a5.ts.net/api/admin/network/tailscale/complete",
-        headers={
-            "X-Hermes-CSRF-Token": csrf,
-            "Origin": "https://laptopjannis.tail5fd7a5.ts.net",
-        },
-        json={},
-    )
-
-    assert response.status_code != 403
 
 
 def test_product_app_exposes_admin_network_state(monkeypatch):
@@ -362,7 +292,7 @@ def test_product_app_exposes_admin_network_state(monkeypatch):
     assert response.json()["tailnet_app_base_url"] == "https://hermes-box.corpnet.ts.net"
 
 
-def test_product_app_tailnet_bridge_returns_tailnet_login_redirect(monkeypatch):
+def test_product_app_admin_enable_tailnet_returns_network_state(monkeypatch):
     seen = []
     monkeypatch.setattr("hermes_cli.product_app._require_admin_user", lambda request: {"sub": "user-1", "is_admin": True})
     monkeypatch.setattr("hermes_cli.product_app._require_csrf", lambda request: None)
@@ -378,24 +308,20 @@ def test_product_app_tailnet_bridge_returns_tailnet_login_redirect(monkeypatch):
             "tailnet_host": "hermes-box.corpnet.ts.net",
             "tailnet_app_base_url": "https://hermes-box.corpnet.ts.net",
             "tailnet_issuer_url": "https://hermes-box.corpnet.ts.net:4444",
-            "tailnet_activation_status": "inactive",
-            "tailnet_active": False,
+            "tailnet_activation_status": "active",
+            "tailnet_active": True,
         },
     )
-    monkeypatch.setattr("hermes_cli.product_app.ensure_product_tailnet_started", lambda: seen.append("started"))
-    monkeypatch.setattr("hermes_cli.product_app.mark_tailnet_activation_pending", lambda: seen.append("pending"))
+    monkeypatch.setattr("hermes_cli.product_app.enable_tailnet_activation", lambda: seen.append("enabled"))
     client = TestClient(create_product_app())
     response = client.post(
-        "/api/admin/network/tailscale/bridge",
+        "/api/admin/network/tailscale/enable",
         json={},
     )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "activation_status": "pending",
-        "redirect_url": "https://hermes-box.corpnet.ts.net:4444/settings/account",
-    }
-    assert seen == ["started", "pending"]
+    assert response.json()["activation_status"] == "active"
+    assert seen == ["enabled"]
 
 
 def test_product_app_login_short_circuits_when_already_authenticated(monkeypatch):
@@ -490,93 +416,68 @@ def test_product_app_callback_establishes_session(monkeypatch):
     assert seen == ["marked", "marked"]
 
 
-def test_product_app_tailnet_callback_auto_activates_and_redirects_tailnet(monkeypatch):
-    state = {"tailnet_activation_status": "pending", "tailnet_active": False}
-    seen = []
-
+def test_product_app_account_bridge_returns_tailnet_app_redirect(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app._require_product_user", lambda request: {"sub": "user-1", "is_admin": False})
+    monkeypatch.setattr("hermes_cli.product_app._require_csrf", lambda request: None)
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+    monkeypatch.setattr("hermes_cli.product_app.create_tailnet_bridge_token", lambda user_id, target_origin: {"token": "abc"})
     monkeypatch.setattr(
-        "hermes_cli.product_app.load_product_config",
-        lambda: {"bootstrap": {"first_admin_username": "admin"}},
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {
+            "app_base_url": "http://officebox.local:8086",
+            "issuer_url": "http://officebox.local:1411",
+            "local_app_base_url": "http://officebox.local:8086",
+            "local_issuer_url": "http://officebox.local:1411",
+            "tailnet_host": "hermes-box.corpnet.ts.net",
+            "tailnet_app_base_url": "https://hermes-box.corpnet.ts.net",
+            "tailnet_issuer_url": "https://hermes-box.corpnet.ts.net:4444",
+            "tailnet_activation_status": "active",
+            "tailnet_active": True,
+        },
     )
+    client = TestClient(create_product_app())
+    response = client.post("/api/account/network/tailscale/bridge", json={})
 
-    def _resolve_urls(config):
-        return {
-            "app_base_url": "https://laptopjannis.tail5fd7a5.ts.net"
-            if state["tailnet_active"]
-            else "http://localhost:8086",
-            "issuer_url": "https://laptopjannis.tail5fd7a5.ts.net:4444"
-            if state["tailnet_active"]
-            else "http://localhost:1411",
+    assert response.status_code == 200
+    assert response.json() == {"redirect_url": "https://hermes-box.corpnet.ts.net/auth/bridge?token=abc"}
+
+
+def test_product_app_auto_logs_in_from_bound_tailnet_identity(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {
+            "app_base_url": "http://localhost:8086",
+            "issuer_url": "http://localhost:1411",
             "local_app_base_url": "http://localhost:8086",
             "local_issuer_url": "http://localhost:1411",
             "tailnet_host": "laptopjannis.tail5fd7a5.ts.net",
             "tailnet_app_base_url": "https://laptopjannis.tail5fd7a5.ts.net",
             "tailnet_issuer_url": "https://laptopjannis.tail5fd7a5.ts.net:4444",
-            "tailnet_activation_status": state["tailnet_activation_status"],
-            "tailnet_active": state["tailnet_active"],
-        }
-
-    monkeypatch.setattr("hermes_cli.product_app.resolve_product_urls", _resolve_urls)
+            "tailnet_activation_status": "active",
+            "tailnet_active": True,
+        },
+    )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
-    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: object())
-    monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: object())
-    monkeypatch.setattr(
-        "hermes_cli.product_app.create_oidc_login_request",
-        lambda settings, metadata: {
-            "state": "state-123",
-            "nonce": "nonce-123",
-            "verifier": "verifier-123",
-            "authorization_url": "https://laptopjannis.tail5fd7a5.ts.net:4444/authorize?client_id=hermes-core",
-        },
-    )
-    monkeypatch.setattr(
-        "hermes_cli.product_app.exchange_product_oidc_code",
-        lambda settings, metadata, code, verifier: {"access_token": "access-token"},
-    )
-    monkeypatch.setattr(
-        "hermes_cli.product_app.fetch_product_oidc_userinfo",
-        lambda access_token, metadata: {
-            "sub": "user-1",
-            "email": "admin@example.com",
-            "name": "Admin User",
-            "preferred_username": "admin",
-            "email_verified": True,
-        },
-    )
+    monkeypatch.setattr("hermes_cli.product_app.get_user_id_for_tailnet_login", lambda login: "user-1" if login == "alice@example.com" else None)
     monkeypatch.setattr(
         "hermes_cli.product_app.get_product_user_by_id",
         lambda user_id: type(
             "U",
             (),
-            {
-                "id": user_id,
-                "username": "admin",
-                "display_name": "Admin User",
-                "email": "admin@example.com",
-                "is_admin": True,
-                "disabled": False,
-            },
+            {"id": user_id, "username": "alice", "display_name": "Alice", "email": "alice@example.com", "is_admin": False, "disabled": False},
         )(),
-    )
-    monkeypatch.setattr(
-        "hermes_cli.product_app.mark_tailnet_activation_completed",
-        lambda: state.update({"tailnet_activation_status": "active", "tailnet_active": True}) or seen.append("tailnet"),
-    )
-    monkeypatch.setattr(
-        "hermes_cli.product_app.mark_first_admin_bootstrap_completed",
-        lambda: seen.append("bootstrap"),
     )
 
     client = TestClient(create_product_app())
-    client.get("https://laptopjannis.tail5fd7a5.ts.net/api/auth/login", follow_redirects=False)
-    callback = client.get(
-        "https://laptopjannis.tail5fd7a5.ts.net/api/auth/oidc/callback?code=auth-code&state=state-123",
-        follow_redirects=False,
+    response = client.get(
+        "https://laptopjannis.tail5fd7a5.ts.net/api/auth/session",
+        headers={"Tailscale-User-Login": "alice@example.com"},
     )
 
-    assert callback.status_code == 303
-    assert callback.headers["location"] == "https://laptopjannis.tail5fd7a5.ts.net"
-    assert seen == ["tailnet", "bootstrap"]
+    assert response.status_code == 200
+    assert response.json()["authenticated"] is True
+    assert response.json()["user"]["sub"] == "user-1"
 
 
 def test_product_app_blocks_setup_on_proxy_after_bootstrap_completion(monkeypatch):

@@ -35,13 +35,20 @@ from hermes_cli.product_oidc import (
 from hermes_cli.product_runtime import delete_product_runtime, get_product_runtime_session, stream_product_runtime_turn
 from hermes_cli.product_stack import (
     consume_tailnet_bridge_token,
+    create_tailnet_bridge_token,
     disable_tailnet_activation,
+    enable_tailnet_activation,
     ensure_product_tailnet_started,
     load_first_admin_enrollment_state,
     mark_first_admin_bootstrap_completed,
-    mark_tailnet_activation_completed,
-    mark_tailnet_activation_pending,
     resolve_product_urls,
+)
+from hermes_cli.product_tailnet_identities import (
+    bind_tailnet_login,
+    get_tailnet_login_for_user,
+    get_user_id_for_tailnet_login,
+    normalize_tailnet_login,
+    unbind_tailnet_login,
 )
 from hermes_cli.product_users import (
     ProductCreatedUser,
@@ -145,8 +152,19 @@ class ProductAdminNetworkResponse(BaseModel):
 
 
 class ProductTailnetBridgeResponse(BaseModel):
-    activation_status: str
     redirect_url: str
+
+
+class ProductAccountNetworkResponse(BaseModel):
+    tailscale_configured: bool
+    tailnet_enabled: bool
+    on_tailnet: bool
+    local_app_base_url: str | None = None
+    tailnet_app_base_url: str | None = None
+    detected_tailnet_login: str | None = None
+    bound_tailnet_login: str | None = None
+    tailnet_bridge_session: bool = False
+    can_bind_detected_identity: bool = False
 
 
 class ProductChatMessage(BaseModel):
@@ -349,8 +367,35 @@ def _store_session_user(request: Request, user: dict[str, Any]) -> dict[str, Any
     return user
 
 
+def _detected_tailnet_login(request: Request) -> str | None:
+    if not _is_tailnet_request(request):
+        return None
+    login = normalize_tailnet_login(request.headers.get("Tailscale-User-Login"))
+    return login or None
+
+
+def _maybe_auto_login_from_tailnet_identity(request: Request) -> dict[str, Any] | None:
+    existing = request.session.get("user")
+    if isinstance(existing, dict):
+        return existing
+    urls = _current_product_urls()
+    if not bool(urls.get("tailnet_active")) or not _is_tailnet_request(request, urls):
+        return None
+    tailscale_login = _detected_tailnet_login(request)
+    if not tailscale_login:
+        return None
+    user_id = get_user_id_for_tailnet_login(tailscale_login)
+    if not user_id:
+        return None
+    provider_user = get_product_user_by_id(user_id)
+    if provider_user is None or bool(getattr(provider_user, "disabled", False)):
+        return None
+    return _store_session_user(request, _provider_user_session_payload(provider_user))
+
+
 def _resolve_session_user(request: Request) -> dict[str, Any]:
-    user = request.session.get("user")
+    auto_user = _maybe_auto_login_from_tailnet_identity(request)
+    user = auto_user if isinstance(auto_user, dict) else request.session.get("user")
     if not isinstance(user, dict):
         raise HTTPException(status_code=401, detail="Not authenticated")
     if not _session_refresh_due(request):
@@ -479,7 +524,7 @@ def _allow_noncanonical_request(request: Request, urls: dict[str, str]) -> bool:
     path = request.url.path.rstrip("/") or "/"
     if path == "/auth/bridge":
         return True
-    if str(urls.get("tailnet_activation_status", "")) == "pending":
+    if bool(urls.get("tailnet_active")):
         return True
     return False
 
@@ -534,19 +579,6 @@ def _tailnet_bridge_session_active(request: Request) -> bool:
     return bool(session.get("tailnet_bridge_authenticated", False))
 
 
-def _maybe_activate_tailnet_for_request(request: Request, session_user: dict[str, Any]) -> dict[str, Any]:
-    if not bool(session_user.get("is_admin")):
-        return session_user
-    urls = _current_product_urls()
-    if str(urls.get("tailnet_activation_status", "")).strip().lower() != "pending":
-        return session_user
-    if not _is_tailnet_request(request, urls):
-        return session_user
-    mark_tailnet_activation_completed()
-    request.session.pop("tailnet_bridge_authenticated", None)
-    return session_user
-
-
 def _network_response_payload(request: Request | None = None) -> ProductAdminNetworkResponse:
     urls = _current_product_urls()
     return ProductAdminNetworkResponse(
@@ -561,6 +593,30 @@ def _network_response_payload(request: Request | None = None) -> ProductAdminNet
         tailnet_host=urls.get("tailnet_host"),
         current_origin=_request_origin(request) if request is not None else None,
         tailnet_bridge_session=_tailnet_bridge_session_active(request) if request is not None else False,
+    )
+
+
+def _account_network_response_payload(request: Request) -> ProductAccountNetworkResponse:
+    urls = _current_product_urls()
+    session_user = request.session.get("user")
+    user_id = str(session_user.get("sub") or "").strip() if isinstance(session_user, dict) else ""
+    bound_login = get_tailnet_login_for_user(user_id) if user_id else None
+    detected_login = _detected_tailnet_login(request)
+    return ProductAccountNetworkResponse(
+        tailscale_configured=bool(urls.get("tailnet_host")),
+        tailnet_enabled=bool(urls.get("tailnet_active")),
+        on_tailnet=_is_tailnet_request(request, urls),
+        local_app_base_url=urls.get("local_app_base_url"),
+        tailnet_app_base_url=urls.get("tailnet_app_base_url"),
+        detected_tailnet_login=detected_login,
+        bound_tailnet_login=bound_login,
+        tailnet_bridge_session=_tailnet_bridge_session_active(request),
+        can_bind_detected_identity=bool(
+            isinstance(session_user, dict)
+            and _is_tailnet_request(request, urls)
+            and detected_login
+            and (not bound_login or bound_login == detected_login)
+        ),
     )
 
 
@@ -739,13 +795,13 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
         provider_user = get_product_user_by_id(str(userinfo.get("sub") or "").strip())
         session_user = _session_user_payload(userinfo, provider_user)
         _store_session_user(request, session_user)
-        session_user = _maybe_activate_tailnet_for_request(request, session_user)
         _mark_bootstrap_completed_if_admin(session_user)
         _csrf_token(request)
         return RedirectResponse(_current_app_base_url(), status_code=303)
 
     @app.get("/api/auth/session", response_model=ProductSessionResponse)
     def auth_session(request: Request) -> ProductSessionResponse:
+        _maybe_auto_login_from_tailnet_identity(request)
         user = request.session.get("user")
         if not isinstance(user, dict):
             return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
@@ -753,7 +809,6 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
             refreshed = _resolve_session_user(request)
         except HTTPException:
             return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
-        refreshed = _maybe_activate_tailnet_for_request(request, refreshed)
         _mark_bootstrap_completed_if_admin(refreshed)
         return ProductSessionResponse(authenticated=True, user=refreshed, csrf_token=_csrf_token(request))
 
@@ -867,42 +922,71 @@ def _register_workspace_routes(app: FastAPI) -> None:
         return _workspace_response_payload(state)
 
 
+def _register_account_routes(app: FastAPI) -> None:
+    @app.get("/api/account/network", response_model=ProductAccountNetworkResponse)
+    def account_network_state(request: Request) -> ProductAccountNetworkResponse:
+        return _account_network_response_payload(request)
+
+    @app.post("/api/account/network/tailscale/bridge", response_model=ProductTailnetBridgeResponse)
+    def account_start_tailnet_link(request: Request) -> ProductTailnetBridgeResponse:
+        user = _require_product_user(request)
+        _require_csrf(request)
+        urls = _current_product_urls()
+        if not bool(urls.get("tailnet_active")):
+            raise HTTPException(status_code=400, detail="Tailnet access is not enabled")
+        tailnet_app_base_url = str(urls.get("tailnet_app_base_url", "")).strip()
+        if not tailnet_app_base_url:
+            raise HTTPException(status_code=400, detail="Tailnet is not configured for this product install")
+        bridge = create_tailnet_bridge_token(
+            str(user.get("sub") or "").strip(),
+            target_origin=_origin_from_url(tailnet_app_base_url),
+        )
+        return ProductTailnetBridgeResponse(
+            redirect_url=f"{tailnet_app_base_url.rstrip('/')}/auth/bridge?token={bridge['token']}"
+        )
+
+    @app.post("/api/account/network/tailscale/bind", response_model=ProductAccountNetworkResponse)
+    def account_bind_tailnet(request: Request) -> ProductAccountNetworkResponse:
+        user = _require_product_user(request)
+        _require_csrf(request)
+        urls = _current_product_urls()
+        if not _is_tailnet_request(request, urls):
+            raise HTTPException(status_code=400, detail="Tailnet identity can only be linked from the Tailnet URL")
+        detected_login = _detected_tailnet_login(request)
+        if not detected_login:
+            raise HTTPException(status_code=400, detail="No trusted Tailnet identity was detected for this request")
+        try:
+            bind_tailnet_login(str(user.get("sub") or "").strip(), detected_login)
+        except ValueError as exc:
+            status_code = 409 if "already linked" in str(exc).lower() else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        return _account_network_response_payload(request)
+
+    @app.post("/api/account/network/tailscale/unbind", response_model=ProductAccountNetworkResponse)
+    def account_unbind_tailnet(request: Request) -> ProductAccountNetworkResponse:
+        user = _require_product_user(request)
+        _require_csrf(request)
+        unbind_tailnet_login(str(user.get("sub") or "").strip())
+        return _account_network_response_payload(request)
+
+
 def _register_admin_routes(app: FastAPI) -> None:
     @app.get("/api/admin/network", response_model=ProductAdminNetworkResponse)
     def admin_network_state(request: Request) -> ProductAdminNetworkResponse:
         _require_admin_user(request)
         return _network_response_payload(request)
 
-    @app.post("/api/admin/network/tailscale/bridge", response_model=ProductTailnetBridgeResponse)
-    def admin_create_tailnet_bridge(request: Request) -> ProductTailnetBridgeResponse:
+    @app.post("/api/admin/network/tailscale/enable", response_model=ProductAdminNetworkResponse)
+    def admin_enable_tailnet(request: Request) -> ProductAdminNetworkResponse:
         _require_admin_user(request)
         _require_csrf(request)
         urls = _current_product_urls()
-        tailnet_app_base_url = str(urls.get("tailnet_app_base_url", "")).strip()
-        tailnet_issuer_url = str(urls.get("tailnet_issuer_url", "")).strip()
-        if not tailnet_app_base_url or not tailnet_issuer_url:
+        if not str(urls.get("tailnet_app_base_url", "")).strip():
             raise HTTPException(status_code=400, detail="Tailscale is not configured for this product install")
         try:
-            ensure_product_tailnet_started()
+            enable_tailnet_activation()
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        mark_tailnet_activation_pending()
-        return ProductTailnetBridgeResponse(
-            activation_status="pending",
-            redirect_url=f"{tailnet_issuer_url.rstrip('/')}/settings/account",
-        )
-
-    @app.post("/api/admin/network/tailscale/complete", response_model=ProductAdminNetworkResponse)
-    def admin_complete_tailnet_activation(request: Request) -> ProductAdminNetworkResponse:
-        _require_admin_user(request)
-        _require_csrf(request)
-        urls = _current_product_urls()
-        if not _is_tailnet_request(request, urls):
-            raise HTTPException(status_code=400, detail="Tailnet activation must be completed from the Tailnet URL")
-        if not _tailnet_bridge_session_active(request):
-            raise HTTPException(status_code=400, detail="Start Tailnet activation from localhost before completing it here")
-        mark_tailnet_activation_completed()
-        request.session.pop("tailnet_bridge_authenticated", None)
         return _network_response_payload(request)
 
     @app.post("/api/admin/network/tailscale/disable", response_model=ProductAdminNetworkResponse)
@@ -969,6 +1053,7 @@ def create_product_app() -> FastAPI:
     _register_auth_routes(app, context)
     _register_chat_routes(app)
     _register_workspace_routes(app)
+    _register_account_routes(app)
     _register_admin_routes(app)
 
     return app

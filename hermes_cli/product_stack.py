@@ -198,31 +198,16 @@ def _save_tailnet_activation_state(state: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
-def mark_tailnet_activation_pending() -> Dict[str, Any]:
-    state = load_tailnet_activation_state() or {}
-    if str(state.get("status", "")).strip().lower() == "active":
-        return state
-    updated = {
-        "status": "pending",
-        "requested_at": int(time.time()),
-        "activated_at": state.get("activated_at"),
-    }
-    return _save_tailnet_activation_state(updated)
-
-
-def mark_tailnet_activation_completed() -> Dict[str, Any]:
+def enable_tailnet_activation() -> Dict[str, Any]:
     product_config = load_product_config()
     if not _tailscale_enabled(product_config):
         raise RuntimeError("Tailscale is not configured for this product install")
     state = {
         "status": "active",
-        "requested_at": (load_tailnet_activation_state() or {}).get("requested_at"),
         "activated_at": int(time.time()),
     }
     _save_tailnet_activation_state(state)
-    save_product_config(initialize_product_stack(product_config))
-    bootstrap_product_oidc_client(product_config)
-    ensure_product_tailnet_started(product_config)
+    ensure_product_tailnet_started(product_config, include_app=True, include_auth=False)
     return state
 
 
@@ -250,12 +235,9 @@ def disable_tailnet_activation() -> Dict[str, Any]:
     product_config = load_product_config()
     state = {
         "status": "inactive",
-        "requested_at": None,
         "activated_at": None,
     }
     _save_tailnet_activation_state(state)
-    save_product_config(initialize_product_stack(product_config))
-    bootstrap_product_oidc_client(product_config)
     ensure_product_tailnet_stopped(product_config)
     return state
 
@@ -298,7 +280,6 @@ def create_tailnet_bridge_token(user_id: str, *, target_origin: str) -> Dict[str
         }
     )
     _save_tailnet_bridge_tokens(tokens)
-    mark_tailnet_activation_pending()
     return {"token": token, "expires_at": now + 600}
 
 
@@ -356,24 +337,21 @@ def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]
         auth_https_port = _tailscale_https_port(product_config, "auth_https_port", 4444)
         tailnet_app_base_url = _format_https_url(tailnet_host, app_https_port)
         tailnet_issuer_url = _format_https_url(tailnet_host, auth_https_port)
-        tailnet_active = _tailnet_activation_complete(product_config)
         activation_status = _tailnet_activation_status(product_config)
-        app_base_url = tailnet_app_base_url if tailnet_active else local_app_base_url
-        issuer_url = tailnet_issuer_url if tailnet_active else local_issuer_url
         return {
             "public_host": public_host,
-            "url_scheme": "https" if tailnet_active else scheme,
-            "app_base_url": app_base_url,
-            "issuer_url": issuer_url,
-            "oidc_callback_url": f"{app_base_url}/api/auth/oidc/callback",
-            "pocket_id_setup_url": f"{issuer_url}/setup",
+            "url_scheme": scheme,
+            "app_base_url": local_app_base_url,
+            "issuer_url": local_issuer_url,
+            "oidc_callback_url": f"{local_app_base_url}/api/auth/oidc/callback",
+            "pocket_id_setup_url": f"{local_issuer_url}/setup",
             "local_app_base_url": local_app_base_url,
             "local_issuer_url": local_issuer_url,
             "tailnet_host": tailnet_host,
             "tailnet_app_base_url": tailnet_app_base_url,
             "tailnet_issuer_url": tailnet_issuer_url,
             "tailnet_activation_status": activation_status,
-            "tailnet_active": tailnet_active,
+            "tailnet_active": activation_status == "active",
         }
 
     return {
@@ -429,7 +407,12 @@ def _first_admin_bootstrap_completed() -> bool:
     return bool(state.get("first_admin_login_seen", False))
 
 
-def ensure_product_tailnet_started(config: Dict[str, Any] | None = None) -> list[subprocess.CompletedProcess[str]]:
+def ensure_product_tailnet_started(
+    config: Dict[str, Any] | None = None,
+    *,
+    include_app: bool = True,
+    include_auth: bool | None = None,
+) -> list[subprocess.CompletedProcess[str]]:
     product_config = config or load_product_config()
     if not _tailscale_enabled(product_config):
         return []
@@ -440,14 +423,18 @@ def ensure_product_tailnet_started(config: Dict[str, Any] | None = None) -> list
     auth_https_port = _tailscale_https_port(product_config, "auth_https_port", 4444)
     auth_target_url = f"http://127.0.0.1:{int(network.get('pocket_id_port', 1411))}"
 
-    commands = [
-        _tailscale_serve_command(
-            product_config,
-            https_port=app_https_port,
-            target_url=f"http://127.0.0.1:{app_port}",
-        ),
-    ]
-    if _first_admin_bootstrap_completed():
+    auth_enabled = _first_admin_bootstrap_completed() if include_auth is None else include_auth
+
+    commands: list[list[str]] = []
+    if include_app:
+        commands.append(
+            _tailscale_serve_command(
+                product_config,
+                https_port=app_https_port,
+                target_url=f"http://127.0.0.1:{app_port}",
+            )
+        )
+    if auth_enabled:
         commands.append(
             _tailscale_serve_command(
                 product_config,
