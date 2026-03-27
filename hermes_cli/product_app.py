@@ -242,6 +242,12 @@ def _client_ip(request: Request) -> str:
 def _expected_request_origin(request: Request) -> str:
     context = getattr(request.app.state, "product_app_context", None)
     if isinstance(context, ProductAppContext):
+        urls = _current_product_urls()
+        if (
+            str(urls.get("tailnet_activation_status", "")) == "pending"
+            and _is_tailnet_request(request, urls)
+        ):
+            return _origin_from_url(str(urls.get("tailnet_app_base_url", "")))
         return _origin_from_url(_current_app_base_url())
     return _origin_from_url(str(request.base_url))
 
@@ -474,7 +480,7 @@ def _allow_noncanonical_request(request: Request, urls: dict[str, str]) -> bool:
     path = request.url.path.rstrip("/") or "/"
     if path == "/auth/bridge":
         return True
-    if str(urls.get("tailnet_activation_status", "")) == "pending" and _tailnet_bridge_session_active(request):
+    if str(urls.get("tailnet_activation_status", "")) == "pending":
         return True
     return False
 
