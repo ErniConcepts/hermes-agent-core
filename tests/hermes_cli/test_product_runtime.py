@@ -12,6 +12,7 @@ from hermes_cli.product_runtime import (
     _runtime_container_user,
     _docker_run_command,
     _normalize_runtime_session_payload,
+    _resolve_runtime_launch_settings,
     _resolve_runtime_model_base_url,
     _runtime_config_path,
     _write_runtime_env_file,
@@ -422,6 +423,27 @@ def test_stage_product_runtime_requires_ready_hermes_model_provider(tmp_path, mo
 
     with pytest.raises(RuntimeError, match="hermes setup model"):
         stage_product_runtime(_runtime_user())
+
+
+def test_resolve_runtime_launch_settings_uses_saved_custom_provider_api_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime("https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+    config = load_config()
+    config["custom_providers"] = [
+        {
+            "name": "Dashscope-intl.aliyuncs.com",
+            "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            "api_key": "dashscope-test-key",
+            "model": "qwen3.5-27b",
+        }
+    ]
+    save_config(config)
+    save_env_value("OPENAI_API_KEY", "")
+
+    settings = _resolve_runtime_launch_settings(load_product_config())
+
+    assert settings.base_url == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    assert settings.api_key == "dashscope-test-key"
 
 
 def test_stage_product_runtime_migrates_legacy_username_runtime(tmp_path, monkeypatch):

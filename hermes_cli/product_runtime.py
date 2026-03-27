@@ -19,7 +19,7 @@ import httpx
 from pydantic import BaseModel
 import yaml
 
-from hermes_cli.config import _secure_dir, _secure_file, ensure_hermes_home, get_hermes_home
+from hermes_cli.config import _secure_dir, _secure_file, ensure_hermes_home, get_env_value, get_hermes_home
 from hermes_cli.product_config import (
     load_product_config,
     resolve_hermes_model_config,
@@ -329,7 +329,11 @@ def _resolve_runtime_launch_settings(product_config: dict[str, Any]) -> ProductR
         provider = "custom"
     base_url = str(route.get("base_url") or "").strip()
     api_mode = str(route.get("api_mode") or model_cfg.get("api_mode") or "chat_completions").strip() or "chat_completions"
-    api_key = str(route.get("api_key") or "").strip() or "product-runtime"
+    api_key = str(route.get("api_key") or "").strip()
+    if not api_key:
+        api_key = _resolve_runtime_api_key(model_cfg)
+    if not api_key:
+        api_key = "product-runtime"
     if not model:
         raise RuntimeError("Hermes model.default must be configured. Run 'hermes setup model'.")
     if not base_url:
@@ -343,6 +347,31 @@ def _resolve_runtime_launch_settings(product_config: dict[str, Any]) -> ProductR
         api_key=api_key,
         toolsets=_runtime_toolsets(product_config),
     )
+
+
+def _resolve_runtime_api_key(model_cfg: dict[str, Any]) -> str:
+    direct_key = str(model_cfg.get("api_key") or model_cfg.get("api") or "").strip()
+    if direct_key:
+        return direct_key
+
+    configured_provider = str(model_cfg.get("provider") or "").strip().lower()
+    configured_base_url = str(model_cfg.get("base_url") or "").strip().rstrip("/")
+    if configured_provider == "custom" and configured_base_url:
+        custom_providers = load_product_config().get("custom_providers")
+        if not isinstance(custom_providers, list):
+            from hermes_cli.config import load_config
+
+            custom_providers = load_config().get("custom_providers")
+        if isinstance(custom_providers, list):
+            for entry in custom_providers:
+                if not isinstance(entry, dict):
+                    continue
+                entry_base_url = str(entry.get("base_url") or "").strip().rstrip("/")
+                entry_key = str(entry.get("api_key") or "").strip()
+                if entry_base_url == configured_base_url and entry_key:
+                    return entry_key
+
+    return str(get_env_value("OPENAI_API_KEY") or "").strip()
 
 
 def _runtime_environment(
