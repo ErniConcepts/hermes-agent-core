@@ -212,6 +212,8 @@ def test_product_app_redirects_localhost_to_tailnet_when_enabled(monkeypatch):
             "local_app_base_url": "http://localhost:8086",
             "local_issuer_url": "http://localhost:1411",
             "tailnet_host": "laptopjannis.tail5fd7a5.ts.net",
+            "tailnet_activation_status": "active",
+            "tailnet_active": True,
         },
     )
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
@@ -221,6 +223,72 @@ def test_product_app_redirects_localhost_to_tailnet_when_enabled(monkeypatch):
 
     assert response.status_code == 307
     assert response.headers["location"] == "https://laptopjannis.tail5fd7a5.ts.net/"
+
+
+def test_product_app_allows_tailnet_bridge_path_before_activation(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {
+            "app_base_url": "http://localhost:8086",
+            "issuer_url": "http://localhost:1411",
+            "local_app_base_url": "http://localhost:8086",
+            "local_issuer_url": "http://localhost:1411",
+            "tailnet_host": "laptopjannis.tail5fd7a5.ts.net",
+            "tailnet_app_base_url": "https://laptopjannis.tail5fd7a5.ts.net",
+            "tailnet_issuer_url": "https://laptopjannis.tail5fd7a5.ts.net:4444",
+            "tailnet_activation_status": "pending",
+            "tailnet_active": False,
+        },
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+    monkeypatch.setattr(
+        "hermes_cli.product_app.consume_tailnet_bridge_token",
+        lambda token, target_origin: {"user_id": "user-1"} if token == "good-token" else None,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.get_product_user_by_id",
+        lambda user_id: type(
+            "U",
+            (),
+            {"id": user_id, "username": "admin", "display_name": "Admin", "email": "admin@example.com", "is_admin": True, "disabled": False},
+        )(),
+    )
+
+    client = TestClient(create_product_app())
+    response = client.get(
+        "https://laptopjannis.tail5fd7a5.ts.net/auth/bridge?token=good-token",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "https://laptopjannis.tail5fd7a5.ts.net"
+
+
+def test_product_app_exposes_admin_network_state(monkeypatch):
+    _patch_admin_session(monkeypatch)
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {
+            "app_base_url": "http://officebox.local:8086",
+            "issuer_url": "http://officebox.local:1411",
+            "local_app_base_url": "http://officebox.local:8086",
+            "local_issuer_url": "http://officebox.local:1411",
+            "tailnet_host": "hermes-box.corpnet.ts.net",
+            "tailnet_app_base_url": "https://hermes-box.corpnet.ts.net",
+            "tailnet_issuer_url": "https://hermes-box.corpnet.ts.net:4444",
+            "tailnet_activation_status": "inactive",
+            "tailnet_active": False,
+        },
+    )
+
+    client = TestClient(create_product_app())
+    _login_admin(client)
+    response = client.get("/api/admin/network")
+
+    assert response.status_code == 200
+    assert response.json()["activation_status"] == "inactive"
+    assert response.json()["tailnet_app_base_url"] == "https://hermes-box.corpnet.ts.net"
 
 
 def test_product_app_login_short_circuits_when_already_authenticated(monkeypatch):

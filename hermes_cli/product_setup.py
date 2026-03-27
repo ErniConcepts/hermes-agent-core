@@ -190,7 +190,7 @@ def setup_product_network() -> None:
     print_header("Product Network")
     print_info("Choose the hostname users will use to reach this machine.")
     print_info("This hostname is used for local URLs when Tailscale mode is disabled.")
-    print_info("When Tailscale mode is enabled, the Tailnet URL becomes the canonical auth origin.")
+    print_info("When Tailscale mode is enabled, localhost stays canonical until the admin activates Tailnet in the app.")
     print_info("Use a hostname like localhost, officebox.local, or a DNS name.")
     print_info("Raw IP addresses are not supported for the Pocket ID public host.")
 
@@ -226,8 +226,8 @@ def setup_product_tailscale() -> None:
 
     print_header("Tailscale")
     print_info("Optionally expose the product app and Pocket ID through your tailnet.")
-    print_info("When enabled, the Tailnet app URL becomes the only supported browser origin.")
-    print_info("Local browser requests redirect to the Tailnet URL instead of running a second auth origin.")
+    print_info("When enabled, the Tailnet app URL is prepared in the background.")
+    print_info("The admin can keep using localhost until they explicitly activate Tailnet from the app.")
 
     raw_enabled = _sanitize_prompt_text(
         prompt("Enable Tailscale exposure (yes/no)", current_enabled) or current_enabled
@@ -293,8 +293,12 @@ def setup_product_tailscale() -> None:
 
     save_product_config(product_config)
     urls = resolve_product_urls(product_config)
-    print_info(f"  Canonical app URL:       {urls['app_base_url']}")
-    print_info(f"  Canonical Pocket ID URL: {urls['issuer_url']}")
+    print_info(f"  Current app URL:         {urls['app_base_url']}")
+    print_info(f"  Current Pocket ID URL:   {urls['issuer_url']}")
+    if urls.get("tailnet_app_base_url"):
+        print_info(f"  Tailnet app URL:         {urls['tailnet_app_base_url']}")
+    if urls.get("tailnet_issuer_url"):
+        print_info(f"  Tailnet auth URL:        {urls['tailnet_issuer_url']}")
     if urls.get("local_app_base_url"):
         print_info(f"  Local debug URL:         {urls['local_app_base_url']}")
 
@@ -374,8 +378,8 @@ def _print_product_setup_summary() -> None:
     print_info(f"Product config: {hermes_home / 'product.yaml'}")
     print_info(f"Data folder:    {hermes_home}")
     print_info(f"Install dir:    {product_install_root()}")
-    print_info(f"Canonical app URL:       {urls['app_base_url']}")
-    print_info(f"Canonical Pocket ID URL: {urls['issuer_url']}")
+    print_info(f"Current app URL:         {urls['app_base_url']}")
+    print_info(f"Current Pocket ID URL:   {urls['issuer_url']}")
     if tailscale_enabled := bool(product_config.get("network", {}).get("tailscale", {}).get("enabled", False)):
         tailnet_app_url = str(urls.get("tailnet_app_base_url", "")).strip()
         tailnet_auth_url = str(urls.get("tailnet_issuer_url", "")).strip()
@@ -402,13 +406,17 @@ def _print_product_setup_summary() -> None:
     if first_admin_login_seen:
         print_info("First admin bootstrap:  completed")
         if tailscale_enabled:
-            print_info("Tailnet auth exposure:  enabled")
+            activation_status = str(urls.get("tailnet_activation_status", "inactive"))
+            if activation_status == "active":
+                print_info("Tailnet access:         active")
+            else:
+                print_info("Tailnet access:         available to activate from the admin UI")
     else:
         print_info(f"First admin bootstrap:  {bootstrap_mode}")
         if setup_url:
             print_info(f"First admin sign-up:    {setup_url}")
         if tailscale_enabled:
-            print_info("Tailnet auth exposure:  pending first admin bootstrap")
+            print_info("Tailnet access:         available after local admin bootstrap")
             print_info("  During bootstrap, Pocket ID setup is intentionally local-only.")
             if urls.get("local_issuer_url"):
                 print_info(f"  Complete bootstrap at: {urls['local_issuer_url']}/setup")

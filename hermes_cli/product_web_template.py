@@ -127,6 +127,28 @@ PAGE_TEMPLATE = """<!doctype html>
 </div>
 </div>
 <p class="lead small">Issue Pocket ID signup links and deactivate accounts without exposing broader setup controls in the browser.</p>
+<section class="shell admin-token-shell" id="adminNetworkCard" hidden>
+<div class="section-head compact-head">
+<div>
+<p class="eyebrow">Network</p>
+<h2>Tailnet Access</h2>
+</div>
+</div>
+<p class="lead small" id="adminNetworkLead">Keep using localhost until you decide to activate Tailnet.</p>
+<div id="adminNetworkMessage" class="message"></div>
+<div class="token-row">
+<code class="token-link" id="adminNetworkCurrentUrl"></code>
+</div>
+<div class="token-row" id="adminNetworkTailnetRow" hidden>
+<code class="token-link" id="adminNetworkTailnetUrl"></code>
+<button class="button" id="adminTailnetActivateButton" type="button">Enable Tailnet</button>
+<button class="button" id="adminTailnetCompleteButton" type="button" hidden>Finish Tailnet Setup</button>
+<button class="button secondary-button" id="adminTailnetDisableButton" type="button" hidden>Disable Tailnet</button>
+</div>
+<div class="token-row" id="adminTailnetAccountRow" hidden>
+<a class="button secondary-button" id="adminTailnetAccountButton" href="#" target="_blank" rel="noreferrer">Open Tailnet Account Settings</a>
+</div>
+</section>
 <div class="admin-layout">
 <form class="admin-form shell" id="adminCreateUserForm">
 <p class="lead small">Each generated link can be used once and expires after seven days.</p>

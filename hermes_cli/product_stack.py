@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import json
 import logging
 import secrets
@@ -51,6 +52,14 @@ def get_product_bootstrap_root() -> Path:
 
 def get_first_admin_enrollment_state_path() -> Path:
     return get_product_bootstrap_root() / "first_admin_enrollment.json"
+
+
+def get_tailnet_activation_state_path() -> Path:
+    return get_product_bootstrap_root() / "tailnet_activation.json"
+
+
+def get_tailnet_bridge_tokens_path() -> Path:
+    return get_product_bootstrap_root() / "tailnet_bridge_tokens.json"
 
 
 def get_pocket_id_compose_path() -> Path:
@@ -158,6 +167,178 @@ def _tailnet_bootstrap_complete(config: Dict[str, Any] | None = None) -> bool:
     return bool(state.get("first_admin_login_seen", False))
 
 
+def load_tailnet_activation_state() -> Dict[str, Any] | None:
+    state_path = get_tailnet_activation_state_path()
+    if not state_path.exists():
+        return None
+    return json.loads(state_path.read_text(encoding="utf-8"))
+
+
+def _tailnet_activation_status(config: Dict[str, Any] | None = None) -> str:
+    product_config = config or load_product_config()
+    if not _tailscale_enabled(product_config):
+        return "disabled"
+    state = load_tailnet_activation_state() or {}
+    status = str(state.get("status", "")).strip().lower()
+    if status in {"inactive", "pending", "active"}:
+        return status
+    return "inactive"
+
+
+def _tailnet_activation_complete(config: Dict[str, Any] | None = None) -> bool:
+    return _tailnet_activation_status(config) == "active"
+
+
+def _save_tailnet_activation_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    state_path = get_tailnet_activation_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    _secure_dir(state_path.parent)
+    atomic_json_write(state_path, state)
+    _secure_file(state_path)
+    return state
+
+
+def mark_tailnet_activation_pending() -> Dict[str, Any]:
+    state = load_tailnet_activation_state() or {}
+    if str(state.get("status", "")).strip().lower() == "active":
+        return state
+    updated = {
+        "status": "pending",
+        "requested_at": int(time.time()),
+        "activated_at": state.get("activated_at"),
+    }
+    return _save_tailnet_activation_state(updated)
+
+
+def mark_tailnet_activation_completed() -> Dict[str, Any]:
+    product_config = load_product_config()
+    if not _tailscale_enabled(product_config):
+        raise RuntimeError("Tailscale is not configured for this product install")
+    state = {
+        "status": "active",
+        "requested_at": (load_tailnet_activation_state() or {}).get("requested_at"),
+        "activated_at": int(time.time()),
+    }
+    _save_tailnet_activation_state(state)
+    save_product_config(initialize_product_stack(product_config))
+    bootstrap_product_oidc_client(product_config)
+    ensure_product_tailnet_started(product_config)
+    return state
+
+
+def _format_tailscale_reset_error(exc: subprocess.CalledProcessError, *, command: list[str]) -> str:
+    detail = (exc.stderr or exc.stdout or "").strip()
+    command_text = " ".join(command)
+    message = f"Failed to disable Tailscale HTTPS exposure with: {command_text}"
+    if detail:
+        message = f"{message}\n{detail}"
+    return message
+
+
+def ensure_product_tailnet_stopped(config: Dict[str, Any] | None = None) -> list[subprocess.CompletedProcess[str]]:
+    product_config = config or load_product_config()
+    if not _tailscale_enabled(product_config):
+        return []
+    command = [_tailscale_command_path(product_config), "serve", "reset"]
+    try:
+        return [subprocess.run(command, check=True, capture_output=True, text=True)]
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(_format_tailscale_reset_error(exc, command=command)) from exc
+
+
+def disable_tailnet_activation() -> Dict[str, Any]:
+    product_config = load_product_config()
+    state = {
+        "status": "inactive",
+        "requested_at": None,
+        "activated_at": None,
+    }
+    _save_tailnet_activation_state(state)
+    save_product_config(initialize_product_stack(product_config))
+    bootstrap_product_oidc_client(product_config)
+    ensure_product_tailnet_stopped(product_config)
+    return state
+
+
+def _load_tailnet_bridge_tokens() -> list[Dict[str, Any]]:
+    state_path = get_tailnet_bridge_tokens_path()
+    if not state_path.exists():
+        return []
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, list) else []
+
+
+def _save_tailnet_bridge_tokens(tokens: list[Dict[str, Any]]) -> None:
+    state_path = get_tailnet_bridge_tokens_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    _secure_dir(state_path.parent)
+    atomic_json_write(state_path, tokens)
+    _secure_file(state_path)
+
+
+def _tailnet_bridge_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_tailnet_bridge_token(user_id: str, *, target_origin: str) -> Dict[str, Any]:
+    if not user_id:
+        raise ValueError("Tailnet bridge tokens require a user id")
+    now = int(time.time())
+    token = secrets.token_urlsafe(32)
+    token_hash = _tailnet_bridge_token_hash(token)
+    tokens = _load_tailnet_bridge_tokens()
+    tokens.append(
+        {
+            "token_hash": token_hash,
+            "user_id": user_id,
+            "target_origin": target_origin,
+            "created_at": now,
+            "expires_at": now + 600,
+            "used_at": None,
+        }
+    )
+    _save_tailnet_bridge_tokens(tokens)
+    mark_tailnet_activation_pending()
+    return {"token": token, "expires_at": now + 600}
+
+
+def consume_tailnet_bridge_token(token: str, *, target_origin: str) -> Dict[str, Any] | None:
+    candidate = str(token or "").strip()
+    if not candidate:
+        return None
+    token_hash = _tailnet_bridge_token_hash(candidate)
+    now = int(time.time())
+    tokens = _load_tailnet_bridge_tokens()
+    changed = False
+    matched: Dict[str, Any] | None = None
+    retained: list[Dict[str, Any]] = []
+    for item in tokens:
+        if not isinstance(item, dict):
+            changed = True
+            continue
+        expires_at = int(item.get("expires_at", 0) or 0)
+        used_at = item.get("used_at")
+        if expires_at and expires_at <= now:
+            changed = True
+            continue
+        if item.get("token_hash") == token_hash:
+            if used_at:
+                changed = True
+                continue
+            if str(item.get("target_origin", "")).strip() != target_origin:
+                retained.append(item)
+                matched = None
+                continue
+            item = dict(item)
+            item["used_at"] = now
+            matched = item
+            changed = True
+        retained.append(item)
+    if changed:
+        _save_tailnet_bridge_tokens(retained)
+    return matched
+
+
 def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]:
     product_config = config or load_product_config()
     network = product_config.get("network", {})
@@ -175,12 +356,13 @@ def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]
         auth_https_port = _tailscale_https_port(product_config, "auth_https_port", 4444)
         tailnet_app_base_url = _format_https_url(tailnet_host, app_https_port)
         tailnet_issuer_url = _format_https_url(tailnet_host, auth_https_port)
-        bootstrap_complete = _tailnet_bootstrap_complete(product_config)
-        app_base_url = tailnet_app_base_url if bootstrap_complete else local_app_base_url
-        issuer_url = tailnet_issuer_url if bootstrap_complete else local_issuer_url
+        tailnet_active = _tailnet_activation_complete(product_config)
+        activation_status = _tailnet_activation_status(product_config)
+        app_base_url = tailnet_app_base_url if tailnet_active else local_app_base_url
+        issuer_url = tailnet_issuer_url if tailnet_active else local_issuer_url
         return {
             "public_host": public_host,
-            "url_scheme": "https" if bootstrap_complete else scheme,
+            "url_scheme": "https" if tailnet_active else scheme,
             "app_base_url": app_base_url,
             "issuer_url": issuer_url,
             "oidc_callback_url": f"{app_base_url}/api/auth/oidc/callback",
@@ -190,6 +372,8 @@ def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]
             "tailnet_host": tailnet_host,
             "tailnet_app_base_url": tailnet_app_base_url,
             "tailnet_issuer_url": tailnet_issuer_url,
+            "tailnet_activation_status": activation_status,
+            "tailnet_active": tailnet_active,
         }
 
     return {

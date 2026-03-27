@@ -310,7 +310,7 @@ def test_product_setup_summary_explains_tailnet_auth_is_pending_during_bootstrap
     out = capsys.readouterr().out
     assert "Tailnet app URL:         https://hermes-box.corpnet.ts.net" in out
     assert "Tailnet auth URL:        https://hermes-box.corpnet.ts.net:4444" in out
-    assert "Tailnet auth exposure:  pending first admin bootstrap" in out
+    assert "Tailnet access:         available after local admin bootstrap" in out
     assert "Pocket ID setup is intentionally local-only." in out
     assert "Complete bootstrap at: http://localhost:1411/setup" in out
 
@@ -338,17 +338,22 @@ def test_product_setup_summary_shows_tailnet_urls_after_bootstrap_completion(tmp
         ),
         encoding="utf-8",
     )
+    activation_path = tmp_path / "product" / "bootstrap" / "tailnet_activation.json"
+    activation_path.write_text(
+        json.dumps({"status": "active", "activated_at": 1710000000}),
+        encoding="utf-8",
+    )
 
     from hermes_cli.product_setup import _print_product_setup_summary
 
     _print_product_setup_summary()
 
     out = capsys.readouterr().out
-    assert "Canonical app URL:       https://hermes-box.corpnet.ts.net" in out
-    assert "Canonical Pocket ID URL: https://hermes-box.corpnet.ts.net:4444" in out
+    assert "Current app URL:         https://hermes-box.corpnet.ts.net" in out
+    assert "Current Pocket ID URL:   https://hermes-box.corpnet.ts.net:4444" in out
     assert "Tailnet app URL:         https://hermes-box.corpnet.ts.net" in out
     assert "Tailnet auth URL:        https://hermes-box.corpnet.ts.net:4444" in out
-    assert "Tailnet auth exposure:  enabled" in out
+    assert "Tailnet access:         active" in out
     assert "pending first admin bootstrap" not in out
 
 
