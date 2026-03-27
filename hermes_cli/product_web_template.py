@@ -129,12 +129,9 @@ PAGE_TEMPLATE = """<!doctype html>
 <p class="lead small" id="accountNetworkLead">Link your Tailnet identity here after Tailnet access is enabled.</p>
 <div id="accountNetworkMessage" class="message"></div>
 <section class="shell admin-token-shell">
-<div class="token-row">
-<code class="token-link" id="accountLocalUrl"></code>
-</div>
 <div class="token-row" id="accountTailnetRow" hidden>
 <code class="token-link" id="accountTailnetUrl"></code>
-<button class="button" id="accountTailnetBridgeButton" type="button">Link Tailnet</button>
+<button class="button" id="accountTailnetBridgeButton" type="button">Open Tailnet URL</button>
 <button class="button" id="accountTailnetBindButton" type="button" hidden>Use this Tailnet identity</button>
 <button class="button secondary-button" id="accountTailnetUnbindButton" type="button" hidden>Remove Tailnet link</button>
 </div>
@@ -156,7 +153,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <h2>User Management</h2>
 </div>
 </div>
-<p class="lead small">Issue Pocket ID signup links and deactivate accounts without exposing broader setup controls in the browser.</p>
+<p class="lead small">Issue signup links, manage access, and expose Tailnet without reopening setup in the browser.</p>
 <section class="shell admin-token-shell" id="adminNetworkCard" hidden>
 <div class="section-head compact-head">
 <div>
@@ -164,11 +161,8 @@ PAGE_TEMPLATE = """<!doctype html>
 <h2>Tailnet Access</h2>
 </div>
 </div>
-<p class="lead small" id="adminNetworkLead">Keep using localhost until you decide to activate Tailnet.</p>
+<p class="lead small" id="adminNetworkLead">Enable Tailnet exposure here, then share the Tailnet URL with users who should link their Tailnet identity.</p>
 <div id="adminNetworkMessage" class="message"></div>
-<div class="token-row">
-<code class="token-link" id="adminNetworkCurrentUrl"></code>
-</div>
 <div class="token-row" id="adminNetworkTailnetRow" hidden>
 <code class="token-link" id="adminNetworkTailnetUrl"></code>
 <button class="button" id="adminTailnetActivateButton" type="button">Enable Tailnet</button>

@@ -260,9 +260,9 @@ def _expected_request_origin(request: Request) -> str:
     context = getattr(request.app.state, "product_app_context", None)
     if isinstance(context, ProductAppContext):
         urls = _current_product_urls()
-        if (
-            str(urls.get("tailnet_activation_status", "")) == "pending"
-            and _is_tailnet_request(request, urls)
+        if _is_tailnet_request(request, urls) and (
+            bool(urls.get("tailnet_active"))
+            or str(urls.get("tailnet_activation_status", "")) == "pending"
         ):
             return _origin_from_url(str(urls.get("tailnet_app_base_url", "")))
         return _origin_from_url(_current_app_base_url())
@@ -709,6 +709,10 @@ def _register_root_routes(app: FastAPI, context: ProductAppContext) -> None:
             issuer_url=_current_issuer_url(),
             app_base_url=_current_app_base_url(),
         )
+
+    @app.get("/st/{token}")
+    async def signup_token_redirect(request: Request, token: str) -> Response:
+        return await _proxy_pocket_id_request(request, f"st/{token}")
 
 
 def _register_proxy_routes(app: FastAPI) -> None:

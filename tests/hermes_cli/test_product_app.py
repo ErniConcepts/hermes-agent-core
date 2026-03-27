@@ -266,6 +266,75 @@ def test_product_app_active_tailnet_request_is_allowed(monkeypatch):
     assert "Sign in with Pocket ID" in response.text
 
 
+def test_product_app_tailnet_csrf_accepts_tailnet_origin_when_active(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app._require_product_user", lambda request: {"sub": "user-1", "is_admin": False})
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+    monkeypatch.setattr("hermes_cli.product_app.bind_tailnet_login", lambda user_id, login: {"user_id": user_id, "tailscale_login": login})
+    monkeypatch.setattr("hermes_cli.product_app.get_tailnet_login_for_user", lambda user_id: None)
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {
+            "app_base_url": "http://localhost:8086",
+            "issuer_url": "http://localhost:1411",
+            "local_app_base_url": "http://localhost:8086",
+            "local_issuer_url": "http://localhost:1411",
+            "tailnet_host": "laptopjannis.tail5fd7a5.ts.net",
+            "tailnet_app_base_url": "https://laptopjannis.tail5fd7a5.ts.net",
+            "tailnet_issuer_url": "https://laptopjannis.tail5fd7a5.ts.net:4444",
+            "tailnet_activation_status": "active",
+            "tailnet_active": True,
+        },
+    )
+    client = TestClient(create_product_app())
+    csrf = client.get("https://laptopjannis.tail5fd7a5.ts.net/api/auth/session").json()["csrf_token"]
+    response = client.post(
+        "https://laptopjannis.tail5fd7a5.ts.net/api/account/network/tailscale/bind",
+        headers={
+            "X-Hermes-CSRF-Token": csrf,
+            "Origin": "https://laptopjannis.tail5fd7a5.ts.net",
+            "Tailscale-User-Login": "alice@example.com",
+        },
+        json={},
+    )
+
+    assert response.status_code == 200
+
+
+def test_product_app_signup_token_route_proxies_to_pocket_id(monkeypatch):
+    class _AsyncUpstreamResponse:
+        def __init__(self):
+            self.content = b"signup"
+            self.status_code = 200
+            self.headers = {"content-type": "text/html"}
+
+    class _AsyncClientStub:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+        async def request(self, method, url, headers=None, content=None):
+            assert method == "GET"
+            assert url == "http://127.0.0.1:19141/st/signup-123"
+            return _AsyncUpstreamResponse()
+
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_product_config",
+        lambda: {"network": {"pocket_id_port": 1411}, "services": {"pocket_id": {"upstream_port": 19141}}},
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {"app_base_url": "http://officebox.local:8086", "issuer_url": "http://officebox.local:1411"},
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+    monkeypatch.setattr("hermes_cli.product_app.httpx.AsyncClient", lambda *args, **kwargs: _AsyncClientStub())
+
+    client = TestClient(create_product_app())
+    response = client.get("/st/signup-123")
+
+    assert response.status_code == 200
+    assert response.text == "signup"
+
+
 def test_product_app_exposes_admin_network_state(monkeypatch):
     monkeypatch.setattr("hermes_cli.product_app._require_admin_user", lambda request: {"sub": "user-1", "is_admin": True})
     monkeypatch.setattr(

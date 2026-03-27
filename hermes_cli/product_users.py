@@ -292,10 +292,17 @@ def create_product_signup_token(config: dict[str, Any] | None = None) -> Product
     token = str(response.get("token", "")).strip()
     if not token:
         raise RuntimeError("Pocket ID did not return a signup token")
-    issuer_url = resolve_product_urls(product_config)["issuer_url"]
+    urls = resolve_product_urls(product_config)
+    public_signup_base = (
+        str(urls.get("tailnet_app_base_url", "")).strip()
+        if bool(urls.get("tailnet_active"))
+        else str(urls.get("app_base_url", "")).strip()
+    )
+    if not public_signup_base:
+        raise RuntimeError("Product app URL is not configured")
     return ProductSignupToken(
         token=token,
-        signup_url=f"{issuer_url}/st/{token}",
+        signup_url=f"{public_signup_base.rstrip('/')}/st/{token}",
         ttl_seconds=_DEFAULT_SIGNUP_TOKEN_TTL,
         usage_limit=_DEFAULT_SIGNUP_TOKEN_USAGE_LIMIT,
     )
