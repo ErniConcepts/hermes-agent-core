@@ -35,12 +35,12 @@ from hermes_cli.product_oidc import (
 from hermes_cli.product_runtime import delete_product_runtime, get_product_runtime_session, stream_product_runtime_turn
 from hermes_cli.product_stack import (
     consume_tailnet_bridge_token,
-    create_tailnet_bridge_token,
     disable_tailnet_activation,
     ensure_product_tailnet_started,
     load_first_admin_enrollment_state,
     mark_first_admin_bootstrap_completed,
     mark_tailnet_activation_completed,
+    mark_tailnet_activation_pending,
     resolve_product_urls,
 )
 from hermes_cli.product_users import (
@@ -146,8 +146,7 @@ class ProductAdminNetworkResponse(BaseModel):
 
 class ProductTailnetBridgeResponse(BaseModel):
     activation_status: str
-    bridge_url: str
-    expires_at: int
+    redirect_url: str
 
 
 class ProductChatMessage(BaseModel):
@@ -535,6 +534,19 @@ def _tailnet_bridge_session_active(request: Request) -> bool:
     return bool(session.get("tailnet_bridge_authenticated", False))
 
 
+def _maybe_activate_tailnet_for_request(request: Request, session_user: dict[str, Any]) -> dict[str, Any]:
+    if not bool(session_user.get("is_admin")):
+        return session_user
+    urls = _current_product_urls()
+    if str(urls.get("tailnet_activation_status", "")).strip().lower() != "pending":
+        return session_user
+    if not _is_tailnet_request(request, urls):
+        return session_user
+    mark_tailnet_activation_completed()
+    request.session.pop("tailnet_bridge_authenticated", None)
+    return session_user
+
+
 def _network_response_payload(request: Request | None = None) -> ProductAdminNetworkResponse:
     urls = _current_product_urls()
     return ProductAdminNetworkResponse(
@@ -727,6 +739,7 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
         provider_user = get_product_user_by_id(str(userinfo.get("sub") or "").strip())
         session_user = _session_user_payload(userinfo, provider_user)
         _store_session_user(request, session_user)
+        session_user = _maybe_activate_tailnet_for_request(request, session_user)
         _mark_bootstrap_completed_if_admin(session_user)
         _csrf_token(request)
         return RedirectResponse(_current_app_base_url(), status_code=303)
@@ -740,6 +753,7 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
             refreshed = _resolve_session_user(request)
         except HTTPException:
             return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
+        refreshed = _maybe_activate_tailnet_for_request(request, refreshed)
         _mark_bootstrap_completed_if_admin(refreshed)
         return ProductSessionResponse(authenticated=True, user=refreshed, csrf_token=_csrf_token(request))
 
@@ -861,7 +875,7 @@ def _register_admin_routes(app: FastAPI) -> None:
 
     @app.post("/api/admin/network/tailscale/bridge", response_model=ProductTailnetBridgeResponse)
     def admin_create_tailnet_bridge(request: Request) -> ProductTailnetBridgeResponse:
-        admin_user = _require_admin_user(request)
+        _require_admin_user(request)
         _require_csrf(request)
         urls = _current_product_urls()
         tailnet_app_base_url = str(urls.get("tailnet_app_base_url", "")).strip()
@@ -871,14 +885,10 @@ def _register_admin_routes(app: FastAPI) -> None:
             ensure_product_tailnet_started()
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        bridge = create_tailnet_bridge_token(
-            str(admin_user.get("sub") or "").strip(),
-            target_origin=_origin_from_url(tailnet_app_base_url),
-        )
+        mark_tailnet_activation_pending()
         return ProductTailnetBridgeResponse(
             activation_status="pending",
-            bridge_url=f"{tailnet_app_base_url.rstrip('/')}/auth/bridge?token={bridge['token']}",
-            expires_at=int(bridge["expires_at"]),
+            redirect_url=f"{tailnet_app_base_url.rstrip('/')}/api/auth/login",
         )
 
     @app.post("/api/admin/network/tailscale/complete", response_model=ProductAdminNetworkResponse)

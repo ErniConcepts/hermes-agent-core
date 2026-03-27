@@ -142,11 +142,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <div class="token-row" id="adminNetworkTailnetRow" hidden>
 <code class="token-link" id="adminNetworkTailnetUrl"></code>
 <button class="button" id="adminTailnetActivateButton" type="button">Enable Tailnet</button>
-<button class="button" id="adminTailnetCompleteButton" type="button" hidden>Finish Tailnet Setup</button>
 <button class="button secondary-button" id="adminTailnetDisableButton" type="button" hidden>Disable Tailnet</button>
-</div>
-<div class="token-row" id="adminTailnetAccountRow" hidden>
-<a class="button secondary-button" id="adminTailnetAccountButton" href="#" target="_blank" rel="noreferrer">Open Tailnet Account Settings</a>
 </div>
 </section>
 <div class="admin-layout">
