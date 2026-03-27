@@ -530,9 +530,11 @@ def _canonical_request_redirect(request: Request, urls: dict[str, str]) -> str |
 
 
 def _allow_noncanonical_request(request: Request, urls: dict[str, str]) -> bool:
+    path = request.url.path.rstrip("/") or "/"
+    if path.startswith("/st/"):
+        return True
     if not _is_tailnet_request(request, urls):
         return False
-    path = request.url.path.rstrip("/") or "/"
     if path == "/auth/bridge":
         return True
     if bool(urls.get("tailnet_active")):
