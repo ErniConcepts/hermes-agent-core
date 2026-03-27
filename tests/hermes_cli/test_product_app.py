@@ -393,7 +393,7 @@ def test_product_app_tailnet_bridge_returns_tailnet_login_redirect(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "activation_status": "pending",
-        "redirect_url": "https://hermes-box.corpnet.ts.net/api/auth/login",
+        "redirect_url": "https://hermes-box.corpnet.ts.net:4444/settings/account",
     }
     assert seen == ["started", "pending"]
 

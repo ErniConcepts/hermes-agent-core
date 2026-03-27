@@ -879,7 +879,8 @@ def _register_admin_routes(app: FastAPI) -> None:
         _require_csrf(request)
         urls = _current_product_urls()
         tailnet_app_base_url = str(urls.get("tailnet_app_base_url", "")).strip()
-        if not tailnet_app_base_url:
+        tailnet_issuer_url = str(urls.get("tailnet_issuer_url", "")).strip()
+        if not tailnet_app_base_url or not tailnet_issuer_url:
             raise HTTPException(status_code=400, detail="Tailscale is not configured for this product install")
         try:
             ensure_product_tailnet_started()
@@ -888,7 +889,7 @@ def _register_admin_routes(app: FastAPI) -> None:
         mark_tailnet_activation_pending()
         return ProductTailnetBridgeResponse(
             activation_status="pending",
-            redirect_url=f"{tailnet_app_base_url.rstrip('/')}/api/auth/login",
+            redirect_url=f"{tailnet_issuer_url.rstrip('/')}/settings/account",
         )
 
     @app.post("/api/admin/network/tailscale/complete", response_model=ProductAdminNetworkResponse)
