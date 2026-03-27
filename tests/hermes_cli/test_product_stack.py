@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from hermes_cli.product_config import load_product_config
+from hermes_cli.product_config import load_product_config, save_product_config
 from hermes_cli.product_stack import (
     POCKET_ID_IMAGE,
     _ensure_signup_mode_with_token,
@@ -57,6 +57,9 @@ def test_resolve_product_urls_uses_tailnet_urls_when_enabled(tmp_path, monkeypat
     config["network"]["tailscale"]["device_name"] = "hermes-box"
     config["network"]["tailscale"]["app_https_port"] = 443
     config["network"]["tailscale"]["auth_https_port"] = 4444
+    state_path = get_first_admin_enrollment_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"first_admin_login_seen": True}), encoding="utf-8")
 
     urls = resolve_product_urls(config)
 
@@ -70,6 +73,38 @@ def test_resolve_product_urls_uses_tailnet_urls_when_enabled(tmp_path, monkeypat
         "local_app_base_url": "http://officebox.local:18086",
         "local_issuer_url": "http://officebox.local:19111",
         "tailnet_host": "hermes-box.corpnet.ts.net",
+        "tailnet_app_base_url": "https://hermes-box.corpnet.ts.net",
+        "tailnet_issuer_url": "https://hermes-box.corpnet.ts.net:4444",
+    }
+
+
+def test_resolve_product_urls_keeps_bootstrap_local_until_first_admin_completion(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    config = load_product_config()
+    config["network"]["public_host"] = "officebox.local"
+    config["network"]["app_port"] = 18086
+    config["network"]["pocket_id_port"] = 19111
+    config["network"]["tailscale"]["enabled"] = True
+    config["network"]["tailscale"]["tailnet_name"] = "corpnet"
+    config["network"]["tailscale"]["device_name"] = "hermes-box"
+    config["network"]["tailscale"]["app_https_port"] = 443
+    config["network"]["tailscale"]["auth_https_port"] = 4444
+
+    urls = resolve_product_urls(config)
+
+    assert urls == {
+        "public_host": "officebox.local",
+        "url_scheme": "http",
+        "app_base_url": "http://officebox.local:18086",
+        "issuer_url": "http://officebox.local:19111",
+        "oidc_callback_url": "http://officebox.local:18086/api/auth/oidc/callback",
+        "pocket_id_setup_url": "http://officebox.local:19111/setup",
+        "local_app_base_url": "http://officebox.local:18086",
+        "local_issuer_url": "http://officebox.local:19111",
+        "tailnet_host": "hermes-box.corpnet.ts.net",
+        "tailnet_app_base_url": "https://hermes-box.corpnet.ts.net",
+        "tailnet_issuer_url": "https://hermes-box.corpnet.ts.net:4444",
     }
 
 
@@ -287,6 +322,34 @@ def test_ensure_product_stack_started_routes_tailnet_auth_through_proxy(
     ]
 
 
+def test_ensure_product_tailnet_started_wraps_operator_permission_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    config = load_product_config()
+    config["network"]["tailscale"]["enabled"] = True
+    config["network"]["tailscale"]["tailnet_name"] = "corpnet"
+    config["network"]["tailscale"]["device_name"] = "hermes-box"
+    config["network"]["tailscale"]["app_https_port"] = 443
+
+    with (
+        patch(
+            "hermes_cli.product_stack.subprocess.run",
+            side_effect=CalledProcessError(
+                1,
+                ["tailscale", "serve", "--bg", "--https=443", "http://127.0.0.1:8086"],
+                stderr=(
+                    "sending serve config: Access denied: serve config denied\n\n"
+                    "Use 'sudo tailscale serve --bg --https=443 http://127.0.0.1:8086'.\n"
+                    "To not require root, use 'sudo tailscale set --operator=$USER' once.\n"
+                ),
+            ),
+        ),
+        patch("hermes_cli.product_stack.load_first_admin_enrollment_state", return_value={"first_admin_login_seen": False}),
+    ):
+        with pytest.raises(RuntimeError, match="sudo tailscale set --operator"):
+            ensure_product_tailnet_started(config)
+
+
 def test_mark_first_admin_bootstrap_completed_refreshes_tailnet_exposure(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     state_path = get_first_admin_enrollment_state_path()
@@ -308,12 +371,16 @@ def test_mark_first_admin_bootstrap_completed_refreshes_tailnet_exposure(tmp_pat
         encoding="utf-8",
     )
 
-    with patch("hermes_cli.product_stack.ensure_product_tailnet_started") as mock_tailnet:
+    with (
+        patch("hermes_cli.product_stack.ensure_product_tailnet_started") as mock_tailnet,
+        patch("hermes_cli.product_stack.bootstrap_product_oidc_client") as mock_bootstrap_oidc,
+    ):
         marked = mark_first_admin_bootstrap_completed()
 
     assert marked is not None
     assert marked["first_admin_login_seen"] is True
     mock_tailnet.assert_called_once()
+    mock_bootstrap_oidc.assert_called_once()
 
 
 class _Response:
@@ -527,6 +594,11 @@ def test_bootstrap_first_admin_enrollment_reuses_existing_state(tmp_path, monkey
 
 def test_mark_first_admin_bootstrap_completed_sets_completion_fields(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = load_product_config()
+    config["network"]["tailscale"]["enabled"] = True
+    config["network"]["tailscale"]["tailnet_name"] = "corpnet"
+    config["network"]["tailscale"]["device_name"] = "hermes-box"
+    save_product_config(config)
     state_path = get_first_admin_enrollment_state_path()
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
@@ -546,7 +618,14 @@ def test_mark_first_admin_bootstrap_completed_sets_completion_fields(tmp_path, m
         encoding="utf-8",
     )
 
-    marked = mark_first_admin_bootstrap_completed()
+    with (
+        patch("hermes_cli.product_stack.bootstrap_product_oidc_client"),
+        patch("hermes_cli.product_stack.ensure_product_tailnet_started"),
+    ):
+        marked = mark_first_admin_bootstrap_completed()
+
     assert marked is not None
     assert marked["first_admin_login_seen"] is True
     assert isinstance(marked["bootstrap_completed_at"], int)
+    reloaded = load_product_config()
+    assert reloaded["auth"]["issuer_url"] == "https://hermes-box.corpnet.ts.net:4444"

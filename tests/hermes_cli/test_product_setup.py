@@ -295,7 +295,7 @@ def test_product_setup_summary_explains_tailnet_auth_is_pending_during_bootstrap
         json.dumps(
             {
                 "bootstrap_mode": "native_setup",
-                "setup_url": "https://hermes-box.corpnet.ts.net:4444/setup",
+                "setup_url": "http://localhost:1411/setup",
                 "first_admin_login_seen": False,
                 "bootstrap_completed_at": None,
             }

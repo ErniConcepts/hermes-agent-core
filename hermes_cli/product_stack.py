@@ -150,6 +150,14 @@ def _format_https_url(host: str, port: int) -> str:
     return f"https://{host}:{port}"
 
 
+def _tailnet_bootstrap_complete(config: Dict[str, Any] | None = None) -> bool:
+    product_config = config or load_product_config()
+    if not _tailscale_enabled(product_config):
+        return False
+    state = load_first_admin_enrollment_state() or {}
+    return bool(state.get("first_admin_login_seen", False))
+
+
 def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]:
     product_config = config or load_product_config()
     network = product_config.get("network", {})
@@ -165,11 +173,14 @@ def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]
         tailnet_host = _tailscale_host(product_config)
         app_https_port = _tailscale_https_port(product_config, "app_https_port", 443)
         auth_https_port = _tailscale_https_port(product_config, "auth_https_port", 4444)
-        app_base_url = _format_https_url(tailnet_host, app_https_port)
-        issuer_url = _format_https_url(tailnet_host, auth_https_port)
+        tailnet_app_base_url = _format_https_url(tailnet_host, app_https_port)
+        tailnet_issuer_url = _format_https_url(tailnet_host, auth_https_port)
+        bootstrap_complete = _tailnet_bootstrap_complete(product_config)
+        app_base_url = tailnet_app_base_url if bootstrap_complete else local_app_base_url
+        issuer_url = tailnet_issuer_url if bootstrap_complete else local_issuer_url
         return {
             "public_host": public_host,
-            "url_scheme": "https",
+            "url_scheme": "https" if bootstrap_complete else scheme,
             "app_base_url": app_base_url,
             "issuer_url": issuer_url,
             "oidc_callback_url": f"{app_base_url}/api/auth/oidc/callback",
@@ -177,6 +188,8 @@ def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]
             "local_app_base_url": local_app_base_url,
             "local_issuer_url": local_issuer_url,
             "tailnet_host": tailnet_host,
+            "tailnet_app_base_url": tailnet_app_base_url,
+            "tailnet_issuer_url": tailnet_issuer_url,
         }
 
     return {
@@ -204,6 +217,27 @@ def _tailscale_serve_command(config: Dict[str, Any], *, https_port: int, target_
         f"--https={https_port}",
         target_url,
     ]
+
+
+def _format_tailscale_serve_error(
+    exc: subprocess.CalledProcessError,
+    *,
+    command: list[str],
+) -> str:
+    detail = (exc.stderr or exc.stdout or "").strip()
+    command_text = " ".join(command)
+    lowered = detail.lower()
+    if "serve config denied" in lowered or "set --operator" in lowered:
+        return (
+            "Failed to configure Tailscale HTTPS exposure because the current user is not "
+            "allowed to manage 'tailscale serve'. Run this once on the host and retry:\n"
+            '  sudo tailscale set --operator="$USER"\n'
+            f"Then rerun the install/setup command. Failing command: {command_text}"
+        )
+    message = f"Failed to configure Tailscale HTTPS exposure with: {command_text}"
+    if detail:
+        message = f"{message}\n{detail}"
+    return message
 
 
 def _first_admin_bootstrap_completed() -> bool:
@@ -239,7 +273,10 @@ def ensure_product_tailnet_started(config: Dict[str, Any] | None = None) -> list
         )
     results: list[subprocess.CompletedProcess[str]] = []
     for command in commands:
-        results.append(subprocess.run(command, check=True, capture_output=True, text=True))
+        try:
+            results.append(subprocess.run(command, check=True, capture_output=True, text=True))
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(_format_tailscale_serve_error(exc, command=command)) from exc
     return results
 
 
@@ -590,6 +627,9 @@ def mark_first_admin_bootstrap_completed() -> Dict[str, Any] | None:
     state_path = get_first_admin_enrollment_state_path()
     atomic_json_write(state_path, state)
     _secure_file(state_path)
+    product_config = load_product_config()
+    save_product_config(initialize_product_stack(product_config))
+    bootstrap_product_oidc_client(product_config)
     # Once first admin bootstrap is complete, expose auth on tailnet as well.
     try:
         ensure_product_tailnet_started()
