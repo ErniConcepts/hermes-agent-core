@@ -523,7 +523,10 @@ def _is_tailnet_request(request: Request, urls: dict[str, str] | None = None) ->
 
 
 def _tailnet_bridge_session_active(request: Request) -> bool:
-    return bool(request.session.get("tailnet_bridge_authenticated", False))
+    session = request.scope.get("session")
+    if not isinstance(session, dict):
+        return False
+    return bool(session.get("tailnet_bridge_authenticated", False))
 
 
 def _network_response_payload(request: Request | None = None) -> ProductAdminNetworkResponse:
