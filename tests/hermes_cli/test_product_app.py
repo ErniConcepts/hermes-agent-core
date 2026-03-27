@@ -301,6 +301,44 @@ def test_product_app_allows_lan_signup_token_path_without_redirect(monkeypatch):
     assert response.text == "proxied:st/example-token"
 
 
+def test_product_app_allows_lan_signup_assets_without_redirect(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app.load_product_config", lambda: {})
+    monkeypatch.setattr(
+        "hermes_cli.product_app.resolve_product_urls",
+        lambda config: {
+            "app_base_url": "http://localhost:8086",
+            "issuer_url": "http://localhost:1411",
+            "local_app_base_url": "http://localhost:8086",
+            "local_issuer_url": "http://localhost:1411",
+            "tailnet_host": "laptopjannis.tail5fd7a5.ts.net",
+            "tailnet_app_base_url": "https://laptopjannis.tail5fd7a5.ts.net",
+            "tailnet_issuer_url": "https://laptopjannis.tail5fd7a5.ts.net:4444",
+            "tailnet_activation_status": "active",
+            "tailnet_active": True,
+        },
+    )
+    monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")
+
+    async def _fake_proxy(request, pocket_path):
+        return Response(status_code=200, content=f"proxied:{pocket_path}".encode("utf-8"))
+
+    monkeypatch.setattr("hermes_cli.product_app._proxy_pocket_id_request", _fake_proxy)
+
+    client = TestClient(create_product_app())
+
+    for path in (
+        "/_app/immutable/entry/start.CPttJcan.js",
+        "/app.webmanifest",
+        "/api/application-images/favicon",
+    ):
+        response = client.get(
+            f"http://laptopjannis.local:8086{path}",
+            headers={"host": "laptopjannis.local:8086"},
+            follow_redirects=False,
+        )
+        assert response.status_code != 307
+
+
 def test_product_app_tailnet_csrf_accepts_tailnet_origin_when_active(monkeypatch):
     monkeypatch.setattr("hermes_cli.product_app._require_product_user", lambda request: {"sub": "user-1", "is_admin": False})
     monkeypatch.setattr("hermes_cli.product_app._session_secret", lambda: "test-secret")

@@ -531,7 +531,13 @@ def _canonical_request_redirect(request: Request, urls: dict[str, str]) -> str |
 
 def _allow_noncanonical_request(request: Request, urls: dict[str, str]) -> bool:
     path = request.url.path.rstrip("/") or "/"
-    if path.startswith("/st/"):
+    if (
+        path.startswith("/st/")
+        or path.startswith("/_app/")
+        or path == "/app.webmanifest"
+        or path == "/favicon.ico"
+        or path.startswith("/api/application-images/")
+    ):
         return True
     if not _is_tailnet_request(request, urls):
         return False
