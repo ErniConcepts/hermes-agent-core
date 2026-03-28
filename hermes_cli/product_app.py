@@ -1,4 +1,4 @@
-"""Authenticated product app surface for hermes-core."""
+"""Tailnet-only product app surface for hermes-core."""
 
 from __future__ import annotations
 
@@ -9,21 +9,16 @@ import secrets
 import time
 from collections import deque
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
-import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.responses import Response
 
 from hermes_cli.config import get_env_value
 from hermes_cli.product_config import load_product_config
-from hermes_cli.product_invites import (
-    list_pending_product_signup_invites,
-    register_product_signup_invite,
-)
+from hermes_cli.product_invites import list_pending_product_signup_invites
 from hermes_cli.product_oidc import (
     create_oidc_login_request,
     discover_product_oidc_provider_metadata,
@@ -34,30 +29,25 @@ from hermes_cli.product_oidc import (
 )
 from hermes_cli.product_runtime import delete_product_runtime, get_product_runtime_session, stream_product_runtime_turn
 from hermes_cli.product_stack import (
-    consume_tailnet_bridge_token,
-    create_tailnet_bridge_token,
     disable_tailnet_activation,
     enable_tailnet_activation,
-    ensure_product_tailnet_started,
     load_first_admin_enrollment_state,
     mark_first_admin_bootstrap_completed,
     resolve_product_urls,
 )
-from hermes_cli.product_tailnet_identities import (
-    bind_tailnet_login,
-    get_tailnet_login_for_user,
-    get_user_id_for_tailnet_login,
-    normalize_tailnet_login,
-    unbind_tailnet_login,
-)
 from hermes_cli.product_users import (
     ProductCreatedUser,
     ProductUser,
+    bootstrap_first_admin_user,
+    claim_product_user_from_invite,
     create_product_user_with_signup,
     deactivate_product_user,
     get_product_user_by_id,
+    get_product_user_by_tailscale_login,
+    get_product_user_by_tailscale_subject,
     list_product_users,
 )
+from hermes_cli.product_web import build_product_index_html
 from hermes_cli.product_workspace import (
     ProductWorkspaceEntry,
     ProductWorkspaceQuotaError,
@@ -66,7 +56,6 @@ from hermes_cli.product_workspace import (
     get_workspace_state,
     store_workspace_file,
 )
-from hermes_cli.product_web import build_product_index_html
 
 logger = logging.getLogger(__name__)
 _SESSION_REFRESH_TTL_SECONDS = 30
@@ -90,15 +79,6 @@ class ProductAppContext:
         return self.urls["app_base_url"]
 
     @property
-    def issuer_url(self) -> str:
-        product_config = load_product_config()
-        return str(product_config.get("auth", {}).get("issuer_url", "")).strip() or self.urls["issuer_url"]
-
-    @property
-    def account_url(self) -> str:
-        return f"{self.issuer_url.rstrip('/')}/settings/account"
-
-    @property
     def app_origin(self) -> str:
         return _origin_from_url(self.app_base_url)
 
@@ -114,6 +94,10 @@ class ProductSessionResponse(BaseModel):
     authenticated: bool
     user: dict[str, Any] | None = None
     csrf_token: str | None = None
+    notice: str | None = None
+    detected_tailscale_login: str | None = None
+    tailnet_enabled: bool = False
+    app_base_url: str | None = None
 
 
 class ProductAdminUsersResponse(BaseModel):
@@ -126,15 +110,15 @@ class ProductAdminEntry(BaseModel):
     username: str | None = None
     display_name: str
     email: str | None = None
+    tailscale_login: str | None = None
     is_admin: bool = False
     disabled: bool = False
     status: str
 
 
 class ProductCreateUserRequest(BaseModel):
-    username: str | None = None
+    tailscale_login: str
     display_name: str | None = None
-    email: str | None = None
 
 
 class ProductAdminNetworkResponse(BaseModel):
@@ -142,29 +126,9 @@ class ProductAdminNetworkResponse(BaseModel):
     activation_status: str
     app_base_url: str
     issuer_url: str
-    local_app_base_url: str | None = None
-    local_issuer_url: str | None = None
     tailnet_app_base_url: str | None = None
     tailnet_issuer_url: str | None = None
     tailnet_host: str | None = None
-    current_origin: str | None = None
-    tailnet_bridge_session: bool = False
-
-
-class ProductTailnetBridgeResponse(BaseModel):
-    redirect_url: str
-
-
-class ProductAccountNetworkResponse(BaseModel):
-    tailscale_configured: bool
-    tailnet_enabled: bool
-    on_tailnet: bool
-    local_app_base_url: str | None = None
-    tailnet_app_base_url: str | None = None
-    detected_tailnet_login: str | None = None
-    bound_tailnet_login: str | None = None
-    tailnet_bridge_session: bool = False
-    can_bind_detected_identity: bool = False
 
 
 class ProductChatMessage(BaseModel):
@@ -198,10 +162,7 @@ class ProductDeleteWorkspacePathRequest(BaseModel):
 
 
 def _workspace_response_payload(payload: Any) -> ProductWorkspaceResponse:
-    if hasattr(payload, "model_dump"):
-        data = payload.model_dump(mode="json")
-    else:
-        data = payload
+    data = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
     return ProductWorkspaceResponse(**data)
 
 
@@ -233,9 +194,7 @@ def _origin_from_url(url: str) -> str:
     if not scheme or not hostname:
         return ""
     port = parsed.port
-    if port is None:
-        return f"{scheme}://{hostname}"
-    if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+    if port is None or (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
         return f"{scheme}://{hostname}"
     return f"{scheme}://{hostname}:{port}"
 
@@ -252,25 +211,15 @@ def _request_origin(request: Request) -> str:
 
 def _client_ip(request: Request) -> str:
     client = getattr(request, "client", None)
-    host = getattr(client, "host", "") if client is not None else ""
-    return str(host or "unknown")
+    return str(getattr(client, "host", "") or "unknown")
 
 
-def _expected_request_origin(request: Request) -> str:
-    context = getattr(request.app.state, "product_app_context", None)
-    if isinstance(context, ProductAppContext):
-        urls = _current_product_urls()
-        if _is_tailnet_request(request, urls) and (
-            bool(urls.get("tailnet_active"))
-            or str(urls.get("tailnet_activation_status", "")) == "pending"
-        ):
-            return _origin_from_url(str(urls.get("tailnet_app_base_url", "")))
-        return _origin_from_url(_current_app_base_url())
-    return _origin_from_url(str(request.base_url))
+def _expected_request_origin() -> str:
+    return _origin_from_url(_current_app_base_url())
 
 
 def _require_same_origin(request: Request) -> None:
-    expected_origin = _expected_request_origin(request)
+    expected_origin = _expected_request_origin()
     if not expected_origin:
         return
     request_origin = _request_origin(request)
@@ -288,68 +237,26 @@ def _require_csrf(request: Request) -> None:
         raise HTTPException(status_code=403, detail="CSRF validation failed")
 
 
-def _session_user_payload(userinfo: dict[str, Any], provider_user: ProductUser | None = None) -> dict[str, Any]:
-    email = userinfo.get("email")
-    if isinstance(email, str) and email.endswith("@users.local.invalid"):
-        email = None
-    provider_username = getattr(provider_user, "username", None) if provider_user is not None else None
-    provider_display_name = getattr(provider_user, "display_name", None) if provider_user is not None else None
-    provider_email = getattr(provider_user, "email", None) if provider_user is not None else None
-    provider_is_admin = bool(getattr(provider_user, "is_admin", False)) if provider_user is not None else False
-    provider_username = provider_username or userinfo.get("preferred_username")
-    provider_display_name = provider_display_name or (
-        userinfo.get("name") or userinfo.get("preferred_username") or userinfo.get("sub", "")
-    )
-    provider_email = provider_email or email
+def _provider_user_session_payload(provider_user: ProductUser) -> dict[str, Any]:
     return {
-        "id": userinfo.get("sub", ""),
-        "sub": userinfo.get("sub", ""),
-        "email": provider_email,
-        "name": provider_display_name,
-        "preferred_username": provider_username,
-        "email_verified": userinfo.get("email_verified"),
-        "is_admin": provider_is_admin,
+        "id": provider_user.id,
+        "sub": provider_user.id,
+        "email": provider_user.email,
+        "name": provider_user.display_name,
+        "preferred_username": provider_user.username,
+        "is_admin": provider_user.is_admin,
+        "tailscale_login": provider_user.tailscale_login,
     }
 
 
-def _provider_user_session_payload(provider_user: ProductUser) -> dict[str, Any]:
-    return _session_user_payload(
-        {
-            "sub": provider_user.id,
-            "email": provider_user.email,
-            "name": provider_user.display_name,
-            "preferred_username": provider_user.username,
-            "email_verified": bool(provider_user.email),
-        },
-        provider_user,
-    )
-
-
 def _refresh_session_user(user: dict[str, Any]) -> dict[str, Any] | None:
-    started = time.perf_counter()
     user_id = str(user.get("sub") or "").strip()
     if not user_id:
         return None
     provider_user = get_product_user_by_id(user_id)
-    if provider_user is None or bool(getattr(provider_user, "disabled", False)):
-        logger.info(
-            "product_app user refresh for %s completed in %.0fms (missing/disabled)",
-            user_id,
-            (time.perf_counter() - started) * 1000,
-        )
+    if provider_user is None or provider_user.disabled:
         return None
-    refreshed = dict(user)
-    refreshed["id"] = getattr(provider_user, "id", user_id)
-    refreshed["email"] = getattr(provider_user, "email", refreshed.get("email"))
-    refreshed["name"] = getattr(provider_user, "display_name", None) or refreshed.get("name")
-    refreshed["preferred_username"] = getattr(provider_user, "username", None) or refreshed.get("preferred_username")
-    refreshed["is_admin"] = bool(getattr(provider_user, "is_admin", False))
-    logger.info(
-        "product_app user refresh for %s completed in %.0fms",
-        user_id,
-        (time.perf_counter() - started) * 1000,
-    )
-    return refreshed
+    return _provider_user_session_payload(provider_user)
 
 
 def _session_refresh_due(request: Request) -> bool:
@@ -367,46 +274,21 @@ def _store_session_user(request: Request, user: dict[str, Any]) -> dict[str, Any
     return user
 
 
-def _detected_tailnet_login(request: Request) -> str | None:
-    if not _is_tailnet_request(request):
-        return None
-    login = normalize_tailnet_login(request.headers.get("Tailscale-User-Login"))
-    return login or None
+def _clear_notice(request: Request) -> None:
+    request.session.pop("auth_notice", None)
+    request.session.pop("detected_tailscale_login", None)
 
 
-def _maybe_bind_detected_tailnet_identity(request: Request, user_id: str) -> str | None:
-    detected_login = _detected_tailnet_login(request)
-    if not detected_login or not user_id:
-        return None
-    existing_user_id = get_user_id_for_tailnet_login(detected_login)
-    if existing_user_id and existing_user_id != user_id:
-        return None
-    bind_tailnet_login(user_id, detected_login)
-    return detected_login
-
-
-def _maybe_auto_login_from_tailnet_identity(request: Request) -> dict[str, Any] | None:
-    existing = request.session.get("user")
-    if isinstance(existing, dict):
-        return existing
-    urls = _current_product_urls()
-    if not bool(urls.get("tailnet_active")) or not _is_tailnet_request(request, urls):
-        return None
-    tailscale_login = _detected_tailnet_login(request)
-    if not tailscale_login:
-        return None
-    user_id = get_user_id_for_tailnet_login(tailscale_login)
-    if not user_id:
-        return None
-    provider_user = get_product_user_by_id(user_id)
-    if provider_user is None or bool(getattr(provider_user, "disabled", False)):
-        return None
-    return _store_session_user(request, _provider_user_session_payload(provider_user))
+def _set_notice(request: Request, message: str, *, tailscale_login: str | None = None) -> None:
+    request.session["auth_notice"] = message
+    if tailscale_login:
+        request.session["detected_tailscale_login"] = tailscale_login
+    else:
+        request.session.pop("detected_tailscale_login", None)
 
 
 def _resolve_session_user(request: Request) -> dict[str, Any]:
-    auto_user = _maybe_auto_login_from_tailnet_identity(request)
-    user = auto_user if isinstance(auto_user, dict) else request.session.get("user")
+    user = request.session.get("user")
     if not isinstance(user, dict):
         raise HTTPException(status_code=401, detail="Not authenticated")
     if not _session_refresh_due(request):
@@ -445,123 +327,6 @@ def _enforce_auth_rate_limit(request: Request, route_key: str) -> None:
     bucket.append(now)
 
 
-def _pocket_id_proxy_base_url(config: dict[str, Any]) -> str:
-    services = config.get("services", {}).get("pocket_id", {})
-    upstream_port = int(services.get("upstream_port", 19141))
-    return f"http://127.0.0.1:{upstream_port}"
-
-
-def _is_setup_path(path: str) -> bool:
-    candidate = (path or "").lstrip("/")
-    return candidate == "setup" or candidate.startswith("setup/")
-
-
-_HOP_BY_HOP_HEADERS = {
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-}
-
-_BLOCKED_PROXY_REQUEST_HEADERS = {
-    "forwarded",
-    "x-forwarded-for",
-    "x-forwarded-host",
-    "x-forwarded-proto",
-    "x-real-ip",
-}
-
-
-def _filter_proxy_response_headers(headers: dict[str, str]) -> dict[str, str]:
-    filtered: dict[str, str] = {}
-    for key, value in headers.items():
-        if key.lower() in _HOP_BY_HOP_HEADERS:
-            continue
-        filtered[key] = value
-    return filtered
-
-
-async def _proxy_pocket_id_request(request: Request, pocket_path: str) -> Response:
-    enrollment_state = load_first_admin_enrollment_state() or {}
-    if bool(enrollment_state.get("first_admin_login_seen", False)) and _is_setup_path(pocket_path):
-        raise HTTPException(status_code=404, detail="Not found")
-    base_url = _pocket_id_proxy_base_url(load_product_config()).rstrip("/")
-    upstream_url = f"{base_url}/{pocket_path.lstrip('/')}"
-    if request.url.query:
-        upstream_url = f"{upstream_url}?{request.url.query}"
-    body = await request.body()
-    headers = {
-        key: value
-        for key, value in request.headers.items()
-        if key.lower() not in _BLOCKED_PROXY_REQUEST_HEADERS
-    }
-    headers.pop("host", None)
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
-        upstream = await client.request(
-            request.method,
-            upstream_url,
-            headers=headers,
-            content=body,
-        )
-    return Response(
-        content=upstream.content,
-        status_code=upstream.status_code,
-        headers=_filter_proxy_response_headers(dict(upstream.headers)),
-    )
-
-
-def _canonical_request_redirect(request: Request, urls: dict[str, str]) -> str | None:
-    tailnet_host = str(urls.get("tailnet_host", "")).strip().lower()
-    if not tailnet_host:
-        return None
-    canonical_base = urls["app_base_url"].rstrip("/")
-    canonical_host = canonical_base.split("://", 1)[-1].lower()
-    request_host = str(request.headers.get("host", "")).strip().lower()
-    if request_host == canonical_host:
-        return None
-    target = f"{canonical_base}{request.url.path}"
-    if request.url.query:
-        target = f"{target}?{request.url.query}"
-    return target
-
-
-def _allow_noncanonical_request(request: Request, urls: dict[str, str]) -> bool:
-    path = request.url.path.rstrip("/") or "/"
-    if (
-        path.startswith("/st/")
-        or path.startswith("/_app/")
-        or path == "/app.webmanifest"
-        or path == "/favicon.ico"
-        or path.startswith("/api/application-images/")
-    ):
-        return True
-    if not _is_tailnet_request(request, urls):
-        return False
-    if path == "/auth/bridge":
-        return True
-    if bool(urls.get("tailnet_active")):
-        return True
-    return False
-
-
-def _build_product_app_context() -> ProductAppContext:
-    product_config = load_product_config()
-    auth_provider = str(product_config.get("auth", {}).get("provider", "unknown")).strip() or "unknown"
-    product_name = (
-        str(product_config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip()
-        or "Hermes Core"
-    )
-    return ProductAppContext(
-        product_config=product_config,
-        auth_provider=auth_provider,
-        product_name=product_name,
-    )
-
-
 def _current_product_urls() -> dict[str, str]:
     return resolve_product_urls(load_product_config())
 
@@ -570,73 +335,59 @@ def _current_app_base_url() -> str:
     return _current_product_urls()["app_base_url"]
 
 
-def _current_issuer_url() -> str:
+def _tailscale_identity_from_claims(claims: dict[str, Any]) -> dict[str, str]:
+    subject = str(claims.get("sub") or "").strip()
+    login = str(claims.get("preferred_username") or claims.get("email") or claims.get("username") or "").strip().lower()
+    email = str(claims.get("email") or "").strip().lower()
+    display_name = str(claims.get("name") or claims.get("preferred_username") or email or login or subject).strip()
+    return {
+        "sub": subject,
+        "login": login or email,
+        "email": email,
+        "name": display_name,
+    }
+
+
+def _bootstrap_first_admin_login() -> str:
     product_config = load_product_config()
-    return str(product_config.get("auth", {}).get("issuer_url", "")).strip() or _current_product_urls()["issuer_url"]
+    return str(product_config.get("bootstrap", {}).get("first_admin_tailscale_login", "")).strip().lower()
 
 
-def _current_account_url() -> str:
-    return f"{_current_issuer_url().rstrip('/')}/settings/account"
+def _active_admin_exists() -> bool:
+    return any(user.is_admin and not user.disabled for user in list_product_users())
 
 
-def _is_tailnet_request(request: Request, urls: dict[str, str] | None = None) -> bool:
-    resolved = urls or _current_product_urls()
-    tailnet_base = str(resolved.get("tailnet_app_base_url", "")).strip()
-    expected_host = _origin_from_url(tailnet_base).split("://", 1)[-1].lower() if tailnet_base else ""
-    if not expected_host:
-        expected_host = str(resolved.get("tailnet_host", "")).strip().lower()
-    if not expected_host:
-        return False
+def _pending_invite_token(request: Request) -> str:
+    return str(request.session.get("pending_invite_token", "")).strip()
+
+
+def _set_pending_invite_token(request: Request, token: str | None) -> None:
+    candidate = str(token or "").strip()
+    if not candidate:
+        request.session.pop("pending_invite_token", None)
+        return
+    request.session["pending_invite_token"] = candidate
+
+
+def _canonical_request_redirect(request: Request, urls: dict[str, str]) -> str | None:
+    canonical_base = urls["app_base_url"].rstrip("/")
+    canonical_host = canonical_base.split("://", 1)[-1].lower()
     request_host = str(request.headers.get("host", "")).strip().lower()
-    return request_host == expected_host
+    if request_host == canonical_host:
+        return None
+    if request.url.path == "/healthz":
+        return None
+    target = f"{canonical_base}{request.url.path}"
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return target
 
 
-def _tailnet_bridge_session_active(request: Request) -> bool:
-    session = request.scope.get("session")
-    if not isinstance(session, dict):
-        return False
-    return bool(session.get("tailnet_bridge_authenticated", False))
-
-
-def _network_response_payload(request: Request | None = None) -> ProductAdminNetworkResponse:
-    urls = _current_product_urls()
-    return ProductAdminNetworkResponse(
-        tailscale_configured=bool(urls.get("tailnet_host")),
-        activation_status=str(urls.get("tailnet_activation_status", "disabled")),
-        app_base_url=urls["app_base_url"],
-        issuer_url=urls["issuer_url"],
-        local_app_base_url=urls.get("local_app_base_url"),
-        local_issuer_url=urls.get("local_issuer_url"),
-        tailnet_app_base_url=urls.get("tailnet_app_base_url"),
-        tailnet_issuer_url=urls.get("tailnet_issuer_url"),
-        tailnet_host=urls.get("tailnet_host"),
-        current_origin=_request_origin(request) if request is not None else None,
-        tailnet_bridge_session=_tailnet_bridge_session_active(request) if request is not None else False,
-    )
-
-
-def _account_network_response_payload(request: Request) -> ProductAccountNetworkResponse:
-    urls = _current_product_urls()
-    session_user = request.session.get("user")
-    user_id = str(session_user.get("sub") or "").strip() if isinstance(session_user, dict) else ""
-    bound_login = get_tailnet_login_for_user(user_id) if user_id else None
-    detected_login = _detected_tailnet_login(request)
-    return ProductAccountNetworkResponse(
-        tailscale_configured=bool(urls.get("tailnet_host")),
-        tailnet_enabled=bool(urls.get("tailnet_active")),
-        on_tailnet=_is_tailnet_request(request, urls),
-        local_app_base_url=urls.get("local_app_base_url"),
-        tailnet_app_base_url=urls.get("tailnet_app_base_url"),
-        detected_tailnet_login=detected_login,
-        bound_tailnet_login=bound_login,
-        tailnet_bridge_session=_tailnet_bridge_session_active(request),
-        can_bind_detected_identity=bool(
-            isinstance(session_user, dict)
-            and _is_tailnet_request(request, urls)
-            and detected_login
-            and (not bound_login or bound_login == detected_login)
-        ),
-    )
+def _build_product_app_context() -> ProductAppContext:
+    product_config = load_product_config()
+    auth_provider = str(product_config.get("auth", {}).get("provider", "unknown")).strip() or "unknown"
+    product_name = str(product_config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip() or "Hermes Core"
+    return ProductAppContext(product_config=product_config, auth_provider=auth_provider, product_name=product_name)
 
 
 def _runtime_session_payload(user: dict[str, Any]) -> dict[str, Any]:
@@ -650,19 +401,15 @@ def _runtime_session_payload(user: dict[str, Any]) -> dict[str, Any]:
 
 def _create_signup_user(payload: ProductCreateUserRequest) -> ProductCreatedUser:
     try:
-        created = ProductCreatedUser.model_validate(
+        return ProductCreatedUser.model_validate(
             create_product_user_with_signup(
-                payload.username,
-                payload.display_name,
-                email=payload.email,
+                username=payload.tailscale_login,
+                display_name=payload.display_name,
+                email=payload.tailscale_login,
             )
         )
-        register_product_signup_invite(created.signup)
-        return created
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 def _deactivate_runtime_user(user_id: str) -> ProductUser:
@@ -670,19 +417,15 @@ def _deactivate_runtime_user(user_id: str) -> ProductUser:
         updated = deactivate_product_user(user_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
     normalized = ProductUser.model_validate(updated)
     delete_product_runtime(normalized.id)
     return normalized
 
 
 def _list_admin_entries(admin_user: dict[str, Any]) -> ProductAdminUsersResponse:
-    users = list_product_users()
-    pending_invites = list_pending_product_signup_invites()
     current_user_id = str(admin_user.get("sub") or "")
     rows: list[ProductAdminEntry] = []
-    for user in users:
+    for user in list_product_users():
         rows.append(
             ProductAdminEntry(
                 id=user.id,
@@ -690,81 +433,138 @@ def _list_admin_entries(admin_user: dict[str, Any]) -> ProductAdminUsersResponse
                 username=user.username,
                 display_name=user.display_name,
                 email=user.email,
+                tailscale_login=user.tailscale_login,
                 is_admin=user.is_admin,
                 disabled=user.disabled,
                 status="Disabled" if user.disabled else ("You" if user.id == current_user_id else "Active"),
             )
         )
-    for invite in pending_invites:
+    for invite in list_pending_product_signup_invites():
         rows.append(
             ProductAdminEntry(
                 id=invite.invite_id,
                 type="invite",
                 username=None,
-                display_name="User",
-                email=None,
-                is_admin=False,
-                disabled=False,
-                status="No signup",
+                display_name=invite.display_name,
+                email=invite.tailscale_login,
+                tailscale_login=invite.tailscale_login,
+                status="Pending invite",
             )
         )
     return ProductAdminUsersResponse(users=rows)
 
 
+def _session_response_payload(request: Request) -> ProductSessionResponse:
+    urls = _current_product_urls()
+    user = request.session.get("user")
+    if not isinstance(user, dict):
+        return ProductSessionResponse(
+            authenticated=False,
+            csrf_token=_csrf_token(request),
+            notice=str(request.session.get("auth_notice") or "").strip() or None,
+            detected_tailscale_login=str(request.session.get("detected_tailscale_login") or "").strip() or None,
+            tailnet_enabled=bool(urls.get("tailnet_active")),
+            app_base_url=urls.get("app_base_url"),
+        )
+    refreshed = _resolve_session_user(request)
+    _mark_bootstrap_completed_if_admin(refreshed)
+    return ProductSessionResponse(
+        authenticated=True,
+        user=refreshed,
+        csrf_token=_csrf_token(request),
+        tailnet_enabled=bool(urls.get("tailnet_active")),
+        app_base_url=urls.get("app_base_url"),
+    )
+
+
+def _start_tsidp_login(request: Request, context: ProductAppContext) -> RedirectResponse:
+    settings = load_product_oidc_client_settings(config=context.product_config)
+    metadata = discover_product_oidc_provider_metadata(settings)
+    login_request = create_oidc_login_request(settings, metadata)
+    request.session["oidc_pending"] = {
+        "state": login_request["state"],
+        "nonce": login_request["nonce"],
+        "verifier": login_request["verifier"],
+    }
+    return RedirectResponse(login_request["authorization_url"], status_code=307)
+
+
+def _handle_tsidp_identity(request: Request, identity: dict[str, str]) -> ProductUser:
+    existing_user = get_product_user_by_tailscale_subject(identity["sub"])
+    if existing_user is None and identity.get("login"):
+        existing_user = get_product_user_by_tailscale_login(identity["login"])
+    if existing_user is not None:
+        if existing_user.disabled:
+            raise HTTPException(status_code=403, detail="This account has been disabled")
+        return existing_user
+
+    if not _active_admin_exists():
+        expected_login = _bootstrap_first_admin_login()
+        if not expected_login:
+            raise HTTPException(status_code=500, detail="First admin bootstrap is not configured")
+        if identity.get("login") != expected_login:
+            _set_notice(
+                request,
+                "This Tailscale account is not allowed to bootstrap the first admin.",
+                tailscale_login=identity.get("login"),
+            )
+            raise HTTPException(status_code=403, detail="This Tailscale account is not allowed to bootstrap the first admin.")
+        user = bootstrap_first_admin_user(
+            tailscale_subject=identity["sub"],
+            tailscale_login=identity["login"],
+            display_name=identity.get("name"),
+        )
+        mark_first_admin_bootstrap_completed()
+        return user
+
+    invite_token = _pending_invite_token(request)
+    if invite_token:
+        try:
+            user = claim_product_user_from_invite(
+                token=invite_token,
+                tailscale_subject=identity["sub"],
+                tailscale_login=identity["login"],
+                display_name=identity.get("name"),
+            )
+            _set_pending_invite_token(request, None)
+            return user
+        except ValueError as exc:
+            _set_notice(request, str(exc), tailscale_login=identity.get("login"))
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    _set_notice(
+        request,
+        "This Tailscale account is not invited to this app.",
+        tailscale_login=identity.get("login"),
+    )
+    raise HTTPException(status_code=403, detail="This Tailscale account is not invited to this app.")
+
+
 def _register_root_routes(app: FastAPI, context: ProductAppContext) -> None:
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
-        return HTMLResponse(
-            build_product_index_html(
-                product_name=context.product_name,
-                account_url=_current_account_url(),
-            )
-        )
+        return HTMLResponse(build_product_index_html(product_name=context.product_name, account_url=context.app_base_url))
 
     @app.get("/healthz", response_model=ProductHealthResponse)
     def healthz() -> ProductHealthResponse:
         return ProductHealthResponse(
             auth_provider=context.auth_provider,
-            issuer_url=_current_issuer_url(),
+            issuer_url=_current_product_urls()["issuer_url"],
             app_base_url=_current_app_base_url(),
         )
 
-    @app.get("/st/{token}")
-    async def signup_token_redirect(request: Request, token: str) -> Response:
-        return await _proxy_pocket_id_request(request, f"st/{token}")
-
-
-def _register_proxy_routes(app: FastAPI) -> None:
-    @app.api_route(
-        "/__pocket_id_proxy/{pocket_path:path}",
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
-    )
-    async def pocket_id_proxy(request: Request, pocket_path: str) -> Response:
-        return await _proxy_pocket_id_request(request, pocket_path)
+    @app.get("/invite/{token}")
+    def invite_login(request: Request, token: str) -> RedirectResponse:
+        _set_pending_invite_token(request, token)
+        return RedirectResponse("/api/auth/login", status_code=303)
 
 
 def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
-    @app.get("/auth/bridge")
-    def auth_tailnet_bridge(request: Request, token: str = "") -> RedirectResponse:
-        urls = _current_product_urls()
-        if not _is_tailnet_request(request, urls):
-            raise HTTPException(status_code=400, detail="Tailnet bridge must be opened on the Tailnet URL")
-        bridge = consume_tailnet_bridge_token(token, target_origin=_origin_from_url(urls["tailnet_app_base_url"]))
-        if bridge is None:
-            raise HTTPException(status_code=400, detail="Tailnet bridge link is invalid or expired")
-        provider_user = get_product_user_by_id(str(bridge.get("user_id") or "").strip())
-        if provider_user is None or provider_user.disabled or not provider_user.is_admin:
-            raise HTTPException(status_code=400, detail="Tailnet bridge link can no longer be used")
-        _store_session_user(request, _provider_user_session_payload(provider_user))
-        _maybe_bind_detected_tailnet_identity(request, provider_user.id)
-        request.session["tailnet_bridge_authenticated"] = True
-        _csrf_token(request)
-        return RedirectResponse(urls["tailnet_app_base_url"], status_code=303)
-
     @app.get("/api/auth/login")
     def auth_login(request: Request) -> RedirectResponse:
         _enforce_auth_rate_limit(request, "login")
         _csrf_token(request)
+        _clear_notice(request)
         existing = request.session.get("user")
         if isinstance(existing, dict):
             try:
@@ -775,15 +575,7 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
                 _mark_bootstrap_completed_if_admin(refreshed)
                 return RedirectResponse(_current_app_base_url(), status_code=303)
             request.session.clear()
-        settings = load_product_oidc_client_settings(config=context.product_config)
-        metadata = discover_product_oidc_provider_metadata(settings)
-        login_request = create_oidc_login_request(settings, metadata)
-        request.session["oidc_pending"] = {
-            "state": login_request["state"],
-            "nonce": login_request["nonce"],
-            "verifier": login_request["verifier"],
-        }
-        return RedirectResponse(login_request["authorization_url"], status_code=307)
+        return _start_tsidp_login(request, context)
 
     @app.get("/api/auth/oidc/callback")
     def auth_callback(request: Request, code: str, state: str) -> RedirectResponse:
@@ -793,6 +585,7 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
             return RedirectResponse(_current_app_base_url(), status_code=303)
         if state != pending.get("state"):
             request.session.pop("oidc_pending", None)
+            _set_notice(request, "The Tailscale login state was invalid. Please try again.")
             return RedirectResponse(_current_app_base_url(), status_code=303)
 
         settings = load_product_oidc_client_settings(config=context.product_config)
@@ -803,38 +596,49 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
             code=code,
             verifier=str(pending.get("verifier", "")),
         )
-        access_token = str(token_response.get("access_token", "")).strip()
-        if not access_token:
-            raise HTTPException(status_code=502, detail="OIDC token response missing access_token")
+        request.session.pop("oidc_pending", None)
+        id_token_claims: dict[str, Any] | None = None
         id_token = str(token_response.get("id_token", "")).strip()
         if id_token:
-            validate_product_oidc_id_token(
+            id_token_claims = validate_product_oidc_id_token(
                 id_token,
                 settings,
                 metadata,
                 nonce=str(pending.get("nonce", "")),
             )
-        userinfo = fetch_product_oidc_userinfo(access_token, metadata)
-        request.session.pop("oidc_pending", None)
-        provider_user = get_product_user_by_id(str(userinfo.get("sub") or "").strip())
-        session_user = _session_user_payload(userinfo, provider_user)
-        _store_session_user(request, session_user)
-        _mark_bootstrap_completed_if_admin(session_user)
+        access_token = str(token_response.get("access_token", "")).strip()
+        if access_token and metadata.userinfo_endpoint:
+            claims = fetch_product_oidc_userinfo(access_token, metadata)
+        elif isinstance(id_token_claims, dict):
+            claims = id_token_claims
+        else:
+            _set_notice(request, "The Tailscale login response did not include identity claims.")
+            return RedirectResponse(_current_app_base_url(), status_code=303)
+
+        identity = _tailscale_identity_from_claims(claims)
+        if not identity.get("sub") or not identity.get("login"):
+            _set_notice(request, "The Tailscale login response did not include a stable account identity.")
+            return RedirectResponse(_current_app_base_url(), status_code=303)
+
+        try:
+            provider_user = _handle_tsidp_identity(request, identity)
+        except HTTPException:
+            request.session.pop("user", None)
+            request.session.pop("user_refreshed_at", None)
+            return RedirectResponse(_current_app_base_url(), status_code=303)
+
+        _clear_notice(request)
+        _store_session_user(request, _provider_user_session_payload(provider_user))
+        _mark_bootstrap_completed_if_admin(request.session["user"])
         _csrf_token(request)
         return RedirectResponse(_current_app_base_url(), status_code=303)
 
     @app.get("/api/auth/session", response_model=ProductSessionResponse)
     def auth_session(request: Request) -> ProductSessionResponse:
-        _maybe_auto_login_from_tailnet_identity(request)
-        user = request.session.get("user")
-        if not isinstance(user, dict):
-            return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
         try:
-            refreshed = _resolve_session_user(request)
+            return _session_response_payload(request)
         except HTTPException:
             return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
-        _mark_bootstrap_completed_if_admin(refreshed)
-        return ProductSessionResponse(authenticated=True, user=refreshed, csrf_token=_csrf_token(request))
 
     @app.post("/api/auth/logout", response_model=ProductSessionResponse)
     def auth_logout(request: Request) -> ProductSessionResponse:
@@ -847,14 +651,8 @@ def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
 def _register_chat_routes(app: FastAPI) -> None:
     @app.get("/api/chat/session", response_model=ProductChatSessionResponse)
     def chat_session(request: Request) -> ProductChatSessionResponse:
-        started = time.perf_counter()
         user = _require_product_user(request)
-        payload = _runtime_session_payload(user)
-        logger.info(
-            "product_app /api/chat/session completed in %.0fms",
-            (time.perf_counter() - started) * 1000,
-        )
-        return ProductChatSessionResponse(**payload)
+        return ProductChatSessionResponse(**_runtime_session_payload(user))
 
     @app.post("/api/chat/turn/stream")
     def chat_turn_stream(request: Request, payload: ProductChatTurnRequest) -> StreamingResponse:
@@ -867,41 +665,26 @@ def _register_chat_routes(app: FastAPI) -> None:
         return StreamingResponse(
             event_stream,
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
 
 def _register_workspace_routes(app: FastAPI) -> None:
     @app.get("/api/workspace", response_model=ProductWorkspaceResponse)
     def workspace_state(request: Request, path: str = "") -> ProductWorkspaceResponse:
-        started = time.perf_counter()
         user = _require_product_user(request)
         try:
             payload = get_workspace_state(user, path=path)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        logger.info(
-            "product_app /api/workspace completed in %.0fms",
-            (time.perf_counter() - started) * 1000,
-        )
         return _workspace_response_payload(payload)
 
     @app.post("/api/workspace/folders", response_model=ProductWorkspaceResponse)
-    def workspace_create_folder(
-        request: Request,
-        payload: ProductCreateWorkspaceFolderRequest,
-    ) -> ProductWorkspaceResponse:
+    def workspace_create_folder(request: Request, payload: ProductCreateWorkspaceFolderRequest) -> ProductWorkspaceResponse:
         user = _require_product_user(request)
         _require_csrf(request)
         try:
-            state = create_workspace_folder(
-                user,
-                parent_path=payload.path,
-                folder_name=payload.name,
-            )
+            state = create_workspace_folder(user, parent_path=payload.path, folder_name=payload.name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _workspace_response_payload(state)
@@ -946,100 +729,52 @@ def _register_workspace_routes(app: FastAPI) -> None:
         return _workspace_response_payload(state)
 
 
-def _register_account_routes(app: FastAPI) -> None:
-    @app.get("/api/account/network", response_model=ProductAccountNetworkResponse)
-    def account_network_state(request: Request) -> ProductAccountNetworkResponse:
-        return _account_network_response_payload(request)
-
-    @app.post("/api/account/network/tailscale/bridge", response_model=ProductTailnetBridgeResponse)
-    def account_start_tailnet_link(request: Request) -> ProductTailnetBridgeResponse:
-        user = _require_product_user(request)
-        _require_csrf(request)
-        urls = _current_product_urls()
-        if not bool(urls.get("tailnet_active")):
-            raise HTTPException(status_code=400, detail="Tailnet access is not enabled")
-        tailnet_app_base_url = str(urls.get("tailnet_app_base_url", "")).strip()
-        if not tailnet_app_base_url:
-            raise HTTPException(status_code=400, detail="Tailnet is not configured for this product install")
-        bridge = create_tailnet_bridge_token(
-            str(user.get("sub") or "").strip(),
-            target_origin=_origin_from_url(tailnet_app_base_url),
-        )
-        return ProductTailnetBridgeResponse(
-            redirect_url=f"{tailnet_app_base_url.rstrip('/')}/auth/bridge?token={bridge['token']}"
-        )
-
-    @app.post("/api/account/network/tailscale/bind", response_model=ProductAccountNetworkResponse)
-    def account_bind_tailnet(request: Request) -> ProductAccountNetworkResponse:
-        user = _require_product_user(request)
-        _require_csrf(request)
-        urls = _current_product_urls()
-        if not _is_tailnet_request(request, urls):
-            raise HTTPException(status_code=400, detail="Tailnet identity can only be linked from the Tailnet URL")
-        detected_login = _detected_tailnet_login(request)
-        if not detected_login:
-            raise HTTPException(status_code=400, detail="No trusted Tailnet identity was detected for this request")
-        try:
-            bind_tailnet_login(str(user.get("sub") or "").strip(), detected_login)
-        except ValueError as exc:
-            status_code = 409 if "already linked" in str(exc).lower() else 400
-            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-        return _account_network_response_payload(request)
-
-    @app.post("/api/account/network/tailscale/unbind", response_model=ProductAccountNetworkResponse)
-    def account_unbind_tailnet(request: Request) -> ProductAccountNetworkResponse:
-        user = _require_product_user(request)
-        _require_csrf(request)
-        unbind_tailnet_login(str(user.get("sub") or "").strip())
-        return _account_network_response_payload(request)
+def _network_response_payload() -> ProductAdminNetworkResponse:
+    urls = _current_product_urls()
+    return ProductAdminNetworkResponse(
+        tailscale_configured=bool(urls.get("tailnet_host")),
+        activation_status=str(urls.get("tailnet_activation_status", "disabled")),
+        app_base_url=urls["app_base_url"],
+        issuer_url=urls["issuer_url"],
+        tailnet_app_base_url=urls.get("tailnet_app_base_url"),
+        tailnet_issuer_url=urls.get("tailnet_issuer_url"),
+        tailnet_host=urls.get("tailnet_host"),
+    )
 
 
 def _register_admin_routes(app: FastAPI) -> None:
     @app.get("/api/admin/network", response_model=ProductAdminNetworkResponse)
     def admin_network_state(request: Request) -> ProductAdminNetworkResponse:
         _require_admin_user(request)
-        return _network_response_payload(request)
+        return _network_response_payload()
 
     @app.post("/api/admin/network/tailscale/enable", response_model=ProductAdminNetworkResponse)
     def admin_enable_tailnet(request: Request) -> ProductAdminNetworkResponse:
         _require_admin_user(request)
         _require_csrf(request)
-        urls = _current_product_urls()
-        if not str(urls.get("tailnet_app_base_url", "")).strip():
-            raise HTTPException(status_code=400, detail="Tailscale is not configured for this product install")
         try:
             enable_tailnet_activation()
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return _network_response_payload(request)
+        return _network_response_payload()
 
     @app.post("/api/admin/network/tailscale/disable", response_model=ProductAdminNetworkResponse)
     def admin_disable_tailnet(request: Request) -> ProductAdminNetworkResponse:
         _require_admin_user(request)
         _require_csrf(request)
-        urls = _current_product_urls()
-        if not _is_tailnet_request(request, urls):
-            raise HTTPException(status_code=400, detail="Disable Tailnet from the Tailnet app")
         disable_tailnet_activation()
-        request.session.pop("tailnet_bridge_authenticated", None)
-        return _network_response_payload(request)
+        return _network_response_payload()
 
     @app.get("/api/admin/users", response_model=ProductAdminUsersResponse)
     def admin_list_users(request: Request) -> ProductAdminUsersResponse:
-        started = time.perf_counter()
         admin_user = _require_admin_user(request)
-        response = _list_admin_entries(admin_user)
-        logger.info(
-            "product_app /api/admin/users completed in %.0fms",
-            (time.perf_counter() - started) * 1000,
-        )
-        return response
+        return _list_admin_entries(admin_user)
 
     @app.post("/api/admin/users", response_model=ProductCreatedUser)
-    def admin_create_user(request: Request, payload: ProductCreateUserRequest | None = None) -> ProductCreatedUser:
+    def admin_create_user(request: Request, payload: ProductCreateUserRequest) -> ProductCreatedUser:
         _require_admin_user(request)
         _require_csrf(request)
-        return _create_signup_user(payload or ProductCreateUserRequest())
+        return _create_signup_user(payload)
 
     @app.post("/api/admin/users/{user_id}/deactivate", response_model=ProductUser)
     def admin_deactivate_user(request: Request, user_id: str) -> ProductUser:
@@ -1068,33 +803,13 @@ def create_product_app() -> FastAPI:
     async def enforce_canonical_origin(request: Request, call_next):
         urls = _current_product_urls()
         redirect_url = _canonical_request_redirect(request, urls)
-        if redirect_url is not None and not _allow_noncanonical_request(request, urls):
+        if redirect_url is not None:
             return RedirectResponse(redirect_url, status_code=307)
         return await call_next(request)
 
     _register_root_routes(app, context)
-    _register_proxy_routes(app)
     _register_auth_routes(app, context)
     _register_chat_routes(app)
     _register_workspace_routes(app)
-    _register_account_routes(app)
     _register_admin_routes(app)
-
-    return app
-
-
-def create_product_auth_proxy_app() -> FastAPI:
-    app = FastAPI(title="Hermes Core Product Auth Proxy", version="0.1.0")
-
-    @app.get("/healthz")
-    def healthz() -> dict[str, str]:
-        return {"status": "ok"}
-
-    @app.api_route(
-        "/{pocket_path:path}",
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
-    )
-    async def pocket_id_proxy_root(request: Request, pocket_path: str) -> Response:
-        return await _proxy_pocket_id_request(request, pocket_path)
-
     return app

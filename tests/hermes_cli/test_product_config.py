@@ -1,95 +1,39 @@
-from pathlib import Path
-
-import yaml
-
-from hermes_cli.config import load_config, save_config
 from hermes_cli.product_config import (
-    DEFAULT_PRODUCT_CONFIG,
     ensure_product_home,
-    get_product_config_path,
     get_product_storage_root,
     get_product_users_root,
     initialize_product_config_file,
     load_product_config,
-    resolve_runtime_defaults,
-    save_product_config,
 )
 
 
-def test_ensure_product_home_creates_expected_directories(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-
-    ensure_product_home()
-
-    assert get_product_storage_root().is_dir()
-    assert get_product_users_root().is_dir()
-    assert (get_product_storage_root() / "logs").is_dir()
-    assert (get_product_storage_root() / "services").is_dir()
-
-
-def test_load_product_config_returns_defaults_when_missing(tmp_path, monkeypatch):
+def test_load_product_config_defaults_to_tsidp_tailnet_only(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     config = load_product_config()
 
-    assert config["auth"]["provider"] == "pocket-id"
-    assert config["auth"]["mode"] == "passkey"
-    assert config["network"]["tailscale"]["enabled"] is False
-    assert config["network"]["tailscale"]["app_https_port"] == 443
-    assert config["network"]["tailscale"]["auth_https_port"] == 4444
-    assert config["storage"]["user_workspace_limit_mb"] == 2048
+    assert config["auth"]["provider"] == "tsidp"
+    assert config["auth"]["mode"] == "oidc"
+    assert config["network"]["tailscale"]["enabled"] is True
+    assert config["network"]["tailscale"]["idp_hostname"] == "idp"
+    assert config["services"]["tsidp"]["container_name"] == "hermes-tsidp"
 
 
-def test_save_product_config_roundtrip_and_merge(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-
-    config = load_product_config()
-    config["product"]["brand"]["name"] = "Erni Agent"
-    save_product_config(config)
-
-    reloaded = load_product_config()
-    assert reloaded["product"]["brand"]["name"] == "Erni Agent"
-    assert reloaded["auth"]["provider"] == "pocket-id"
-
-    saved = yaml.safe_load(get_product_config_path().read_text(encoding="utf-8"))
-    assert saved["product"]["brand"]["name"] == "Erni Agent"
-
-
-def test_initialize_product_config_file_creates_product_yaml(tmp_path, monkeypatch):
+def test_initialize_product_config_file_creates_tailnet_bootstrap_defaults(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     config = initialize_product_config_file()
 
-    assert get_product_config_path().exists()
-    assert config["bootstrap"]["first_admin_username"] == "admin"
+    assert config["bootstrap"]["first_admin_tailscale_login"] == ""
+    assert get_product_storage_root().exists()
+    assert get_product_users_root().exists()
 
 
-def test_resolve_runtime_defaults_reads_product_config(tmp_path, monkeypatch):
+def test_ensure_product_home_creates_services_and_bootstrap_dirs(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
-    hermes_config = load_config()
-    hermes_config["model"] = {
-        "provider": "custom",
-        "base_url": "http://127.0.0.1:8080/v1",
-        "default": "custom-model",
-    }
-    hermes_config["platform_toolsets"] = {"cli": ["memory", "session_search"]}
-    save_config(hermes_config)
+    ensure_product_home()
 
-    defaults = resolve_runtime_defaults()
-
-    assert defaults["runtime_mode"] == "product"
-    assert defaults["runtime_toolsets"] == "memory,session_search"
-    assert defaults["inference_model"] == "custom-model"
-
-
-def test_get_product_storage_root_respects_saved_config_override(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-
-    config = load_product_config()
-    config["storage"]["root"] = "custom-product-root"
-    config["storage"]["users_root"] = "custom-product-users"
-    save_product_config(config)
-
-    assert get_product_storage_root() == tmp_path / "custom-product-root"
-    assert get_product_users_root() == tmp_path / "custom-product-users"
+    product_root = get_product_storage_root()
+    assert (product_root / "services").is_dir()
+    assert (product_root / "bootstrap").is_dir()

@@ -1,29 +1,22 @@
 from __future__ import annotations
 
+import json
 import logging
+import secrets
 import time
-import re
-import socket
-from datetime import datetime
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote
 
-import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
-from hermes_cli.product_stack import _api_headers, _ensure_signup_mode_with_token, resolve_product_urls
-from hermes_cli.product_config import load_product_config
+from hermes_cli.config import _secure_dir, _secure_file
+from hermes_cli.product_config import get_product_storage_root, load_product_config
+from hermes_cli.product_stack import resolve_product_urls
+from utils import atomic_json_write
 
 logger = logging.getLogger(__name__)
-_READ_TIMEOUT_SECONDS = 5.0
-_WRITE_TIMEOUT_SECONDS = 10.0
-_CLIENT_CACHE: dict[tuple[str, str, float], httpx.Client] = {}
-
-_PLACEHOLDER_EMAIL_DOMAIN = "users.local.invalid"
-_DEFAULT_SIGNUP_TOKEN_TTL = 7 * 24 * 60 * 60
-_DEFAULT_SIGNUP_TOKEN_USAGE_LIMIT = 1
-_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._@-]*[A-Za-z0-9])?$")
-_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_DEFAULT_INVITE_TOKEN_TTL = 7 * 24 * 60 * 60
 
 
 class ProductUser(BaseModel):
@@ -34,13 +27,17 @@ class ProductUser(BaseModel):
     email_is_placeholder: bool = False
     is_admin: bool = False
     disabled: bool = False
+    tailscale_subject: str
+    tailscale_login: str
+    created_at: int = Field(default_factory=lambda: int(time.time()))
 
 
 class ProductSignupToken(BaseModel):
     token: str
     signup_url: str
     ttl_seconds: int
-    usage_limit: int
+    usage_limit: int = 1
+    tailscale_login: str
 
 
 class ProductCreatedUser(BaseModel):
@@ -48,350 +45,186 @@ class ProductCreatedUser(BaseModel):
     signup: ProductSignupToken
 
 
-class PocketIdUserRecord(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    id: str
-    username: str
-    email: str | None = None
-    email_verified: bool = Field(default=False, alias="emailVerified")
-    first_name: str = Field(default="", alias="firstName")
-    last_name: str = Field(default="", alias="lastName")
-    display_name: str = Field(default="", alias="displayName")
-    is_admin: bool = Field(default=False, alias="isAdmin")
-    disabled: bool = False
-    locale: str | None = None
-    custom_claims: list[Any] = Field(default_factory=list, alias="customClaims")
-    user_groups: list[Any] = Field(default_factory=list, alias="userGroups")
-    ldap_id: str | None = Field(default=None, alias="ldapId")
+class ProductInviteRecord(BaseModel):
+    invite_id: str
+    token: str
+    signup_url: str
+    tailscale_login: str
+    display_name: str
+    created_at: int
+    expires_at: int
+    status: str = "pending"
+    claimed_by_user_id: str | None = None
 
 
-def _client(config: dict[str, Any] | None = None) -> httpx.Client:
-    product_config = config or load_product_config()
-    base_url = resolve_product_urls(product_config)["issuer_url"]
-    headers = _api_headers(product_config)
-    timeout = _WRITE_TIMEOUT_SECONDS
-    cache_key = (base_url, headers.get("X-API-Key", ""), timeout)
-    client = _CLIENT_CACHE.get(cache_key)
-    if client is None:
-        client = httpx.Client(
-            base_url=base_url,
-            headers=headers,
-            timeout=timeout,
-            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
-        )
-        _CLIENT_CACHE[cache_key] = client
-    return client
+def _users_state_path() -> Path:
+    return get_product_storage_root() / "bootstrap" / "users.json"
 
 
-def _request_json(
-    client: httpx.Client,
-    method: str,
-    path: str,
-    *,
-    expected_status: int | tuple[int, ...],
-    **kwargs: Any,
-) -> dict[str, Any]:
-    started = time.perf_counter()
-    response = client.request(method, path, **kwargs)
-    expected = (
-        expected_status
-        if isinstance(expected_status, tuple)
-        else (expected_status,)
-    )
-    if response.status_code not in expected:
-        raise RuntimeError(f"{method} {path} failed with {response.status_code}: {response.text}")
-    logger.info(
-        "product_users request %s %s completed in %.0fms",
-        method,
-        path,
-        (time.perf_counter() - started) * 1000,
-    )
-    return response.json() if response.content else {}
+def _invites_state_path() -> Path:
+    return get_product_storage_root() / "bootstrap" / "signup_invites.json"
 
 
-def _is_internal_user(record: PocketIdUserRecord) -> bool:
-    return record.username.startswith("static-api-user-")
+def _read_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, list) else []
 
 
-def _placeholder_email(username: str) -> str:
-    return f"{username}@{_PLACEHOLDER_EMAIL_DOMAIN}"
+def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _secure_dir(path.parent)
+    atomic_json_write(path, rows)
+    _secure_file(path)
 
 
-def _normalize_email(email: str | None) -> tuple[str | None, bool]:
-    normalized = (email or "").strip()
-    if not normalized:
-        return None, False
-    if normalized.endswith(f"@{_PLACEHOLDER_EMAIL_DOMAIN}"):
-        return None, True
-    return normalized, False
+def _normalize_tailscale_login(value: str | None) -> str:
+    return str(value or "").strip().lower()
 
 
-def _normalize_user(record: PocketIdUserRecord) -> ProductUser:
-    email, email_is_placeholder = _normalize_email(record.email)
-    display_name = record.display_name.strip() or record.username
-    return ProductUser(
-        id=record.id,
-        username=record.username,
-        display_name=display_name,
-        email=email,
-        email_is_placeholder=email_is_placeholder,
-        is_admin=record.is_admin,
-        disabled=record.disabled,
-    )
+def _normalize_display_name(display_name: str | None, tailscale_login: str) -> str:
+    return str(display_name or "").strip() or tailscale_login.split("@", 1)[0] or "User"
 
 
-def _split_display_name(display_name: str, username: str) -> tuple[str, str]:
-    normalized = display_name.strip() or username
-    parts = normalized.split(maxsplit=1)
-    first_name = parts[0]
-    last_name = parts[1] if len(parts) > 1 else "user"
-    return first_name[:50], last_name[:50]
+def _username_from_tailscale_login(tailscale_login: str) -> str:
+    normalized = _normalize_tailscale_login(tailscale_login)
+    base = normalized.split("@", 1)[0]
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in base).strip("._-")
+    return cleaned or f"user-{secrets.token_hex(4)}"
 
 
-def _validate_username(username: str) -> str:
-    normalized = username.strip()
-    if not normalized:
-        raise ValueError("Username must not be empty")
-    if not _USERNAME_PATTERN.fullmatch(normalized):
-        raise ValueError(
-            "Username may use letters, numbers, underscores, dots, hyphens, and @, and must start and end with a letter or number"
-        )
-    return normalized
+def _load_users() -> list[ProductUser]:
+    users: list[ProductUser] = []
+    for row in _read_rows(_users_state_path()):
+        try:
+            users.append(ProductUser.model_validate(row))
+        except Exception:
+            continue
+    return users
 
 
-def _validate_optional_email(email: str | None) -> str | None:
-    normalized = (email or "").strip()
-    if not normalized:
-        return None
-    if not _EMAIL_PATTERN.fullmatch(normalized):
-        raise ValueError("Email must be a valid email address")
-    return normalized
+def _save_users(users: list[ProductUser]) -> None:
+    _write_rows(_users_state_path(), [user.model_dump(mode="json") for user in users])
+
+
+def _load_invites() -> list[ProductInviteRecord]:
+    invites: list[ProductInviteRecord] = []
+    for row in _read_rows(_invites_state_path()):
+        try:
+            invites.append(ProductInviteRecord.model_validate(row))
+        except Exception:
+            continue
+    return invites
+
+
+def _save_invites(invites: list[ProductInviteRecord]) -> None:
+    _write_rows(_invites_state_path(), [invite.model_dump(mode="json") for invite in invites])
+
+
+def _current_urls(config: dict[str, Any] | None = None) -> dict[str, str]:
+    return resolve_product_urls(config or load_product_config())
+
+
+def _invite_signup_url(token: str, config: dict[str, Any] | None = None) -> str:
+    app_base_url = str(_current_urls(config).get("app_base_url", "")).rstrip("/")
+    return f"{app_base_url}/invite/{quote(token)}"
 
 
 def list_product_users(config: dict[str, Any] | None = None) -> list[ProductUser]:
-    client = _client(config)
-    previous_timeout = getattr(client, "timeout", None)
-    if hasattr(client, "timeout"):
-        client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
-    try:
-        payload = _request_json(client, "GET", "/api/users", expected_status=200)
-    finally:
-        if hasattr(client, "timeout"):
-            client.timeout = previous_timeout
-    records = [
-        PocketIdUserRecord.model_validate(item)
-        for item in payload.get("data", [])
-    ]
-    visible = [_normalize_user(item) for item in records if not _is_internal_user(item)]
-    return sorted(visible, key=lambda item: (item.disabled, item.username.lower()))
+    users = _load_users()
+    return sorted(users, key=lambda item: (item.disabled, item.username.lower()))
 
 
 def get_product_user_by_id(user_id: str, config: dict[str, Any] | None = None) -> ProductUser | None:
-    client = _client(config)
-    previous_timeout = getattr(client, "timeout", None)
-    if hasattr(client, "timeout"):
-        client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
-    started = time.perf_counter()
-    try:
-        response = client.get(f"/api/users/{user_id}")
-    finally:
-        if hasattr(client, "timeout"):
-            client.timeout = previous_timeout
-    logger.info(
-        "product_users request GET /api/users/%s completed in %.0fms",
-        user_id,
-        (time.perf_counter() - started) * 1000,
-    )
-    if response.status_code == 404:
+    target = str(user_id or "").strip()
+    if not target:
         return None
-    if response.status_code != 200:
-        raise RuntimeError(f"GET /api/users/{user_id} failed with {response.status_code}: {response.text}")
-    record = PocketIdUserRecord.model_validate(response.json())
-    if _is_internal_user(record):
-        return None
-    return _normalize_user(record)
+    for user in _load_users():
+        if user.id == target:
+            return user
+    return None
 
 
-def create_product_user(
-    username: str,
-    display_name: str,
+def get_product_user_by_tailscale_subject(subject: str) -> ProductUser | None:
+    target = str(subject or "").strip()
+    if not target:
+        return None
+    for user in _load_users():
+        if user.tailscale_subject == target:
+            return user
+    return None
+
+
+def get_product_user_by_tailscale_login(tailscale_login: str) -> ProductUser | None:
+    target = _normalize_tailscale_login(tailscale_login)
+    if not target:
+        return None
+    for user in _load_users():
+        if _normalize_tailscale_login(user.tailscale_login) == target:
+            return user
+    return None
+
+
+def _save_user(user: ProductUser) -> ProductUser:
+    users = [item for item in _load_users() if item.id != user.id]
+    users.append(user)
+    _save_users(users)
+    return user
+
+
+def bootstrap_first_admin_user(
     *,
-    email: str | None = None,
-    config: dict[str, Any] | None = None,
+    tailscale_subject: str,
+    tailscale_login: str,
+    display_name: str | None = None,
 ) -> ProductUser:
-    normalized_username = _validate_username(username)
-    normalized_display_name = display_name.strip() or normalized_username
-    first_name, last_name = _split_display_name(normalized_display_name, normalized_username)
-    normalized_email = _validate_optional_email(email) or _placeholder_email(normalized_username)
-    payload = {
-        "username": normalized_username,
-        "firstName": first_name,
-        "lastName": last_name,
-        "displayName": normalized_display_name,
-        "email": normalized_email,
-        "emailsVerified": False,
-        "isAdmin": False,
-        "disabled": False,
-    }
-    client = _client(config)
-    response = _request_json(client, "POST", "/api/users", expected_status=(200, 201), json=payload)
-    return _normalize_user(PocketIdUserRecord.model_validate(response))
+    normalized_login = _normalize_tailscale_login(tailscale_login)
+    if not normalized_login:
+        raise ValueError("First admin Tailscale login must not be empty")
+    existing = list_product_users()
+    if any(user.is_admin and not user.disabled for user in existing):
+        raise ValueError("An active admin already exists")
+    user = ProductUser(
+        id=f"user-{secrets.token_hex(8)}",
+        username=_username_from_tailscale_login(normalized_login),
+        display_name=_normalize_display_name(display_name, normalized_login),
+        email=normalized_login if "@" in normalized_login else None,
+        is_admin=True,
+        disabled=False,
+        tailscale_subject=str(tailscale_subject or "").strip(),
+        tailscale_login=normalized_login,
+    )
+    return _save_user(user)
 
 
 def deactivate_product_user(user_id: str, config: dict[str, Any] | None = None) -> ProductUser:
-    client = _client(config)
-    previous_timeout = getattr(client, "timeout", None)
-    if hasattr(client, "timeout"):
-        client.timeout = httpx.Timeout(_READ_TIMEOUT_SECONDS)
-    started = time.perf_counter()
-    try:
-        get_response = client.get(f"/api/users/{user_id}")
-    finally:
-        if hasattr(client, "timeout"):
-            client.timeout = previous_timeout
-    logger.info(
-        "product_users request GET /api/users/%s completed in %.0fms",
-        user_id,
-        (time.perf_counter() - started) * 1000,
-    )
-    if get_response.status_code == 404:
+    user = get_product_user_by_id(user_id, config=config)
+    if user is None:
         raise ValueError("User not found")
-    if get_response.status_code != 200:
-        raise RuntimeError(
-            f"GET /api/users/{user_id} failed with {get_response.status_code}: {get_response.text}"
-        )
-    record = PocketIdUserRecord.model_validate(get_response.json())
-    if _is_internal_user(record):
-        raise ValueError("Internal service users cannot be managed from the product UI")
-    payload = {
-        "username": record.username,
-        "email": record.email,
-        "firstName": record.first_name,
-        "lastName": record.last_name,
-        "displayName": record.display_name,
-        "isAdmin": record.is_admin,
-        "disabled": True,
-        "locale": record.locale,
-    }
-    response = _request_json(client, "PUT", f"/api/users/{user_id}", expected_status=200, json=payload)
-    return _normalize_user(PocketIdUserRecord.model_validate(response))
+    updated = user.model_copy(update={"disabled": True})
+    return _save_user(updated)
 
 
-def create_product_signup_token(config: dict[str, Any] | None = None) -> ProductSignupToken:
-    product_config = config or load_product_config()
-    try:
-        _ensure_signup_mode_with_token(product_config)
-    except Exception as exc:  # pragma: no cover - defensive behavior for external API variance
-        logger.warning("Failed to enforce Pocket ID allowUserSignups=withToken before token creation: %s", exc)
-    payload = {
-        "ttl": _DEFAULT_SIGNUP_TOKEN_TTL,
-        "usageLimit": _DEFAULT_SIGNUP_TOKEN_USAGE_LIMIT,
-        "userGroupIds": [],
-    }
-    client = _client(product_config)
-    response = _request_json(client, "POST", "/api/signup-tokens", expected_status=(200, 201), json=payload)
-    token = str(response.get("token", "")).strip()
-    if not token:
-        raise RuntimeError("Pocket ID did not return a signup token")
-    urls = resolve_product_urls(product_config)
-    public_signup_base = _signup_base_url(product_config, urls)
-    if not public_signup_base:
-        raise RuntimeError("Product app URL is not configured")
-    return ProductSignupToken(
-        token=token,
-        signup_url=f"{public_signup_base.rstrip('/')}/st/{token}",
-        ttl_seconds=_DEFAULT_SIGNUP_TOKEN_TTL,
-        usage_limit=_DEFAULT_SIGNUP_TOKEN_USAGE_LIMIT,
+def _active_invites() -> list[ProductInviteRecord]:
+    now = int(time.time())
+    changed = False
+    invites = _load_invites()
+    for invite in invites:
+        if invite.status == "pending" and invite.expires_at <= now:
+            invite.status = "expired"
+            changed = True
+    if changed:
+        _save_invites(invites)
+    return invites
+
+
+def list_pending_product_signup_invites(config: dict[str, Any] | None = None) -> list[ProductInviteRecord]:
+    return sorted(
+        [item for item in _active_invites() if item.status == "pending"],
+        key=lambda item: item.created_at,
+        reverse=True,
     )
-
-
-def _signup_base_url(product_config: dict[str, Any], urls: dict[str, Any]) -> str:
-    app_base_url = str(urls.get("app_base_url", "")).strip()
-    if not app_base_url:
-        return ""
-    parsed = urlparse(app_base_url)
-    app_host = (parsed.hostname or "").strip().lower()
-    if app_host and app_host != "localhost":
-        return app_base_url
-    public_host = str(urls.get("public_host", "")).strip().lower()
-    if public_host and public_host != "localhost":
-        return app_base_url
-    if not parsed.scheme:
-        return app_base_url
-    lan_host = str(product_config.get("network", {}).get("lan_signup_host", "")).strip().lower()
-    if not lan_host:
-        lan_host = socket.gethostname().strip().lower()
-        if lan_host and "." not in lan_host:
-            lan_host = f"{lan_host}.local"
-    if not lan_host:
-        return app_base_url
-    default_port = 80 if parsed.scheme == "http" else 443 if parsed.scheme == "https" else None
-    port_suffix = ""
-    if parsed.port and parsed.port != default_port:
-        port_suffix = f":{parsed.port}"
-    return f"{parsed.scheme}://{lan_host}{port_suffix}"
-
-
-def list_active_product_signup_tokens(config: dict[str, Any] | None = None) -> set[str]:
-    client = _client(config)
-    started = time.perf_counter()
-    response = client.get("/api/signup-tokens")
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"GET /api/signup-tokens failed with {response.status_code}: {response.text}"
-        )
-    logger.info(
-        "product_users request GET /api/signup-tokens completed in %.0fms",
-        (time.perf_counter() - started) * 1000,
-    )
-    payload = response.json() if response.content else {}
-    rows: list[Any]
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, list):
-            rows = data
-        elif isinstance(payload.get("tokens"), list):
-            rows = payload.get("tokens", [])
-        else:
-            rows = []
-    elif isinstance(payload, list):
-        rows = payload
-    else:
-        rows = []
-    tokens: set[str] = set()
-    now_epoch = int(time.time())
-    for item in rows:
-        if not isinstance(item, dict):
-            continue
-        token = str(item.get("token", "")).strip()
-        if not token:
-            continue
-        try:
-            usage_count = int(item.get("usageCount", 0))
-        except (TypeError, ValueError):
-            usage_count = 0
-        try:
-            usage_limit = int(item.get("usageLimit", 1))
-        except (TypeError, ValueError):
-            usage_limit = 1
-        expires_at_raw = item.get("expiresAt")
-        expires_at_epoch: int | None = None
-        if isinstance(expires_at_raw, (int, float)):
-            expires_at_epoch = int(expires_at_raw)
-        elif isinstance(expires_at_raw, str):
-            candidate = expires_at_raw.strip()
-            if candidate:
-                try:
-                    expires_at_epoch = int(datetime.fromisoformat(candidate.replace("Z", "+00:00")).timestamp())
-                except ValueError:
-                    expires_at_epoch = None
-        if usage_limit > 0 and usage_count >= usage_limit:
-            continue
-        if expires_at_epoch is not None and expires_at_epoch <= now_epoch:
-            continue
-        tokens.add(token)
-    return tokens
 
 
 def create_product_user_with_signup(
@@ -401,9 +234,75 @@ def create_product_user_with_signup(
     email: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> ProductCreatedUser:
-    if username is not None:
-        _validate_username(username)
-    if email is not None:
-        _validate_optional_email(email)
-    signup = ProductSignupToken.model_validate(create_product_signup_token(config=config))
-    return ProductCreatedUser(user=None, signup=signup)
+    tailscale_login = _normalize_tailscale_login(email or username)
+    if not tailscale_login:
+        raise ValueError("A Tailscale login or email is required for the invite")
+    if get_product_user_by_tailscale_login(tailscale_login):
+        raise ValueError("This Tailscale account already has a product user")
+    if any(inv.status == "pending" and _normalize_tailscale_login(inv.tailscale_login) == tailscale_login for inv in _active_invites()):
+        raise ValueError("This Tailscale account already has a pending invite")
+    token = secrets.token_urlsafe(24)
+    created_at = int(time.time())
+    invite = ProductInviteRecord(
+        invite_id=f"invite-{secrets.token_hex(8)}",
+        token=token,
+        signup_url=_invite_signup_url(token, config=config),
+        tailscale_login=tailscale_login,
+        display_name=_normalize_display_name(display_name, tailscale_login),
+        created_at=created_at,
+        expires_at=created_at + _DEFAULT_INVITE_TOKEN_TTL,
+    )
+    invites = _load_invites()
+    invites.append(invite)
+    _save_invites(invites)
+    return ProductCreatedUser(
+        user=None,
+        signup=ProductSignupToken(
+            token=token,
+            signup_url=invite.signup_url,
+            ttl_seconds=_DEFAULT_INVITE_TOKEN_TTL,
+            tailscale_login=tailscale_login,
+        ),
+    )
+
+
+def claim_product_user_from_invite(
+    *,
+    token: str,
+    tailscale_subject: str,
+    tailscale_login: str,
+    display_name: str | None = None,
+) -> ProductUser:
+    candidate_token = str(token or "").strip()
+    normalized_login = _normalize_tailscale_login(tailscale_login)
+    if not candidate_token:
+        raise ValueError("Invite token is required")
+    if not normalized_login:
+        raise ValueError("Tailscale login is required")
+    if get_product_user_by_tailscale_subject(tailscale_subject) or get_product_user_by_tailscale_login(normalized_login):
+        raise ValueError("This Tailscale account already has a product user")
+    invites = _active_invites()
+    match: ProductInviteRecord | None = None
+    for invite in invites:
+        if invite.token == candidate_token:
+            match = invite
+            break
+    if match is None or match.status != "pending":
+        raise ValueError("Invite is invalid or expired")
+    if _normalize_tailscale_login(match.tailscale_login) != normalized_login:
+        raise ValueError("This invite is not assigned to the current Tailscale account")
+    user = ProductUser(
+        id=f"user-{secrets.token_hex(8)}",
+        username=_username_from_tailscale_login(normalized_login),
+        display_name=_normalize_display_name(display_name or match.display_name, normalized_login),
+        email=normalized_login if "@" in normalized_login else None,
+        is_admin=False,
+        disabled=False,
+        tailscale_subject=str(tailscale_subject or "").strip(),
+        tailscale_login=normalized_login,
+    )
+    _save_user(user)
+    match.status = "claimed"
+    match.claimed_by_user_id = user.id
+    _save_invites(invites)
+    return user

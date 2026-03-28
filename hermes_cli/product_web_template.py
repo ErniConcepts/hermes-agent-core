@@ -25,17 +25,17 @@ PAGE_TEMPLATE = """<!doctype html>
 <div class="popup-inner hero-inner">
 <p class="eyebrow">__PRODUCT_NAME__</p>
 <h1>Loading your workspace.</h1>
-<p class="lead">Checking your current session before the app decides whether to show login or your signed-in view.</p>
+<p class="lead">Checking your current session and Tailnet access.</p>
 </div>
 </section>
 
 <section class="popup hero-card" id="authCard" hidden>
 <div class="popup-inner hero-inner">
 <p class="eyebrow">__PRODUCT_NAME__</p>
-<h1 id="heroTitle">Private local agents for your team.</h1>
-<p class="lead" id="heroLead">Sign in to open your personal workspace and chat with your agent.</p>
+<h1 id="heroTitle">Sign in with Tailscale.</h1>
+<p class="lead" id="heroLead">This app is available only through your tailnet and authenticates with tsidp.</p>
 <div class="actions">
-<a class="button" id="loginButton" href="/api/auth/login">Sign in with Pocket ID</a>
+<a class="button" id="loginButton" href="/api/auth/login">Sign in with Tailscale</a>
 </div>
 <div id="authMessage" class="message"></div>
 </div>
@@ -51,9 +51,7 @@ PAGE_TEMPLATE = """<!doctype html>
 </div>
 <div id="chatMessage" class="message"></div>
 <div class="shell">
-<div class="chat-log" id="chatLog">
-<div class="empty-state">No messages yet.</div>
-</div>
+<div class="chat-log" id="chatLog"><div class="empty-state">No messages yet.</div></div>
 <form class="chat-form" id="chatForm">
 <label class="field full">
 <span>Message</span>
@@ -105,14 +103,9 @@ PAGE_TEMPLATE = """<!doctype html>
 </form>
 <form id="workspaceUploadForm" hidden></form>
 <div class="workspace-dropzone" id="workspaceDropzone">
-<div class="workspace-drop-copy">
-<strong>Drop files here</strong>
-<span>or use the upload button</span>
+<div class="workspace-drop-copy"><strong>Drop files here</strong><span>or use the upload button</span></div>
 </div>
-</div>
-<div class="workspace-list" id="workspaceTable">
-<div class="workspace-empty muted-cell">No files yet.</div>
-</div>
+<div class="workspace-list" id="workspaceTable"><div class="workspace-empty muted-cell">No files yet.</div></div>
 </section>
 </div>
 </div>
@@ -123,24 +116,19 @@ PAGE_TEMPLATE = """<!doctype html>
 <div class="section-head">
 <div>
 <p class="eyebrow">Account</p>
-<h2>Network Access</h2>
+<h2>Tailscale Access</h2>
 </div>
 </div>
-<p class="lead small" id="accountNetworkLead">Link your Tailnet identity here after Tailnet access is enabled.</p>
-<div id="accountNetworkMessage" class="message"></div>
+<p class="lead small">Your product account is authenticated directly by your Tailscale identity on this branch.</p>
+<div id="accountMessage" class="message"></div>
 <section class="shell admin-token-shell">
-<div class="token-row" id="accountTailnetRow" hidden>
-<code class="token-link" id="accountTailnetUrl"></code>
-<button class="button" id="accountTailnetBridgeButton" type="button">Open Tailnet URL</button>
-</div>
-<div class="token-row" id="accountDetectedTailnetRow" hidden>
-<span class="table-badge">Detected Tailscale Identity:</span>
-<code class="token-link" id="accountDetectedTailnetLogin"></code>
-</div>
-<div class="token-row" id="accountBoundTailnetRow" hidden>
+<div class="token-row">
 <span class="table-badge is-success">Your current Tailscale Identity:</span>
-<code class="token-link" id="accountBoundTailnetLogin"></code>
-<button class="button secondary-button" id="accountTailnetUnbindButton" type="button" hidden>Revoke identity</button>
+<code class="token-link" id="accountTailnetLogin"></code>
+</div>
+<div class="token-row">
+<span class="table-badge">Tailnet app URL</span>
+<code class="token-link" id="accountTailnetUrl"></code>
 </div>
 </section>
 </div>
@@ -154,7 +142,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <h2>User Management</h2>
 </div>
 </div>
-<p class="lead small">Issue signup links, manage access, and expose Tailnet without reopening setup in the browser.</p>
+<p class="lead small">Invite users by their Tailscale login or email. Only invited Tailscale identities can claim an account.</p>
 <section class="shell admin-token-shell" id="adminNetworkCard" hidden>
 <div class="section-head compact-head">
 <div>
@@ -162,7 +150,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <h2>Tailnet Access</h2>
 </div>
 </div>
-<p class="lead small" id="adminNetworkLead">Enable Tailnet exposure here, then share the Tailnet URL with users who should link their Tailnet identity.</p>
+<p class="lead small" id="adminNetworkLead">Tailnet exposure controls whether the app is published through Tailscale Serve.</p>
 <div id="adminNetworkMessage" class="message"></div>
 <div class="token-row" id="adminNetworkTailnetRow" hidden>
 <code class="token-link" id="adminNetworkTailnetUrl"></code>
@@ -172,20 +160,27 @@ PAGE_TEMPLATE = """<!doctype html>
 </section>
 <div class="admin-layout">
 <form class="admin-form shell" id="adminCreateUserForm">
-<p class="lead small">Each generated link can be used once and expires after seven days.</p>
+<label class="field full">
+<span>Tailscale login or email</span>
+<input id="adminTailscaleLoginInput" type="text" placeholder="alice@example.com" required>
+</label>
+<label class="field full">
+<span>Display name</span>
+<input id="adminDisplayNameInput" type="text" placeholder="Alice Example">
+</label>
 <div class="actions">
-<button class="button" id="adminCreateUserButton" type="submit">Create signup link</button>
+<button class="button" id="adminCreateUserButton" type="submit">Create invite link</button>
 </div>
 <div id="adminMessage" class="message"></div>
 </form>
 <section class="shell admin-token-shell" id="adminSignupTokenCard" hidden>
 <div class="section-head compact-head">
 <div>
-<p class="eyebrow">Signup Link</p>
-<h2>One-time link</h2>
+<p class="eyebrow">Invite Link</p>
+<h2>One-time claim URL</h2>
 </div>
 </div>
-<p class="lead small">The link is valid for one signup and currently uses a seven-day lifetime.</p>
+<p class="lead small">The link is valid for one claim and currently uses a seven-day lifetime.</p>
 <div class="token-row">
 <code class="token-link" id="adminSignupTokenUrl"></code>
 <button class="button secondary-button" id="adminCopySignupLinkButton" type="button">Copy</button>
@@ -195,11 +190,9 @@ PAGE_TEMPLATE = """<!doctype html>
 <div class="table-shell">
 <table>
 <thead>
-<tr><th>User</th><th>Email</th><th>Status</th><th>Action</th></tr>
+<tr><th>User</th><th>Tailscale login</th><th>Status</th><th>Action</th></tr>
 </thead>
-<tbody id="adminUsersTable">
-<tr><td colspan="4" class="muted-cell">No users loaded yet.</td></tr>
-</tbody>
+<tbody id="adminUsersTable"><tr><td colspan="4" class="muted-cell">No users loaded yet.</td></tr></tbody>
 </table>
 </div>
 </div>

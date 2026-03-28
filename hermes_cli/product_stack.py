@@ -14,7 +14,7 @@ from typing import Any, Dict
 
 import httpx
 
-from hermes_cli.config import _secure_dir, _secure_file, get_env_value, save_env_value_secure
+from hermes_cli.config import _secure_dir, _secure_file, get_env_value, save_env_value, save_env_value_secure
 from hermes_cli.product_oidc import (
     ProductOIDCClientSettings,
     discover_product_oidc_provider_metadata,
@@ -30,6 +30,7 @@ from utils import atomic_json_write, atomic_yaml_write
 
 
 POCKET_ID_IMAGE = "ghcr.io/pocket-id/pocket-id:v2"
+TSIDP_IMAGE = "ghcr.io/tailscale/tsidp:latest"
 _READY_TIMEOUT_SECONDS = 45.0
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,14 @@ def get_pocket_id_service_root() -> Path:
 
 def get_pocket_id_data_root() -> Path:
     return get_pocket_id_service_root() / "data"
+
+
+def get_tsidp_service_root() -> Path:
+    return get_product_services_root() / "tsidp"
+
+
+def get_tsidp_data_root() -> Path:
+    return get_tsidp_service_root() / "data"
 
 
 def get_product_bootstrap_root() -> Path:
@@ -68,6 +77,14 @@ def get_pocket_id_compose_path() -> Path:
 
 def get_pocket_id_env_path() -> Path:
     return get_pocket_id_service_root() / ".env"
+
+
+def get_tsidp_compose_path() -> Path:
+    return get_tsidp_service_root() / "compose.yaml"
+
+
+def get_tsidp_env_path() -> Path:
+    return get_tsidp_service_root() / ".env"
 
 
 def _secure_tree(*paths: Path) -> None:
@@ -153,6 +170,21 @@ def _tailscale_https_port(config: Dict[str, Any], key: str, default: int) -> int
     return port
 
 
+def _tsidp_hostname(config: Dict[str, Any]) -> str:
+    value = str(_tailscale_config(config).get("idp_hostname", "idp")).strip().lower()
+    if not value:
+        raise ValueError("product network.tailscale.idp_hostname must not be empty")
+    return value
+
+
+def _tsidp_host(config: Dict[str, Any]) -> str:
+    return f"{_tsidp_hostname(config)}.{_required_tailnet_value(config, 'tailnet_name')}.ts.net"
+
+
+def _tsidp_issuer_url(config: Dict[str, Any]) -> str:
+    return f"https://{_tsidp_host(config)}"
+
+
 def _format_https_url(host: str, port: int) -> str:
     if port == 443:
         return f"https://{host}"
@@ -182,7 +214,7 @@ def _tailnet_activation_status(config: Dict[str, Any] | None = None) -> str:
     status = str(state.get("status", "")).strip().lower()
     if status in {"inactive", "pending", "active"}:
         return status
-    return "inactive"
+    return "active"
 
 
 def _tailnet_activation_complete(config: Dict[str, Any] | None = None) -> bool:
@@ -202,12 +234,13 @@ def enable_tailnet_activation() -> Dict[str, Any]:
     product_config = load_product_config()
     if not _tailscale_enabled(product_config):
         raise RuntimeError("Tailscale is not configured for this product install")
+    ensure_product_tsidp_started(product_config)
     state = {
         "status": "active",
         "activated_at": int(time.time()),
     }
     _save_tailnet_activation_state(state)
-    ensure_product_tailnet_started(product_config, include_app=True, include_auth=False)
+    ensure_product_tailnet_started(product_config, include_app=True)
     return state
 
 
@@ -322,45 +355,27 @@ def consume_tailnet_bridge_token(token: str, *, target_origin: str) -> Dict[str,
 
 def resolve_product_urls(config: Dict[str, Any] | None = None) -> Dict[str, str]:
     product_config = config or load_product_config()
+    if not _tailscale_enabled(product_config):
+        raise ValueError("Tailscale must be enabled for this product install")
     network = product_config.get("network", {})
     app_port = int(network.get("app_port", 8086))
-    pocket_id_port = int(network.get("pocket_id_port", 1411))
-    public_host = _public_host(product_config)
-    _validate_public_host(public_host)
-    scheme = _url_scheme(product_config)
-    local_app_base_url = f"{scheme}://{public_host}:{app_port}"
-    local_issuer_url = f"{scheme}://{public_host}:{pocket_id_port}"
-
-    if _tailscale_enabled(product_config):
-        tailnet_host = _tailscale_host(product_config)
-        app_https_port = _tailscale_https_port(product_config, "app_https_port", 443)
-        auth_https_port = _tailscale_https_port(product_config, "auth_https_port", 4444)
-        tailnet_app_base_url = _format_https_url(tailnet_host, app_https_port)
-        tailnet_issuer_url = _format_https_url(tailnet_host, auth_https_port)
-        activation_status = _tailnet_activation_status(product_config)
-        return {
-            "public_host": public_host,
-            "url_scheme": scheme,
-            "app_base_url": local_app_base_url,
-            "issuer_url": local_issuer_url,
-            "oidc_callback_url": f"{local_app_base_url}/api/auth/oidc/callback",
-            "pocket_id_setup_url": f"{local_issuer_url}/setup",
-            "local_app_base_url": local_app_base_url,
-            "local_issuer_url": local_issuer_url,
-            "tailnet_host": tailnet_host,
-            "tailnet_app_base_url": tailnet_app_base_url,
-            "tailnet_issuer_url": tailnet_issuer_url,
-            "tailnet_activation_status": activation_status,
-            "tailnet_active": activation_status == "active",
-        }
-
+    tailnet_host = _tailscale_host(product_config)
+    app_https_port = _tailscale_https_port(product_config, "app_https_port", 443)
+    tailnet_app_base_url = _format_https_url(tailnet_host, app_https_port)
+    tailnet_issuer_url = _tsidp_issuer_url(product_config)
+    activation_status = _tailnet_activation_status(product_config)
     return {
-        "public_host": public_host,
-        "url_scheme": scheme,
-        "app_base_url": local_app_base_url,
-        "issuer_url": local_issuer_url,
-        "oidc_callback_url": f"{local_app_base_url}/api/auth/oidc/callback",
-        "pocket_id_setup_url": f"{local_issuer_url}/setup",
+        "public_host": tailnet_host,
+        "url_scheme": "https",
+        "app_base_url": tailnet_app_base_url,
+        "issuer_url": tailnet_issuer_url,
+        "oidc_callback_url": f"{tailnet_app_base_url}/api/auth/oidc/callback",
+        "tailnet_host": tailnet_host,
+        "tailnet_app_base_url": tailnet_app_base_url,
+        "tailnet_issuer_url": tailnet_issuer_url,
+        "tailnet_activation_status": activation_status,
+        "tailnet_active": activation_status == "active",
+        "local_app_base_url": f"http://127.0.0.1:{app_port}",
     }
 
 
@@ -411,7 +426,6 @@ def ensure_product_tailnet_started(
     config: Dict[str, Any] | None = None,
     *,
     include_app: bool = True,
-    include_auth: bool | None = None,
 ) -> list[subprocess.CompletedProcess[str]]:
     product_config = config or load_product_config()
     if not _tailscale_enabled(product_config):
@@ -420,10 +434,6 @@ def ensure_product_tailnet_started(
     network = product_config.get("network", {})
     app_port = int(network.get("app_port", 8086))
     app_https_port = _tailscale_https_port(product_config, "app_https_port", 443)
-    auth_https_port = _tailscale_https_port(product_config, "auth_https_port", 4444)
-    auth_target_url = f"http://127.0.0.1:{int(network.get('pocket_id_port', 1411))}"
-
-    auth_enabled = _first_admin_bootstrap_completed() if include_auth is None else include_auth
 
     commands: list[list[str]] = []
     if include_app:
@@ -434,14 +444,6 @@ def ensure_product_tailnet_started(
                 target_url=f"http://127.0.0.1:{app_port}",
             )
         )
-    if auth_enabled:
-        commands.append(
-            _tailscale_serve_command(
-                product_config,
-                https_port=auth_https_port,
-                target_url=auth_target_url,
-            )
-        )
     results: list[subprocess.CompletedProcess[str]] = []
     for command in commands:
         try:
@@ -449,6 +451,104 @@ def ensure_product_tailnet_started(
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(_format_tailscale_serve_error(exc, command=command)) from exc
     return results
+
+
+def _tsidp_service_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    services_cfg = config.setdefault("services", {}).setdefault("tsidp", {})
+    services_cfg["mode"] = str(services_cfg.get("mode", "docker")).strip() or "docker"
+    services_cfg["container_name"] = str(services_cfg.get("container_name", "hermes-tsidp")).strip() or "hermes-tsidp"
+    services_cfg["image"] = str(services_cfg.get("image", TSIDP_IMAGE)).strip() or TSIDP_IMAGE
+    auth_key_ref = str(services_cfg.get("auth_key_ref", "HERMES_PRODUCT_TAILSCALE_AUTH_KEY")).strip()
+    if not auth_key_ref:
+        raise ValueError("services.tsidp.auth_key_ref must be configured")
+    services_cfg["auth_key_ref"] = auth_key_ref
+    advertise_tags = services_cfg.get("advertise_tags", ["tag:tsidp"])
+    if not isinstance(advertise_tags, list) or not advertise_tags:
+        advertise_tags = ["tag:tsidp"]
+    services_cfg["advertise_tags"] = [str(item).strip() for item in advertise_tags if str(item).strip()]
+    return services_cfg
+
+
+def _tsidp_auth_key(config: Dict[str, Any]) -> str:
+    env_key = str(_tsidp_service_config(config).get("auth_key_ref", "")).strip()
+    return str(get_env_value(env_key) or "").strip()
+
+
+def _build_tsidp_env_file(config: Dict[str, Any]) -> str:
+    services_cfg = _tsidp_service_config(config)
+    lines = [
+        "TAILSCALE_USE_WIP_CODE=1",
+        f"TS_HOSTNAME={_tsidp_hostname(config)}",
+        "TS_STATE_DIR=/data",
+        "TSIDP_LOCAL_PORT=8080",
+        "TSIDP_ENABLE_STS=1",
+    ]
+    auth_key = _tsidp_auth_key(config)
+    if auth_key:
+        lines.append(f"TS_AUTHKEY={auth_key}")
+    advertise_tags = services_cfg.get("advertise_tags", [])
+    if advertise_tags:
+        lines.append(f"TS_ADVERTISE_TAGS={','.join(str(item) for item in advertise_tags)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_tsidp_compose_spec(config: Dict[str, Any]) -> Dict[str, Any]:
+    services_cfg = _tsidp_service_config(config)
+    data_root_path = get_tsidp_data_root()
+    data_root = data_root_path.as_posix()
+    owner = data_root_path.stat()
+    service: Dict[str, Any] = {
+        "image": str(services_cfg["image"]),
+        "container_name": str(services_cfg["container_name"]),
+        "restart": "unless-stopped",
+        "env_file": [get_tsidp_env_path().as_posix()],
+        "volumes": [f"{data_root}:/data"],
+        "user": f"{owner.st_uid}:{owner.st_gid}",
+        "healthcheck": {
+            "test": ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/.well-known/openid-configuration"],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+            "start_period": "10s",
+        },
+    }
+    return {"services": {"tsidp": service}}
+
+
+def ensure_product_tsidp_started(config: Dict[str, Any] | None = None) -> subprocess.CompletedProcess[str] | None:
+    product_config = config or load_product_config()
+    if not _tailscale_enabled(product_config):
+        return None
+    compose_path = get_tsidp_compose_path()
+    command = ["docker", "compose", "-f", str(compose_path), "up", "-d", "--wait", "--force-recreate"]
+    try:
+        return subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        message = f"Failed to start tsidp with docker compose ({compose_path})"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
+
+
+def _wait_for_tsidp_ready(config: Dict[str, Any], timeout_seconds: float = _READY_TIMEOUT_SECONDS) -> None:
+    health_url = _tsidp_issuer_url(config).rstrip("/") + "/.well-known/openid-configuration"
+    deadline = time.time() + timeout_seconds
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            response = httpx.get(health_url, timeout=5.0)
+            if response.status_code == 200:
+                return
+            last_error = RuntimeError(f"tsidp health endpoint returned {response.status_code}")
+        except Exception as exc:
+            last_error = exc
+        time.sleep(1.0)
+    raise RuntimeError(
+        f"tsidp did not become ready at {health_url}: {last_error}. "
+        "Check that Tailscale is installed, connected, MagicDNS is enabled, and tsidp is allowed on this tailnet."
+    )
 
 
 def _required_secret(env_key: str) -> str:
@@ -558,42 +658,36 @@ def _build_compose_spec(config: Dict[str, Any]) -> Dict[str, Any]:
 
 def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
     product_config = config or load_product_config()
+    if not _tailscale_enabled(product_config):
+        raise RuntimeError("Tailscale must be enabled for this product install")
     ensure_product_home()
     _secure_tree(
         get_product_services_root(),
-        get_pocket_id_service_root(),
-        get_pocket_id_data_root(),
+        get_tsidp_service_root(),
+        get_tsidp_data_root(),
         get_product_bootstrap_root(),
     )
 
     urls = resolve_product_urls(product_config)
     product_config["network"]["public_host"] = urls["public_host"]
-    product_config["auth"]["provider"] = "pocket-id"
+    product_config["auth"]["provider"] = "tsidp"
     product_config["auth"]["issuer_url"] = urls["issuer_url"]
-    services_cfg = product_config.setdefault("services", {}).setdefault("pocket_id", {})
-    services_cfg["mode"] = str(services_cfg.get("mode", "docker")).strip() or "docker"
-    services_cfg["container_name"] = str(services_cfg.get("container_name", "hermes-pocket-id")).strip() or "hermes-pocket-id"
-    services_cfg["image"] = str(services_cfg.get("image", POCKET_ID_IMAGE)).strip() or POCKET_ID_IMAGE
-    services_cfg.pop("puid", None)
-    services_cfg.pop("pgid", None)
-    services_cfg.pop("user", None)
-
-    _ensure_client_secret(product_config)
+    _tsidp_service_config(product_config)
     _ensure_session_secret(product_config)
 
-    env_path = get_pocket_id_env_path()
+    tsidp_env_path = get_tsidp_env_path()
     try:
-        env_path.write_text(_build_env_file(product_config), encoding="utf-8")
+        tsidp_env_path.write_text(_build_tsidp_env_file(product_config), encoding="utf-8")
     except PermissionError as exc:
-        raise RuntimeError(_permission_error_message(env_path)) from exc
-    _secure_file(env_path)
+        raise RuntimeError(_permission_error_message(tsidp_env_path)) from exc
+    _secure_file(tsidp_env_path)
 
-    compose_path = get_pocket_id_compose_path()
+    tsidp_compose_path = get_tsidp_compose_path()
     try:
-        atomic_yaml_write(compose_path, _build_compose_spec(product_config))
+        atomic_yaml_write(tsidp_compose_path, _build_tsidp_compose_spec(product_config))
     except PermissionError as exc:
-        raise RuntimeError(_permission_error_message(compose_path)) from exc
-    _secure_file(compose_path)
+        raise RuntimeError(_permission_error_message(tsidp_compose_path)) from exc
+    _secure_file(tsidp_compose_path)
 
     save_product_config(product_config)
     return product_config
@@ -601,23 +695,9 @@ def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, 
 
 def ensure_product_stack_started(config: Dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     product_config = config or initialize_product_stack()
-    compose_path = get_pocket_id_compose_path()
-    command = ["docker", "compose", "-f", str(compose_path), "up", "-d", "--wait", "--force-recreate"]
-    try:
-        result = subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "").strip()
-        message = f"Failed to start Pocket ID with docker compose ({compose_path})"
-        if detail:
-            message = f"{message}: {detail}"
-        raise RuntimeError(message) from exc
-    ensure_product_tailnet_started(product_config)
-    return result
+    result = ensure_product_tsidp_started(product_config)
+    ensure_product_tailnet_started(product_config, include_app=_tailnet_activation_complete(product_config))
+    return result if result is not None else subprocess.CompletedProcess([], 0, "", "")
 
 
 def _wait_for_pocket_id_ready(config: Dict[str, Any], timeout_seconds: float = _READY_TIMEOUT_SECONDS) -> None:
@@ -710,63 +790,39 @@ def _ensure_signup_mode_with_token(config: Dict[str, Any]) -> None:
 def bootstrap_product_oidc_client(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
     product_config = initialize_product_stack(config or load_product_config())
     ensure_product_stack_started(product_config)
-    _wait_for_pocket_id_ready(product_config)
-    try:
-        _ensure_signup_mode_with_token(product_config)
-    except Exception as exc:  # pragma: no cover - defensive behavior for external API variance
-        logger.warning("Failed to enforce Pocket ID allowUserSignups=withToken: %s", exc)
-
-    urls = resolve_product_urls(product_config)
-    client_payload = _oidc_client_payload(product_config)
-    client_id = client_payload["id"]
-    base_url = _pocket_id_upstream_base_url(product_config)
-    headers = _api_headers(product_config)
-
-    with httpx.Client(base_url=base_url, headers=headers, timeout=10.0) as client:
-        get_response = client.get(f"/api/oidc/clients/{client_id}")
-        if get_response.status_code == 404:
-            _request_json(client, "POST", "/api/oidc/clients", expected_status=201, json=client_payload)
-        elif get_response.status_code == 200:
-            _request_json(
-                client,
-                "PUT",
-                f"/api/oidc/clients/{client_id}",
-                expected_status=200,
-                json={key: value for key, value in client_payload.items() if key != "id"},
-            )
-        else:
-            raise RuntimeError(
-                f"GET {base_url}/api/oidc/clients/{client_id} failed with "
-                f"{get_response.status_code}: {get_response.text}"
-            )
-
-        secret_response = _request_json(
-            client,
-            "POST",
-            f"/api/oidc/clients/{client_id}/secret",
-            expected_status=200,
-        )
-
-    client_secret = str(secret_response.get("secret", "")).strip()
-    if not client_secret:
-        raise RuntimeError("Pocket ID did not return an OIDC client secret")
-    save_env_value_secure(str(product_config["auth"]["client_secret_ref"]), client_secret)
+    _wait_for_tsidp_ready(product_config)
     settings = load_product_oidc_client_settings(product_config)
-    upstream_settings = ProductOIDCClientSettings(
-        issuer_url=_pocket_id_upstream_base_url(product_config),
-        client_id=settings.client_id,
-        client_secret=settings.client_secret,
-        redirect_uri=settings.redirect_uri,
-        scopes=settings.scopes,
-    )
-    metadata = discover_product_oidc_provider_metadata(upstream_settings)
+    metadata = discover_product_oidc_provider_metadata(settings)
     return {
-        "client_id": client_id,
+        "client_id": settings.client_id,
         "issuer_url": settings.issuer_url,
-        "callback_url": urls["oidc_callback_url"],
+        "callback_url": settings.redirect_uri,
         "authorization_endpoint": metadata.authorization_endpoint,
         "token_endpoint": metadata.token_endpoint,
     }
+
+
+def load_product_tailscale_oidc_client_settings(
+    config: Dict[str, Any] | None = None,
+) -> ProductOIDCClientSettings:
+    return load_product_oidc_client_settings(config or load_product_config())
+
+
+def _tailscale_oidc_registration_payload(config: Dict[str, Any]) -> Dict[str, Any]:
+    urls = resolve_product_urls(config)
+    brand_name = str(config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip() or "Hermes Core"
+    return {
+        "client_name": f"{brand_name} Tailnet",
+        "redirect_uris": [f"{urls['tailnet_app_base_url'].rstrip('/')}/api/auth/tailscale/callback"],
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "scope": "openid profile email",
+        "token_endpoint_auth_method": "client_secret_post",
+    }
+
+
+def bootstrap_product_tailscale_oidc_client(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    return bootstrap_product_oidc_client(config)
 
 
 def load_first_admin_enrollment_state() -> Dict[str, Any] | None:
@@ -798,14 +854,6 @@ def mark_first_admin_bootstrap_completed() -> Dict[str, Any] | None:
     state_path = get_first_admin_enrollment_state_path()
     atomic_json_write(state_path, state)
     _secure_file(state_path)
-    product_config = load_product_config()
-    save_product_config(initialize_product_stack(product_config))
-    bootstrap_product_oidc_client(product_config)
-    # Once first admin bootstrap is complete, expose auth on tailnet as well.
-    try:
-        ensure_product_tailnet_started()
-    except Exception as exc:  # pragma: no cover - defensive for external tailscale variance
-        logger.warning("Failed to refresh tailscale auth exposure after bootstrap completion: %s", exc)
     return state
 
 
@@ -813,20 +861,22 @@ def bootstrap_first_admin_enrollment(config: Dict[str, Any] | None = None) -> Di
     product_config = initialize_product_stack(config or load_product_config())
     oidc_state = bootstrap_product_oidc_client(product_config)
     existing_state = load_first_admin_enrollment_state()
-    bootstrap_mode = _first_admin_bootstrap_mode(product_config)
-
-    username = str(product_config.get("bootstrap", {}).get("first_admin_username", "admin")).strip() or "admin"
+    first_admin_login = str(product_config.get("bootstrap", {}).get("first_admin_tailscale_login", "")).strip().lower()
+    if not first_admin_login:
+        raise RuntimeError("bootstrap.first_admin_tailscale_login must be configured")
+    username = str(product_config.get("bootstrap", {}).get("first_admin_username", "")).strip() or first_admin_login.split("@", 1)[0]
     display_name = str(
         product_config.get("bootstrap", {}).get("first_admin_display_name", "Administrator")
     ).strip() or "Administrator"
-    email = str(product_config.get("bootstrap", {}).get("first_admin_email", "")).strip()
+    email = first_admin_login if "@" in first_admin_login else ""
     state = {
         "username": username,
         "display_name": display_name,
         "email": email,
-        "auth_mode": str(product_config.get("auth", {}).get("mode", "passkey")).strip() or "passkey",
-        "bootstrap_mode": bootstrap_mode,
-        "setup_url": resolve_product_urls(product_config)["pocket_id_setup_url"] if bootstrap_mode == "native_setup" else "",
+        "tailscale_login": first_admin_login,
+        "auth_mode": "tsidp",
+        "bootstrap_mode": "tailscale_oidc",
+        "setup_url": resolve_product_urls(product_config)["app_base_url"],
         "oidc_client_id": oidc_state["client_id"],
         "first_admin_login_seen": bool(existing_state.get("first_admin_login_seen", False)) if existing_state else False,
         "bootstrap_completed_at": existing_state.get("bootstrap_completed_at") if existing_state else None,

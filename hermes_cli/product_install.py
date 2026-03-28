@@ -23,8 +23,8 @@ from hermes_cli.product_config import (
     get_product_storage_root,
 )
 from hermes_cli.product_stack import (
-    get_pocket_id_compose_path,
     get_product_services_root,
+    get_tsidp_compose_path,
     load_product_config,
 )
 from utils import atomic_json_write
@@ -38,13 +38,11 @@ RUNSC_RUNTIME_CONFIG = {
     "runtimeArgs": ["--network=host"],
 }
 PRODUCT_SECRET_KEYS = [
-    "HERMES_PRODUCT_OIDC_CLIENT_SECRET",
+    "HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET",
     "HERMES_PRODUCT_SESSION_SECRET",
-    "HERMES_POCKET_ID_STATIC_API_KEY",
-    "HERMES_POCKET_ID_ENCRYPTION_KEY",
+    "HERMES_PRODUCT_TAILSCALE_AUTH_KEY",
 ]
 PRODUCT_APP_SERVICE_NAME = "hermes-core-product-app.service"
-PRODUCT_AUTH_PROXY_SERVICE_NAME = "hermes-core-product-auth-proxy.service"
 PRODUCT_RUNTIME_IMAGE_TAG = "hermes-core-product-runtime:local"
 DOCKER_GROUP_RELOGIN_EXIT_CODE = 42
 APT_INSTALL_PACKAGES = [
@@ -118,10 +116,6 @@ def _run(
 
 def _product_app_service_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / PRODUCT_APP_SERVICE_NAME
-
-
-def _product_auth_proxy_service_path() -> Path:
-    return Path.home() / ".config" / "systemd" / "user" / PRODUCT_AUTH_PROXY_SERVICE_NAME
 
 
 def product_install_root() -> Path:
@@ -255,29 +249,10 @@ def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> st
     return _render_product_service_unit(spec, bind_host=bind_host, hermes_home=hermes_home, install_root=install_root)
 
 
-def _render_product_auth_proxy_service_unit(config: dict[str, Any] | None = None) -> str:
-    product_config = config or load_product_config()
-    bind_host, hermes_home, install_root = _service_bind_host_and_home(product_config)
-    spec = ProductServiceUnitSpec(
-        description="Hermes Core Product Auth Proxy",
-        module="hermes_cli.product_app",
-        factory="create_product_auth_proxy_app",
-        port=int(product_config.get("network", {}).get("pocket_id_port", 1411)),
-    )
-    return _render_product_service_unit(spec, bind_host=bind_host, hermes_home=hermes_home, install_root=install_root)
-
-
 def _write_product_app_service_unit(config: dict[str, Any] | None = None) -> None:
     service_path = _product_app_service_path()
     service_path.parent.mkdir(parents=True, exist_ok=True)
     rendered = _render_product_app_service_unit(config)
-    service_path.write_text(rendered, encoding="utf-8")
-
-
-def _write_product_auth_proxy_service_unit(config: dict[str, Any] | None = None) -> None:
-    service_path = _product_auth_proxy_service_path()
-    service_path.parent.mkdir(parents=True, exist_ok=True)
-    rendered = _render_product_auth_proxy_service_unit(config)
     service_path.write_text(rendered, encoding="utf-8")
 
 
@@ -287,13 +262,11 @@ def ensure_product_app_service_started(config: dict[str, Any] | None = None) -> 
     if not _systemd_available():
         raise RuntimeError("systemd is required to manage the Hermes Core product app service")
     _write_product_app_service_unit(config)
-    _write_product_auth_proxy_service_unit(config)
     _run(["systemctl", "--user", "daemon-reload"])
-    for service_name in (PRODUCT_APP_SERVICE_NAME, PRODUCT_AUTH_PROXY_SERVICE_NAME):
-        _run(["systemctl", "--user", "enable", service_name])
-        active = _run(["systemctl", "--user", "is-active", service_name], check=False)
-        action = "restart" if active.returncode == 0 else "start"
-        _run(["systemctl", "--user", action, service_name])
+    _run(["systemctl", "--user", "enable", PRODUCT_APP_SERVICE_NAME])
+    active = _run(["systemctl", "--user", "is-active", PRODUCT_APP_SERVICE_NAME], check=False)
+    action = "restart" if active.returncode == 0 else "start"
+    _run(["systemctl", "--user", action, PRODUCT_APP_SERVICE_NAME])
 
 
 def get_product_install_state_path() -> Path:
@@ -614,14 +587,14 @@ def _remove_runtime_image() -> None:
     _run(["docker", "rmi", "-f", PRODUCT_RUNTIME_IMAGE_TAG], check=False)
 
 
-def _remove_pocket_id_stack() -> None:
-    compose_path = get_pocket_id_compose_path()
+def _remove_tsidp_stack() -> None:
+    compose_path = get_tsidp_compose_path()
     if compose_path.exists():
         _run(
             ["docker", "compose", "-f", str(compose_path), "down", "-v", "--remove-orphans"],
             check=False,
         )
-    _run(["docker", "rm", "-f", "hermes-pocket-id"], check=False)
+    _run(["docker", "rm", "-f", "hermes-tsidp"], check=False)
 
 
 def _remove_path(path: Path) -> None:
@@ -654,13 +627,9 @@ def _remove_product_user_services() -> None:
     if not (_is_linux() and _systemd_available()):
         return
     _run(["systemctl", "--user", "disable", "--now", PRODUCT_APP_SERVICE_NAME], check=False)
-    _run(["systemctl", "--user", "disable", "--now", PRODUCT_AUTH_PROXY_SERVICE_NAME], check=False)
     service_path = _product_app_service_path()
     if service_path.exists():
         service_path.unlink(missing_ok=True)
-    auth_proxy_path = _product_auth_proxy_service_path()
-    if auth_proxy_path.exists():
-        auth_proxy_path.unlink(missing_ok=True)
     _run(["systemctl", "--user", "daemon-reload"], check=False)
 
 
@@ -714,7 +683,7 @@ def build_product_runtime_image() -> None:
 def perform_product_cleanup() -> dict[str, bool]:
     removed_runsc_registration = False
     if _docker_available():
-        _remove_pocket_id_stack()
+        _remove_tsidp_stack()
         _remove_runtime_containers()
         _remove_runtime_image()
     _remove_product_user_services()
