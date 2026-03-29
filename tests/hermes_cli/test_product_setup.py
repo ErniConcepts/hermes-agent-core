@@ -1,23 +1,16 @@
 from pathlib import Path
 
 from hermes_cli.product_config import load_product_config
-from hermes_cli.product_setup import (
-    _configure_tsidp_client_credentials,
-    setup_product_bootstrap_identity,
-    setup_product_tailscale,
-)
+from hermes_cli.product_setup import _configure_tsidp_client_credentials, setup_product_bootstrap_identity, setup_product_tailscale
 
 
-def test_setup_product_bootstrap_identity_saves_first_admin_login(tmp_path, monkeypatch):
+def test_setup_product_bootstrap_identity_does_not_require_manual_login_value(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    prompts = iter(["admin@example.com"])
-
-    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: next(prompts))
 
     setup_product_bootstrap_identity()
 
     config = load_product_config()
-    assert config["bootstrap"]["first_admin_tailscale_login"] == "admin@example.com"
+    assert config["bootstrap"]["first_admin_tailscale_login"] == ""
 
 
 def test_configure_tsidp_client_credentials_saves_client_values(tmp_path, monkeypatch):

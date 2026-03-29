@@ -14,7 +14,7 @@ def _product_config():
             "client_secret_ref": "HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET",
             "session_secret_ref": "HERMES_PRODUCT_SESSION_SECRET",
         },
-        "bootstrap": {"first_admin_tailscale_login": "admin@example.com"},
+        "bootstrap": {},
         "network": {
             "app_port": 8086,
             "tailscale": {
@@ -85,6 +85,21 @@ def _configure_app(monkeypatch, tmp_path, claims):
             "authorization_url": "https://idp.tail5fd7a5.ts.net/authorize?state=state-123",
         },
     )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.load_first_admin_enrollment_state",
+        lambda: {
+            "bootstrap_token": "bootstrap-token-123",
+            "bootstrap_url": "https://device.tail5fd7a5.ts.net/bootstrap/bootstrap-token-123",
+            "first_admin_login_seen": False,
+        },
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app.mark_first_admin_bootstrap_completed",
+        lambda tailscale_login=None: {
+            "tailscale_login": tailscale_login,
+            "first_admin_login_seen": True,
+        },
+    )
 
 
 def test_product_app_signed_out_page_uses_tailscale_login(tmp_path, monkeypatch):
@@ -108,7 +123,7 @@ def test_product_app_signed_out_page_uses_tailscale_login(tmp_path, monkeypatch)
     assert "Pocket ID" not in response.text
 
 
-def test_product_app_bootstraps_first_admin_from_matching_tailscale_identity(tmp_path, monkeypatch):
+def test_product_app_bootstraps_first_admin_from_bootstrap_link(tmp_path, monkeypatch):
     claims = {
         "sub": "ts-admin-sub",
         "email": "admin@example.com",
@@ -119,8 +134,10 @@ def test_product_app_bootstraps_first_admin_from_matching_tailscale_identity(tmp
     from hermes_cli.product_app import create_product_app
 
     client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
-    start = client.get("/api/auth/login", follow_redirects=False)
-    assert start.status_code == 307
+    start = client.get("/bootstrap/bootstrap-token-123", follow_redirects=False)
+    assert start.status_code == 303
+    login = client.get(start.headers["location"], follow_redirects=False)
+    assert login.status_code == 307
 
     response = client.get("/api/auth/oidc/callback?code=ok&state=state-123", follow_redirects=False)
 
@@ -142,6 +159,7 @@ def test_product_app_rejects_uninvited_tailscale_identity_after_bootstrap(tmp_pa
     from hermes_cli.product_app import create_product_app
 
     client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    client.get("/bootstrap/bootstrap-token-123", follow_redirects=False)
     client.get("/api/auth/login", follow_redirects=False)
     client.get("/api/auth/oidc/callback?code=ok&state=state-123", follow_redirects=False)
 
@@ -179,6 +197,7 @@ def test_product_app_claims_pending_invite_on_oidc_callback(tmp_path, monkeypatc
     from hermes_cli.product_app import create_product_app
 
     client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    client.get("/bootstrap/bootstrap-token-123", follow_redirects=False)
     client.get("/api/auth/login", follow_redirects=False)
     client.get("/api/auth/oidc/callback?code=ok&state=state-123", follow_redirects=False)
     client.post(
@@ -243,3 +262,23 @@ def test_product_app_admin_creates_invite_link_for_tailscale_login(tmp_path, mon
 
     assert response.status_code == 200
     assert response.json()["signup"]["signup_url"].startswith("https://device.tail5fd7a5.ts.net/invite/")
+
+
+def test_product_app_rejects_first_admin_without_bootstrap_link(tmp_path, monkeypatch):
+    claims = {
+        "sub": "ts-admin-sub",
+        "email": "admin@example.com",
+        "preferred_username": "admin@example.com",
+        "name": "Admin Example",
+    }
+    _configure_app(monkeypatch, tmp_path, claims)
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    client.get("/api/auth/login", follow_redirects=False)
+    response = client.get("/api/auth/oidc/callback?code=ok&state=state-123", follow_redirects=False)
+
+    assert response.status_code == 303
+    session = client.get("/api/auth/session").json()
+    assert session["authenticated"] is False
+    assert session["notice"] == "Open the one-time bootstrap link from setup to create the first admin."

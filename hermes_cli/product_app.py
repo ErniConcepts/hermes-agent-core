@@ -369,6 +369,18 @@ def _set_pending_invite_token(request: Request, token: str | None) -> None:
     request.session["pending_invite_token"] = candidate
 
 
+def _pending_bootstrap_token(request: Request) -> str:
+    return str(request.session.get("pending_bootstrap_token", "")).strip()
+
+
+def _set_pending_bootstrap_token(request: Request, token: str | None) -> None:
+    candidate = str(token or "").strip()
+    if not candidate:
+        request.session.pop("pending_bootstrap_token", None)
+        return
+    request.session["pending_bootstrap_token"] = candidate
+
+
 def _canonical_request_redirect(request: Request, urls: dict[str, str]) -> str | None:
     canonical_base = urls["app_base_url"].rstrip("/")
     canonical_host = canonical_base.split("://", 1)[-1].lower()
@@ -499,22 +511,25 @@ def _handle_tsidp_identity(request: Request, identity: dict[str, str]) -> Produc
         return existing_user
 
     if not _active_admin_exists():
-        expected_login = _bootstrap_first_admin_login()
-        if not expected_login:
-            raise HTTPException(status_code=500, detail="First admin bootstrap is not configured")
-        if identity.get("login") != expected_login:
+        enrollment_state = load_first_admin_enrollment_state() or {}
+        expected_token = str(enrollment_state.get("bootstrap_token", "")).strip()
+        pending_token = _pending_bootstrap_token(request)
+        if not expected_token:
+            raise HTTPException(status_code=500, detail="First admin bootstrap link is not configured")
+        if pending_token != expected_token:
             _set_notice(
                 request,
-                "This Tailscale account is not allowed to bootstrap the first admin.",
+                "Open the one-time bootstrap link from setup to create the first admin.",
                 tailscale_login=identity.get("login"),
             )
-            raise HTTPException(status_code=403, detail="This Tailscale account is not allowed to bootstrap the first admin.")
+            raise HTTPException(status_code=403, detail="Open the one-time bootstrap link from setup to create the first admin.")
         user = bootstrap_first_admin_user(
             tailscale_subject=identity["sub"],
             tailscale_login=identity["login"],
             display_name=identity.get("name"),
         )
-        mark_first_admin_bootstrap_completed()
+        _set_pending_bootstrap_token(request, None)
+        mark_first_admin_bootstrap_completed(identity.get("login"))
         return user
 
     invite_token = _pending_invite_token(request)
@@ -556,6 +571,11 @@ def _register_root_routes(app: FastAPI, context: ProductAppContext) -> None:
     @app.get("/invite/{token}")
     def invite_login(request: Request, token: str) -> RedirectResponse:
         _set_pending_invite_token(request, token)
+        return RedirectResponse("/api/auth/login", status_code=303)
+
+    @app.get("/bootstrap/{token}")
+    def bootstrap_login(request: Request, token: str) -> RedirectResponse:
+        _set_pending_bootstrap_token(request, token)
         return RedirectResponse("/api/auth/login", status_code=303)
 
 

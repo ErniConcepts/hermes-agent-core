@@ -6,6 +6,7 @@ from hermes_cli.product_config import load_product_config
 from hermes_cli.product_stack import (
     _build_tsidp_compose_spec,
     _build_tsidp_env_file,
+    bootstrap_first_admin_enrollment,
     enable_tailnet_activation,
     disable_tailnet_activation,
     get_tailnet_activation_state_path,
@@ -76,3 +77,19 @@ def test_enable_and_disable_tailnet_activation_persist_state(tmp_path, monkeypat
     assert active["status"] == "active"
     assert inactive["status"] == "inactive"
     assert get_tailnet_activation_state_path().exists()
+
+
+def test_bootstrap_first_admin_enrollment_creates_one_time_link(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("HERMES_PRODUCT_TAILSCALE_AUTH_KEY", "tskey-auth-kv")
+    monkeypatch.setattr(
+        "hermes_cli.product_stack.bootstrap_product_oidc_client",
+        lambda config=None: {"client_id": "hermes-core"},
+    )
+
+    state = bootstrap_first_admin_enrollment(_config())
+
+    assert state["auth_mode"] == "tsidp"
+    assert state["bootstrap_token"]
+    assert state["bootstrap_url"].startswith("https://device.tail5fd7a5.ts.net/bootstrap/")

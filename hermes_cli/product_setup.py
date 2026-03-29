@@ -253,24 +253,9 @@ def setup_product_storage() -> None:
 
 
 def setup_product_bootstrap_identity() -> None:
-    product_config = load_product_config()
-    bootstrap = product_config.setdefault("bootstrap", {})
-    current_first_admin = str(bootstrap.get("first_admin_tailscale_login", "")).strip()
-
     print_header("Tailnet Auth")
-    print_info("Enter the Tailscale identity that should become the first admin.")
-    print_info("The tsidp OIDC client will be created after the bundled tsidp service starts.")
-
-    while True:
-        first_admin_login = _sanitize_prompt_text(
-            prompt("First admin Tailscale login", current_first_admin) or current_first_admin
-        ).lower()
-        if first_admin_login:
-            bootstrap["first_admin_tailscale_login"] = first_admin_login
-            break
-        print_warning("First admin Tailscale login must not be empty.")
-
-    save_product_config(product_config)
+    print_info("Setup will create a one-time bootstrap link for the first admin.")
+    print_info("Open that link, sign in with Tailscale, and the first authenticated account becomes admin.")
 
 
 def _configure_tsidp_client_credentials() -> None:
@@ -312,7 +297,6 @@ def _print_product_setup_summary() -> None:
     enrollment_state = load_first_admin_enrollment_state() or {}
     soul_template = str(product_config.get("product", {}).get("agent", {}).get("soul_template_path", "")).strip() or "(bundled default)"
     workspace_limit_mb = int(product_config.get("storage", {}).get("user_workspace_limit_mb", 2048))
-    first_admin_login = str(product_config.get("bootstrap", {}).get("first_admin_tailscale_login", "")).strip()
 
     print()
     print_header("Product Setup Summary")
@@ -326,9 +310,12 @@ def _print_product_setup_summary() -> None:
     print_info(f"Local debug URL:         {urls['local_app_base_url']}")
     if bool(enrollment_state.get("first_admin_login_seen", False)):
         print_info("First admin bootstrap:   completed")
+        claimed_login = str(enrollment_state.get("tailscale_login", "")).strip()
+        if claimed_login:
+            print_info(f"First admin account:     {claimed_login}")
     else:
-        print_info(f"First admin identity:    {first_admin_login or '(not set)'}")
-        print_info(f"First admin sign-in URL: {urls['app_base_url']}")
+        print_info("First admin bootstrap:   pending")
+        print_info(f"First admin sign-in URL: {enrollment_state.get('bootstrap_url') or urls['app_base_url']}")
     print_info(f"SOUL template:           {soul_template}")
     print_info(f"Workspace cap:           {workspace_limit_mb / 1024:.1f} GB per user")
     print_info("Hermes agent setup:")
@@ -358,7 +345,7 @@ def _start_product_stack() -> None:
     state = bootstrap_first_admin_enrollment()
     ensure_product_app_service_started(load_product_config())
     print_info("Bundled tsidp service is configured.")
-    print_info(f"  First admin identity: {state['tailscale_login']}")
+    print_info("  First admin bootstrap: one-time link required")
     print_info(f"  Auth mode:            {state['auth_mode']}")
     print_info(f"  App URL:              {state['setup_url']}")
     print_info(f"  OIDC client:          {state['oidc_client_id']}")

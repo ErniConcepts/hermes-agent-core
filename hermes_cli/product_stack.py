@@ -8,6 +8,7 @@ import json
 import logging
 import secrets
 import subprocess
+import secrets
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -843,7 +844,7 @@ def _first_admin_bootstrap_mode(config: Dict[str, Any]) -> str:
     return "token" if tokenized_supported else "native_setup"
 
 
-def mark_first_admin_bootstrap_completed() -> Dict[str, Any] | None:
+def mark_first_admin_bootstrap_completed(tailscale_login: str | None = None) -> Dict[str, Any] | None:
     state = load_first_admin_enrollment_state()
     if not state:
         return None
@@ -851,6 +852,11 @@ def mark_first_admin_bootstrap_completed() -> Dict[str, Any] | None:
         return state
     state["first_admin_login_seen"] = True
     state["bootstrap_completed_at"] = int(time.time())
+    state["bootstrap_token"] = ""
+    state["bootstrap_url"] = resolve_product_urls(load_product_config())["app_base_url"]
+    normalized_login = str(tailscale_login or "").strip().lower()
+    if normalized_login:
+        state["tailscale_login"] = normalized_login
     state_path = get_first_admin_enrollment_state_path()
     atomic_json_write(state_path, state)
     _secure_file(state_path)
@@ -861,24 +867,32 @@ def bootstrap_first_admin_enrollment(config: Dict[str, Any] | None = None) -> Di
     product_config = initialize_product_stack(config or load_product_config())
     oidc_state = bootstrap_product_oidc_client(product_config)
     existing_state = load_first_admin_enrollment_state()
-    first_admin_login = str(product_config.get("bootstrap", {}).get("first_admin_tailscale_login", "")).strip().lower()
-    if not first_admin_login:
-        raise RuntimeError("bootstrap.first_admin_tailscale_login must be configured")
-    username = str(product_config.get("bootstrap", {}).get("first_admin_username", "")).strip() or first_admin_login.split("@", 1)[0]
+    existing_login = str(existing_state.get("tailscale_login", "")).strip().lower() if existing_state else ""
+    username = str(product_config.get("bootstrap", {}).get("first_admin_username", "")).strip() or "admin"
     display_name = str(
         product_config.get("bootstrap", {}).get("first_admin_display_name", "Administrator")
     ).strip() or "Administrator"
-    email = first_admin_login if "@" in first_admin_login else ""
+    email = existing_login if "@" in existing_login else ""
+    first_admin_login_seen = bool(existing_state.get("first_admin_login_seen", False)) if existing_state else False
+    bootstrap_token = ""
+    if not first_admin_login_seen:
+        bootstrap_token = str(existing_state.get("bootstrap_token", "")).strip() if existing_state else ""
+        if not bootstrap_token:
+            bootstrap_token = secrets.token_urlsafe(24)
+    app_base_url = resolve_product_urls(product_config)["app_base_url"]
+    bootstrap_url = f"{app_base_url.rstrip('/')}/bootstrap/{bootstrap_token}" if bootstrap_token else app_base_url
     state = {
         "username": username,
         "display_name": display_name,
         "email": email,
-        "tailscale_login": first_admin_login,
+        "tailscale_login": existing_login,
         "auth_mode": "tsidp",
         "bootstrap_mode": "tailscale_oidc",
-        "setup_url": resolve_product_urls(product_config)["app_base_url"],
+        "setup_url": bootstrap_url,
+        "bootstrap_url": bootstrap_url,
+        "bootstrap_token": bootstrap_token,
         "oidc_client_id": oidc_state["client_id"],
-        "first_admin_login_seen": bool(existing_state.get("first_admin_login_seen", False)) if existing_state else False,
+        "first_admin_login_seen": first_admin_login_seen,
         "bootstrap_completed_at": existing_state.get("bootstrap_completed_at") if existing_state else None,
     }
     if existing_state == state:
