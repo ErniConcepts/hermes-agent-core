@@ -50,6 +50,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         "tailscale": {
             "enabled": True,
             "tailnet_name": "",
+            "api_tailnet_name": "",
             "device_name": "",
             "app_https_port": 443,
             "command_path": "tailscale",
@@ -82,6 +83,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
             "container_name": "hermes-tsidp",
             "image": "ghcr.io/tailscale/tsidp:latest",
             "auth_key_ref": "HERMES_PRODUCT_TAILSCALE_AUTH_KEY",
+            "api_token_ref": "HERMES_PRODUCT_TAILSCALE_API_TOKEN",
             "advertise_tags": ["tag:tsidp"],
         },
     },

@@ -15,8 +15,10 @@ def test_load_product_config_defaults_to_tsidp_tailnet_only(tmp_path, monkeypatc
     assert config["auth"]["provider"] == "tsidp"
     assert config["auth"]["mode"] == "oidc"
     assert config["network"]["tailscale"]["enabled"] is True
+    assert config["network"]["tailscale"]["api_tailnet_name"] == ""
     assert config["network"]["tailscale"]["idp_hostname"] == "idp"
     assert config["services"]["tsidp"]["container_name"] == "hermes-tsidp"
+    assert config["services"]["tsidp"]["api_token_ref"] == "HERMES_PRODUCT_TAILSCALE_API_TOKEN"
 
 
 def test_initialize_product_config_file_creates_tailnet_bootstrap_defaults(tmp_path, monkeypatch):

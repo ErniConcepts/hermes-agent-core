@@ -7,6 +7,7 @@ import re
 import socket
 import subprocess
 import sys
+import json
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from typing import Any
 from hermes_cli.config import (
     ensure_hermes_home,
     get_config_path,
+    get_env_value,
     get_env_path,
     get_hermes_home,
     save_env_value_secure,
@@ -27,6 +29,7 @@ from hermes_cli.product_stack import (
     load_first_admin_enrollment_state,
     resolve_product_urls,
 )
+from hermes_cli.product_tailscale_api import ensure_tsidp_policy
 from hermes_cli.setup import (
     Colors,
     color,
@@ -42,9 +45,9 @@ from hermes_cli.setup import (
 
 PRODUCT_SETUP_SECTIONS = [
     ("tailscale", "Tailscale"),
+    ("bootstrap", "Tailnet Auth & First Admin"),
     ("identity", "Agent Identity"),
     ("storage", "Workspace Storage"),
-    ("bootstrap", "Tailnet Auth & First Admin"),
 ]
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -85,7 +88,7 @@ def _local_interface_addresses() -> set[str]:
     return addresses
 
 
-def _detect_tailscale_identity(command_path: str) -> tuple[str, str]:
+def _detect_tailscale_identity(command_path: str) -> dict[str, str]:
     try:
         result = subprocess.run(
             [command_path, "status", "--json"],
@@ -105,13 +108,17 @@ def _detect_tailscale_identity(command_path: str) -> tuple[str, str]:
         raise RuntimeError(message) from exc
 
     payload = result.stdout or "{}"
-    data = __import__("json").loads(payload)
+    data = json.loads(payload)
     self_payload = data.get("Self", {}) if isinstance(data, dict) else {}
+    tailnet_payload = data.get("CurrentTailnet", {}) if isinstance(data, dict) else {}
     if not isinstance(self_payload, dict):
         raise RuntimeError("Tailscale status payload did not contain Self")
+    if not isinstance(tailnet_payload, dict):
+        raise RuntimeError("Tailscale status payload did not contain CurrentTailnet")
     tailnet_name = str(data.get("MagicDNSSuffix", "")).strip().rstrip(".").lower()
+    api_tailnet_name = str(tailnet_payload.get("Name", "")).strip()
     dns_name = str(self_payload.get("DNSName", "")).strip().rstrip(".").lower()
-    if not tailnet_name or not dns_name:
+    if not tailnet_name or not dns_name or not api_tailnet_name:
         raise RuntimeError("Tailscale is not connected to a tailnet with MagicDNS enabled")
     if tailnet_name.endswith(".ts.net"):
         tailnet_name = tailnet_name.removesuffix(".ts.net")
@@ -120,45 +127,37 @@ def _detect_tailscale_identity(command_path: str) -> tuple[str, str]:
     device_name = dns_name.split(".", 1)[0]
     if not device_name or not tailnet_name:
         raise RuntimeError("Could not derive Tailnet device name and tailnet name")
-    return device_name, tailnet_name
+    return {
+        "device_name": device_name,
+        "tailnet_name": tailnet_name,
+        "api_tailnet_name": api_tailnet_name,
+    }
 
 
 def setup_product_tailscale() -> None:
     product_config = load_product_config()
     tailscale = product_config.setdefault("network", {}).setdefault("tailscale", {})
     services = product_config.setdefault("services", {}).setdefault("tsidp", {})
-    current_tailnet = str(tailscale.get("tailnet_name", "")).strip()
-    current_device = str(tailscale.get("device_name", "")).strip()
-    current_app_port = str(int(tailscale.get("app_https_port", 443)))
     current_idp_hostname = str(tailscale.get("idp_hostname", "idp")).strip() or "idp"
     command_path = str(tailscale.get("command_path", "tailscale")).strip() or "tailscale"
 
     print_header("Tailscale")
     print_info("This branch exposes Hermes Core only through your tailnet.")
-    print_info("Setup verifies the local Tailscale node and stores an auth key for the bundled tsidp service.")
+    print_info("Setup will:")
+    print_info("  1. Verify the current Tailscale node and tailnet")
+    print_info("  2. Save a tsidp auth key and Tailscale API token")
+    print_info("  3. Patch tailnet policy so tsidp login and admin UI work")
+    print_info("  4. Continue into tsidp startup and first-admin bootstrap")
 
-    device_name, tailnet_name = _detect_tailscale_identity(command_path)
+    detected = _detect_tailscale_identity(command_path)
     tailscale["enabled"] = True
-    print_info(f"  Detected Tailnet device: {device_name}")
-    print_info(f"  Detected Tailnet name:   {tailnet_name}")
-
-    while True:
-        chosen_tailnet = _sanitize_prompt_text(
-            prompt("Tailnet name", current_tailnet or tailnet_name) or current_tailnet or tailnet_name
-        ).lower()
-        if chosen_tailnet:
-            tailscale["tailnet_name"] = chosen_tailnet
-            break
-        print_warning("Tailnet name must not be empty.")
-
-    while True:
-        chosen_device = _sanitize_prompt_text(
-            prompt("Tailscale device name", current_device or device_name) or current_device or device_name
-        ).lower()
-        if chosen_device:
-            tailscale["device_name"] = chosen_device
-            break
-        print_warning("Tailscale device name must not be empty.")
+    tailscale["tailnet_name"] = detected["tailnet_name"]
+    tailscale["device_name"] = detected["device_name"]
+    tailscale["api_tailnet_name"] = detected["api_tailnet_name"]
+    tailscale["app_https_port"] = int(tailscale.get("app_https_port", 443) or 443)
+    print_info(f"  Detected Tailnet device:     {detected['device_name']}")
+    print_info(f"  Detected MagicDNS suffix:    {detected['tailnet_name']}")
+    print_info(f"  Detected policy tailnet key: {detected['api_tailnet_name']}")
 
     while True:
         chosen_idp_hostname = _sanitize_prompt_text(
@@ -169,31 +168,40 @@ def setup_product_tailscale() -> None:
             break
         print_warning("tsidp hostname must not be empty.")
 
-    while True:
-        try:
-            app_port = int(
-                _sanitize_prompt_text(prompt("Tailnet HTTPS port for app", current_app_port) or current_app_port)
-            )
-        except ValueError:
-            print_warning("Tailnet HTTPS port must be an integer.")
-            continue
-        if app_port <= 0:
-            print_warning("Tailnet HTTPS port must be positive.")
-            continue
-        tailscale["app_https_port"] = app_port
-        break
-
     auth_key_ref = str(services.get("auth_key_ref", "")).strip()
+    api_token_ref = str(services.get("api_token_ref", "")).strip()
+    existing_auth_key = str(get_env_value(auth_key_ref) or "").strip()
+    existing_api_token = str(get_env_value(api_token_ref) or "").strip()
+    if existing_auth_key:
+        print_info("  Tailscale auth key: already saved; press Enter to keep it.")
+    if existing_api_token:
+        print_info("  Tailscale API token: already saved; press Enter to keep it.")
     while True:
         auth_key = _sanitize_prompt_text(prompt("Tailscale auth key", ""))
         if auth_key:
             save_env_value_secure(auth_key_ref, auth_key)
             break
+        if existing_auth_key:
+            break
         print_warning("A Tailscale auth key is required for the bundled tsidp service.")
+
+    while True:
+        api_token = _sanitize_prompt_text(prompt("Tailscale API token", ""))
+        if api_token:
+            save_env_value_secure(api_token_ref, api_token)
+            break
+        if existing_api_token:
+            break
+        print_warning("A Tailscale API token is required so setup can patch tailnet policy automatically.")
 
     tailscale["command_path"] = command_path
     save_product_config(product_config)
+    policy_status = ensure_tsidp_policy(product_config)
     urls = resolve_product_urls(product_config)
+    print_success("Tailnet policy is ready for tsidp.")
+    if policy_status["changed"]:
+        print_info(f"  Policy backup:     {policy_status['backup_path']}")
+    print_info(f"  Policy tailnet:    {policy_status['tailnet']}")
     print_info(f"  Tailnet app URL:  {urls['app_base_url']}")
     print_info(f"  Tailnet OIDC URL: {urls['issuer_url']}")
 
@@ -267,7 +275,12 @@ def _configure_tsidp_client_credentials() -> None:
 
     print()
     print_header("tsidp Client")
-    print_info("The bundled tsidp service is running. Create a Hermes Core client in the tsidp UI, then paste the credentials here.")
+    print_info("The bundled tsidp service is running.")
+    print_info("Next steps:")
+    print_info("  1. Open the tsidp URL below")
+    print_info("  2. Create a client named Hermes Core")
+    print_info("  3. Use the redirect URI shown below")
+    print_info("  4. Paste the client id and client secret back here")
     print_info(f"  tsidp URL:      {urls['issuer_url']}")
     print_info(f"  Redirect URI:   {urls['oidc_callback_url']}")
     print_info("  Suggested name: Hermes Core")
@@ -297,6 +310,8 @@ def _print_product_setup_summary() -> None:
     enrollment_state = load_first_admin_enrollment_state() or {}
     soul_template = str(product_config.get("product", {}).get("agent", {}).get("soul_template_path", "")).strip() or "(bundled default)"
     workspace_limit_mb = int(product_config.get("storage", {}).get("user_workspace_limit_mb", 2048))
+    tailscale_cfg = product_config.get("network", {}).get("tailscale", {})
+    policy_status = "configured" if str(tailscale_cfg.get("api_tailnet_name", "")).strip() else "not configured yet"
 
     print()
     print_header("Product Setup Summary")
@@ -307,6 +322,7 @@ def _print_product_setup_summary() -> None:
     print_info(f"Install dir:    {product_install_root()}")
     print_info(f"Tailnet app URL:         {urls['app_base_url']}")
     print_info(f"Tailnet OIDC issuer:     {urls['issuer_url']}")
+    print_info(f"Tailnet policy:          {policy_status}")
     print_info(f"Local debug URL:         {urls['local_app_base_url']}")
     if bool(enrollment_state.get("first_admin_login_seen", False)):
         print_info("First admin bootstrap:   completed")
@@ -397,13 +413,14 @@ def run_product_setup_wizard(args: Any) -> None:
     print()
     print_info("This configures the supplier-curated Tailnet-only Hermes Core product distribution.")
     print_info("All product access is authenticated through tsidp on your tailnet.")
+    print_info("Setup will guide you through the full auth path in order.")
     print()
 
     setup_product_tailscale()
-    setup_product_identity()
-    setup_product_storage()
     setup_product_bootstrap_identity()
     _run_bootstrap_section()
+    setup_product_identity()
+    setup_product_storage()
     _print_product_setup_summary()
     print()
     print_success("Product setup complete!")

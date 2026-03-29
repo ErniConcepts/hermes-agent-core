@@ -12,6 +12,8 @@ It keeps upstream Hermes as the core, and adds:
 - simple install/setup flow for deployment on Linux
 - invite-based multi-user onboarding on the tailnet
 
+![Hermes Core Tailnet Architecture](docs/fork/architecture-diagram.png)
+
 ## What This Fork Adds
 
 The deployment layer lives primarily in `hermes_cli/product_*` and includes:
@@ -22,8 +24,9 @@ The deployment layer lives primarily in `hermes_cli/product_*` and includes:
   - installs the user-level app service and bundled `tsidp`
 - `hermes-core setup`
   - configures deployment settings such as:
-    - Tailscale tailnet/device detection
+    - Tailscale tailnet detection
     - bundled `tsidp` auth key
+    - Tailscale API token for automatic policy patching
     - `tsidp` OIDC client credentials
     - first-admin bootstrap link
     - workspace limits
@@ -100,22 +103,101 @@ docker info
 Typical install flow:
 
 1. run the installer as your normal user
-2. answer the product questions:
-   - Tailscale auth key
+2. let `hermes-core setup` detect the current Tailscale device and tailnet
+3. enter:
+   - Tailscale auth key for the bundled `tsidp` node
+   - Tailscale API token so setup can patch tailnet policy automatically
    - `tsidp` hostname
+4. let setup patch the tailnet policy and start the bundled `tsidp` service
+5. open the `tsidp` URL shown by setup and create a Hermes Core OIDC client
+6. paste the `tsidp` client id/secret back into setup
+7. finish the remaining product questions:
    - optional SOUL template path
    - per-user workspace limit
-3. let `hermes-core install` start the bundled `tsidp` service and app service
-4. open the `tsidp` URL shown by setup and create a Hermes Core OIDC client
-5. paste the `tsidp` client id/secret back into setup
-6. open the one-time first-admin bootstrap URL from the setup summary
-7. sign in with Tailscale to create the first admin account
-6. configure Hermes itself with the upstream CLI:
+8. open the one-time first-admin bootstrap URL from the setup summary
+9. sign in with Tailscale to create the first admin account
+10. configure Hermes itself with the upstream CLI:
    - `hermes setup model`
    - `hermes setup tools`
    - optional: `hermes setup gateway`
    - optional: `hermes setup agent`
-7. sign into the Tailnet app URL and start using personalized agent sessions
+11. sign into the Tailnet app URL and start using personalized agent sessions
+
+## Setup Inputs
+
+`hermes-core setup` currently requires these operator inputs:
+
+- required:
+  - Tailnet must already be available on the host
+  - Tailscale auth key for the bundled `tsidp` node
+  - Tailscale API token for automatic `tsidp` policy setup
+  - `tsidp` OIDC client id
+  - `tsidp` OIDC client secret
+- prompted by setup:
+  - `tsidp` hostname
+  - optional SOUL template path
+  - per-user workspace limit
+
+What setup now automates:
+
+- it detects the current Tailscale device and MagicDNS suffix
+- it uses the API token to add the required `tailscale.com/cap/tsidp` grants
+- it verifies the policy before continuing to the `tsidp` client step
+
+## First Admin Bootstrap
+
+Current first-admin flow:
+
+1. `hermes-core setup` starts `tsidp` and prints the Tailnet app URL and `tsidp` issuer URL.
+2. You create a Hermes Core OIDC client in the `tsidp` UI.
+3. You paste the `client_id` and `client_secret` back into setup.
+4. Setup generates a one-time bootstrap link on the Tailnet app URL.
+5. Open that exact bootstrap link in a browser that can access the same tailnet.
+6. Sign in with Tailscale through `tsidp`.
+7. The first successful login through that bootstrap link becomes the first admin account.
+
+Properties of this flow:
+
+- there is no localhost or LAN fallback login
+- the bootstrap link is one-time and server-tracked
+- the admin account is created only after a successful `tsidp` login on the Tailnet URL
+
+## Invite Flow
+
+Current invited-user flow:
+
+1. The admin signs into the Tailnet app URL.
+2. In the admin screen, the admin creates an invite link with a display name.
+3. The app generates a one-time claim URL on the Tailnet app host.
+4. The invited person opens that URL from a browser/device that can access the same tailnet.
+5. They sign in with Tailscale through `tsidp`.
+6. The app shows the detected Tailscale identity and asks for explicit confirmation.
+7. After confirmation, the invite is claimed and the product user record is created.
+
+Important behavior:
+
+- invites are not claimed automatically anymore
+- if the browser comes back as an already existing Hermes Core user, the invite is rejected instead of silently signing that user in
+- invites are tailnet-only and identity-bound at claim time
+
+## Tailnet Requirements
+
+This product assumes:
+
+- the host is already joined to a Tailscale tailnet
+- MagicDNS is available
+- `tailscale serve` can be managed by the install user
+- `tsidp` is allowed by the tailnet policy
+
+Normal setup handles the `tsidp` policy grant automatically through the Tailscale API token.
+
+If `tailscale serve` is denied, grant your user permission once:
+
+```bash
+sudo tailscale set --operator="$USER"
+```
+
+If the `tsidp` UI still says `Access denied: application capability not granted` after setup, the API token likely could not update the tailnet policy or did not have sufficient admin permission.
 
 This branch does not expose a local/LAN login surface:
 
@@ -192,6 +274,10 @@ Upstream Hermes functionality still exists in the repo and remains the foundatio
 The fork policy is to prefer sidecar adaptation over modifying upstream Hermes files unless an upstream-facing change is explicitly intended.
 
 ## Architecture Flow
+
+Reference diagram:
+
+![Hermes Core Architecture Diagram](docs/fork/architecture-diagram.png)
 
 Current high-level runtime flow:
 
