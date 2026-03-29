@@ -199,7 +199,7 @@ sudo tailscale set --operator="$USER"
 
 If the `tsidp` UI still says `Access denied: application capability not granted` after setup, the API token likely could not update the tailnet policy or did not have sufficient admin permission.
 
-This branch does not expose a local/LAN login surface:
+There is no local/LAN login surface:
 
 - users must be in the same Tailscale tailnet
 - the Tailnet URL is the only supported app URL
@@ -274,10 +274,6 @@ Upstream Hermes functionality still exists in the repo and remains the foundatio
 The fork policy is to prefer sidecar adaptation over modifying upstream Hermes files unless an upstream-facing change is explicitly intended.
 
 ## Architecture Flow
-
-Reference diagram:
-
-![Hermes Core Architecture Diagram](docs/fork/architecture-diagram.png)
 
 Current high-level runtime flow:
 

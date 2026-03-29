@@ -8,14 +8,13 @@ import json
 import logging
 import secrets
 import subprocess
-import secrets
 import time
 from pathlib import Path
 from typing import Any, Dict
 
 import httpx
 
-from hermes_cli.config import _secure_dir, _secure_file, get_env_value, save_env_value, save_env_value_secure
+from hermes_cli.config import _secure_dir, _secure_file, get_env_value, save_env_value_secure
 from hermes_cli.product_oidc import (
     ProductOIDCClientSettings,
     discover_product_oidc_provider_metadata,
@@ -30,7 +29,6 @@ from hermes_cli.product_config import (
 from utils import atomic_json_write, atomic_yaml_write
 
 
-POCKET_ID_IMAGE = "ghcr.io/pocket-id/pocket-id:v2"
 TSIDP_IMAGE = "ghcr.io/tailscale/tsidp:latest"
 _READY_TIMEOUT_SECONDS = 45.0
 logger = logging.getLogger(__name__)
@@ -38,14 +36,6 @@ logger = logging.getLogger(__name__)
 
 def get_product_services_root() -> Path:
     return get_product_storage_root() / "services"
-
-
-def get_pocket_id_service_root() -> Path:
-    return get_product_services_root() / "pocket-id"
-
-
-def get_pocket_id_data_root() -> Path:
-    return get_pocket_id_service_root() / "data"
 
 
 def get_tsidp_service_root() -> Path:
@@ -70,14 +60,6 @@ def get_tailnet_activation_state_path() -> Path:
 
 def get_tailnet_bridge_tokens_path() -> Path:
     return get_product_bootstrap_root() / "tailnet_bridge_tokens.json"
-
-
-def get_pocket_id_compose_path() -> Path:
-    return get_pocket_id_service_root() / "compose.yaml"
-
-
-def get_pocket_id_env_path() -> Path:
-    return get_pocket_id_service_root() / ".env"
 
 
 def get_tsidp_compose_path() -> Path:
@@ -561,14 +543,6 @@ def _required_secret(env_key: str) -> str:
     return generated
 
 
-def _pocket_id_upstream_base_url(config: Dict[str, Any]) -> str:
-    services_cfg = config.get("services", {}).get("pocket_id", {})
-    upstream_port = int(services_cfg.get("upstream_port", 19141))
-    if upstream_port <= 0:
-        raise ValueError("services.pocket_id.upstream_port must be a positive integer")
-    return f"http://127.0.0.1:{upstream_port}"
-
-
 def _ensure_client_secret(config: Dict[str, Any]) -> str:
     env_key = str(config.get("auth", {}).get("client_secret_ref", "")).strip()
     if not env_key:
@@ -581,80 +555,6 @@ def _ensure_session_secret(config: Dict[str, Any]) -> str:
     if not env_key:
         raise ValueError("auth.session_secret_ref must be configured in product.yaml")
     return _required_secret(env_key)
-
-
-def _ensure_static_api_key(config: Dict[str, Any]) -> str:
-    env_key = str(
-        config.get("services", {}).get("pocket_id", {}).get("static_api_key_ref", "")
-    ).strip()
-    if not env_key:
-        raise ValueError("services.pocket_id.static_api_key_ref must be configured in product.yaml")
-    return _required_secret(env_key)
-
-
-def _ensure_encryption_key(config: Dict[str, Any]) -> str:
-    env_key = str(
-        config.get("services", {}).get("pocket_id", {}).get("encryption_key_ref", "")
-    ).strip()
-    if not env_key:
-        raise ValueError("services.pocket_id.encryption_key_ref must be configured in product.yaml")
-    current = (get_env_value(env_key) or "").strip()
-    if current:
-        return current
-    generated = secrets.token_urlsafe(32)
-    save_env_value_secure(env_key, generated)
-    return generated
-
-
-def _build_env_file(config: Dict[str, Any]) -> str:
-    network = config.get("network", {})
-    bind_host = str(network.get("bind_host", "")).strip()
-    if not bind_host:
-        raise ValueError("product network.bind_host must be configured")
-    return "\n".join(
-        [
-            f"APP_URL={resolve_product_urls(config)['issuer_url']}",
-            f"ENCRYPTION_KEY={_ensure_encryption_key(config)}",
-            f"STATIC_API_KEY={_ensure_static_api_key(config)}",
-            f"HOST={bind_host}",
-            "PORT=1411",
-            "",
-        ]
-    )
-
-
-def _build_compose_spec(config: Dict[str, Any]) -> Dict[str, Any]:
-    network = config.get("network", {})
-    services_cfg = config.get("services", {}).get("pocket_id", {})
-    bind_host = str(network.get("bind_host", "")).strip()
-    if not bind_host:
-        raise ValueError("product network.bind_host must be configured")
-    upstream_port = int(services_cfg.get("upstream_port", 19141))
-    if upstream_port <= 0:
-        raise ValueError("services.pocket_id.upstream_port must be a positive integer")
-    container_name = str(services_cfg.get("container_name", "")).strip()
-    if not container_name:
-        raise ValueError("services.pocket_id.container_name must be configured")
-    data_root = get_pocket_id_data_root().as_posix()
-    image = str(services_cfg.get("image", "")).strip()
-    if not image:
-        raise ValueError("services.pocket_id.image must be configured")
-    service: Dict[str, Any] = {
-        "image": image,
-        "container_name": container_name,
-        "restart": "unless-stopped",
-        "env_file": [get_pocket_id_env_path().as_posix()],
-        "ports": [f"127.0.0.1:{upstream_port}:1411"],
-        "volumes": [f"{data_root}:/app/data"],
-        "healthcheck": {
-            "test": ["CMD", "/app/pocket-id", "healthcheck"],
-            "interval": "90s",
-            "timeout": "5s",
-            "retries": 2,
-            "start_period": "10s",
-        },
-    }
-    return {"services": {"pocket-id": service}}
 
 
 def initialize_product_stack(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -701,93 +601,6 @@ def ensure_product_stack_started(config: Dict[str, Any] | None = None) -> subpro
     return result if result is not None else subprocess.CompletedProcess([], 0, "", "")
 
 
-def _wait_for_pocket_id_ready(config: Dict[str, Any], timeout_seconds: float = _READY_TIMEOUT_SECONDS) -> None:
-    health_url = _pocket_id_upstream_base_url(config) + "/.well-known/openid-configuration"
-    deadline = time.time() + timeout_seconds
-    last_error: Exception | None = None
-    while time.time() < deadline:
-        try:
-            response = httpx.get(health_url, timeout=5.0)
-            if response.status_code == 200:
-                return
-            last_error = RuntimeError(f"Pocket ID health endpoint returned {response.status_code}")
-        except Exception as exc:  # pragma: no cover - exercised via retry path
-            last_error = exc
-        time.sleep(1.0)
-    raise RuntimeError(f"Pocket ID did not become ready at {health_url}: {last_error}")
-
-
-def _api_headers(config: Dict[str, Any]) -> Dict[str, str]:
-    return {"X-API-Key": _ensure_static_api_key(config)}
-
-
-def _oidc_client_payload(config: Dict[str, Any]) -> Dict[str, Any]:
-    urls = resolve_product_urls(config)
-    brand_name = str(config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip() or "Hermes Core"
-    return {
-        "id": str(config.get("auth", {}).get("client_id", "hermes-core")).strip() or "hermes-core",
-        "name": brand_name,
-        "callbackURLs": [urls["oidc_callback_url"]],
-        "logoutCallbackURLs": [urls["app_base_url"]],
-        "isPublic": False,
-        "pkceEnabled": True,
-        "requiresReauthentication": False,
-        "credentials": {"federatedIdentities": []},
-        "launchURL": urls["app_base_url"],
-        "hasLogo": False,
-        "hasDarkLogo": False,
-        "isGroupRestricted": False,
-    }
-
-
-def _request_json(
-    client: httpx.Client,
-    method: str,
-    url: str,
-    *,
-    expected_status: int,
-    **kwargs: Any,
-) -> Dict[str, Any]:
-    response = client.request(method, url, **kwargs)
-    if response.status_code != expected_status:
-        raise RuntimeError(f"{method} {url} failed with {response.status_code}: {response.text}")
-    return response.json() if response.content else {}
-
-
-def _ensure_signup_mode_with_token(config: Dict[str, Any]) -> None:
-    base_url = _pocket_id_upstream_base_url(config)
-    headers = _api_headers(config)
-    with httpx.Client(base_url=base_url, headers=headers, timeout=10.0) as client:
-        current_response = client.get("/api/application-configuration/all")
-        if current_response.status_code != 200:
-            raise RuntimeError(
-                f"GET {base_url}/api/application-configuration/all failed with "
-                f"{current_response.status_code}: {current_response.text}"
-            )
-        rows = current_response.json() if current_response.content else []
-        if not isinstance(rows, list):
-            raise RuntimeError("Pocket ID returned invalid application configuration payload")
-        payload: Dict[str, str] = {}
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            key = str(row.get("key", "")).strip()
-            if not key:
-                continue
-            payload[key] = str(row.get("value", ""))
-        if not payload:
-            raise RuntimeError("Pocket ID application configuration payload was empty")
-        if payload.get("allowUserSignups") == "withToken":
-            return
-        payload["allowUserSignups"] = "withToken"
-        update_response = client.put("/api/application-configuration", json=payload)
-        if update_response.status_code != 200:
-            raise RuntimeError(
-                f"PUT {base_url}/api/application-configuration failed with "
-                f"{update_response.status_code}: {update_response.text}"
-            )
-
-
 def bootstrap_product_oidc_client(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
     product_config = initialize_product_stack(config or load_product_config())
     ensure_product_stack_started(product_config)
@@ -831,17 +644,6 @@ def load_first_admin_enrollment_state() -> Dict[str, Any] | None:
     if not state_path.exists():
         return None
     return json.loads(state_path.read_text(encoding="utf-8"))
-
-
-def _first_admin_bootstrap_mode(config: Dict[str, Any]) -> str:
-    bootstrap_cfg = config.get("bootstrap", {})
-    forced_mode = str(bootstrap_cfg.get("first_admin_bootstrap_mode", "")).strip().lower()
-    if forced_mode in {"token", "native_setup"}:
-        return forced_mode
-    # Conservative default: native Pocket ID setup flow.
-    # We only switch to token mode when explicitly enabled and supported.
-    tokenized_supported = bool(bootstrap_cfg.get("tokenized_first_admin_supported", False))
-    return "token" if tokenized_supported else "native_setup"
 
 
 def mark_first_admin_bootstrap_completed(tailscale_login: str | None = None) -> Dict[str, Any] | None:
