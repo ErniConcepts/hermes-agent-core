@@ -92,6 +92,24 @@ def _resolve_workspace_path(root: Path, relative_path: str | None) -> tuple[Path
     return target, normalized
 
 
+def resolve_workspace_file(
+    user: dict[str, Any],
+    *,
+    path: str,
+    config: dict[str, Any] | None = None,
+) -> tuple[Path, str]:
+    product_config = config or load_product_config()
+    root = _workspace_root_for_user(user, product_config)
+    target, normalized = _resolve_workspace_path(root, path)
+    if not normalized:
+        raise ValueError("Workspace download path must not be empty")
+    if not target.exists():
+        raise ValueError("Workspace path does not exist")
+    if not target.is_file():
+        raise ValueError("Workspace download path must refer to a file")
+    return target, normalized
+
+
 def _workspace_usage_bytes(root: Path) -> int:
     total = 0
     if not root.exists():

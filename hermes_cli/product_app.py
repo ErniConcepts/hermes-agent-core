@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -54,6 +54,7 @@ from hermes_cli.product_workspace import (
     create_workspace_folder,
     delete_workspace_path,
     get_workspace_state,
+    resolve_workspace_file,
     store_workspace_file,
 )
 
@@ -698,6 +699,15 @@ def _register_workspace_routes(app: FastAPI) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _workspace_response_payload(payload)
+
+    @app.get("/api/workspace/download")
+    def workspace_download(request: Request, path: str) -> FileResponse:
+        user = _require_product_user(request)
+        try:
+            target, _normalized = resolve_workspace_file(user, path=path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return FileResponse(target, filename=target.name, media_type="application/octet-stream")
 
     @app.post("/api/workspace/folders", response_model=ProductWorkspaceResponse)
     def workspace_create_folder(request: Request, payload: ProductCreateWorkspaceFolderRequest) -> ProductWorkspaceResponse:

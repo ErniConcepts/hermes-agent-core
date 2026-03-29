@@ -2,6 +2,7 @@ from starlette.testclient import TestClient
 
 from hermes_cli.product_oidc import ProductOIDCClientSettings, ProductOIDCProviderMetadata
 from hermes_cli.product_users import create_product_user_with_signup
+from hermes_cli.product_runtime import _workspace_root
 
 
 def _product_config():
@@ -278,3 +279,31 @@ def test_product_app_rejects_first_admin_without_bootstrap_link(tmp_path, monkey
     session = client.get("/api/auth/session").json()
     assert session["authenticated"] is False
     assert session["notice"] == "Open the one-time bootstrap link from setup to create the first admin."
+
+
+def test_product_app_downloads_workspace_file_for_signed_in_user(tmp_path, monkeypatch):
+    claims = {
+        "sub": "ts-admin-sub",
+        "email": "admin@example.com",
+        "preferred_username": "admin@example.com",
+        "name": "Admin Example",
+    }
+    _configure_app(monkeypatch, tmp_path, claims)
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    client.get("/bootstrap/bootstrap-token-123", follow_redirects=False)
+    client.get("/api/auth/login", follow_redirects=False)
+    client.get("/api/auth/oidc/callback?code=ok&state=state-123", follow_redirects=False)
+    session = client.get("/api/auth/session").json()
+    user_id = session["user"]["sub"]
+    workspace_root = _workspace_root(_product_config(), user_id)
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    target = workspace_root / "notes.txt"
+    target.write_text("tailnet download ok", encoding="utf-8")
+
+    response = client.get("/api/workspace/download", params={"path": "notes.txt"})
+
+    assert response.status_code == 200
+    assert response.content == b"tailnet download ok"
+    assert "attachment; filename=\"notes.txt\"" in response.headers["content-disposition"]
