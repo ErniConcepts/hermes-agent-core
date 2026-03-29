@@ -7,9 +7,6 @@ from hermes_cli.product_stack import (
     _build_tsidp_compose_spec,
     _build_tsidp_env_file,
     bootstrap_first_admin_enrollment,
-    enable_tailnet_activation,
-    disable_tailnet_activation,
-    get_tailnet_activation_state_path,
     get_tsidp_compose_path,
     get_tsidp_env_path,
     initialize_product_stack,
@@ -36,7 +33,6 @@ def test_resolve_product_urls_returns_tailnet_only_values(tmp_path, monkeypatch)
 
     assert urls["app_base_url"] == "https://device.tail5fd7a5.ts.net"
     assert urls["issuer_url"] == "https://idp.tail5fd7a5.ts.net"
-    assert urls["tailnet_active"] is True
 
 
 def test_initialize_product_stack_writes_tsidp_env_and_compose(tmp_path, monkeypatch):
@@ -62,22 +58,6 @@ def test_build_tsidp_env_file_uses_current_contract(tmp_path, monkeypatch):
     assert "TAILSCALE_USE_WIP_CODE=1" in rendered
     assert "TSIDP_LOCAL_PORT=8080" in rendered
     assert "TS_AUTHKEY=tskey-auth-kv" in rendered
-
-
-def test_enable_and_disable_tailnet_activation_persist_state(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    monkeypatch.setattr("hermes_cli.product_stack.ensure_product_tsidp_started", lambda config=None: None)
-    monkeypatch.setattr("hermes_cli.product_stack.ensure_product_tailnet_started", lambda config=None, include_app=True: [])
-    monkeypatch.setattr("hermes_cli.product_stack.ensure_product_tailnet_stopped", lambda config=None: [])
-    monkeypatch.setattr("hermes_cli.product_stack.load_product_config", _config)
-
-    active = enable_tailnet_activation()
-    inactive = disable_tailnet_activation()
-
-    assert active["status"] == "active"
-    assert inactive["status"] == "inactive"
-    assert get_tailnet_activation_state_path().exists()
-
 
 def test_bootstrap_first_admin_enrollment_creates_one_time_link(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))

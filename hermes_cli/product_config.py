@@ -75,7 +75,6 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         "first_admin_username": "",
         "first_admin_display_name": "Administrator",
         "first_admin_email": "",
-        "first_admin_tailscale_login": "",
     },
     "services": {
         "tsidp": {

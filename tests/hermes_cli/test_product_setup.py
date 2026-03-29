@@ -10,7 +10,7 @@ def test_setup_product_bootstrap_identity_does_not_require_manual_login_value(tm
     setup_product_bootstrap_identity()
 
     config = load_product_config()
-    assert config["bootstrap"]["first_admin_tailscale_login"] == ""
+    assert config["bootstrap"]["first_admin_display_name"] == "Administrator"
 
 
 def test_configure_tsidp_client_credentials_saves_client_values(tmp_path, monkeypatch):

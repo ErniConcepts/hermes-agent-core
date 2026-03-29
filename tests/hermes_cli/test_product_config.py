@@ -26,7 +26,7 @@ def test_initialize_product_config_file_creates_tailnet_bootstrap_defaults(tmp_p
 
     config = initialize_product_config_file()
 
-    assert config["bootstrap"]["first_admin_tailscale_login"] == ""
+    assert config["bootstrap"]["first_admin_display_name"] == "Administrator"
     assert get_product_storage_root().exists()
     assert get_product_users_root().exists()
 
