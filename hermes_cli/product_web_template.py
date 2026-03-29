@@ -111,29 +111,6 @@ PAGE_TEMPLATE = """<!doctype html>
 </div>
 </section>
 
-<section class="popup shell-card" id="accountCard" hidden>
-<div class="popup-inner">
-<div class="section-head">
-<div>
-<p class="eyebrow">Account</p>
-<h2>Tailscale Access</h2>
-</div>
-</div>
-<p class="lead small">Your product account is authenticated directly by your Tailscale identity on this branch.</p>
-<div id="accountMessage" class="message"></div>
-<section class="shell admin-token-shell">
-<div class="token-row">
-<span class="table-badge is-success">Your current Tailscale Identity:</span>
-<code class="token-link" id="accountTailnetLogin"></code>
-</div>
-<div class="token-row">
-<span class="table-badge">Tailnet app URL</span>
-<code class="token-link" id="accountTailnetUrl"></code>
-</div>
-</section>
-</div>
-</section>
-
 <section class="popup shell-card" id="adminCard" hidden>
 <div class="popup-inner">
 <div class="section-head">
@@ -142,28 +119,9 @@ PAGE_TEMPLATE = """<!doctype html>
 <h2>User Management</h2>
 </div>
 </div>
-<p class="lead small">Invite users by their Tailscale login or email. Only invited Tailscale identities can claim an account.</p>
-<section class="shell admin-token-shell" id="adminNetworkCard" hidden>
-<div class="section-head compact-head">
-<div>
-<p class="eyebrow">Network</p>
-<h2>Tailnet Access</h2>
-</div>
-</div>
-<p class="lead small" id="adminNetworkLead">Tailnet exposure controls whether the app is published through Tailscale Serve.</p>
-<div id="adminNetworkMessage" class="message"></div>
-<div class="token-row" id="adminNetworkTailnetRow" hidden>
-<code class="token-link" id="adminNetworkTailnetUrl"></code>
-<button class="button" id="adminTailnetActivateButton" type="button">Enable Tailnet</button>
-<button class="button secondary-button" id="adminTailnetDisableButton" type="button" hidden>Disable Tailnet</button>
-</div>
-</section>
+<p class="lead small">Create one-time invite links. The first user who opens a link on your tailnet and signs in with Tailscale claims that account.</p>
 <div class="admin-layout">
 <form class="admin-form shell" id="adminCreateUserForm">
-<label class="field full">
-<span>Tailscale login or email</span>
-<input id="adminTailscaleLoginInput" type="text" placeholder="alice@example.com" required>
-</label>
 <label class="field full">
 <span>Display name</span>
 <input id="adminDisplayNameInput" type="text" placeholder="Alice Example">
@@ -180,7 +138,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <h2>One-time claim URL</h2>
 </div>
 </div>
-<p class="lead small">The link is valid for one claim and currently uses a seven-day lifetime.</p>
+<p class="lead small">The link is valid for one claim for seven days. Open it on a device in the same tailnet and sign in with Tailscale to claim the account.</p>
 <div class="token-row">
 <code class="token-link" id="adminSignupTokenUrl"></code>
 <button class="button secondary-button" id="adminCopySignupLinkButton" type="button">Copy</button>
@@ -190,7 +148,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <div class="table-shell">
 <table>
 <thead>
-<tr><th>User</th><th>Tailscale login</th><th>Status</th><th>Action</th></tr>
+<tr><th>User</th><th>Claimed By</th><th>Status</th><th>Action</th></tr>
 </thead>
 <tbody id="adminUsersTable"><tr><td colspan="4" class="muted-cell">No users loaded yet.</td></tr></tbody>
 </table>

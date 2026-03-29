@@ -15,17 +15,13 @@ def test_create_product_user_with_signup_creates_pending_invite(tmp_path, monkey
         lambda config=None: {"app_base_url": "https://device.tail5fd7a5.ts.net"},
     )
 
-    created = create_product_user_with_signup(
-        username="alice@example.com",
-        display_name="Alice Example",
-        email="alice@example.com",
-    )
+    created = create_product_user_with_signup(display_name="Alice Example")
 
     assert created.user is None
     assert created.signup.signup_url.startswith("https://device.tail5fd7a5.ts.net/invite/")
     pending = list_pending_product_signup_invites()
     assert len(pending) == 1
-    assert pending[0].tailscale_login == "alice@example.com"
+    assert pending[0].tailscale_login == ""
 
 
 def test_claim_product_user_from_invite_creates_bound_user(tmp_path, monkeypatch):
@@ -34,11 +30,7 @@ def test_claim_product_user_from_invite_creates_bound_user(tmp_path, monkeypatch
         "hermes_cli.product_users.resolve_product_urls",
         lambda config=None: {"app_base_url": "https://device.tail5fd7a5.ts.net"},
     )
-    created = create_product_user_with_signup(
-        username="alice@example.com",
-        display_name="Alice Example",
-        email="alice@example.com",
-    )
+    created = create_product_user_with_signup(display_name="Alice Example")
 
     user = claim_product_user_from_invite(
         token=created.signup.token,

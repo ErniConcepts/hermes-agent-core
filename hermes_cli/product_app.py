@@ -117,7 +117,7 @@ class ProductAdminEntry(BaseModel):
 
 
 class ProductCreateUserRequest(BaseModel):
-    tailscale_login: str
+    tailscale_login: str | None = None
     display_name: str | None = None
 
 

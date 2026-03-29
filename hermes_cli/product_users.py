@@ -37,7 +37,7 @@ class ProductSignupToken(BaseModel):
     signup_url: str
     ttl_seconds: int
     usage_limit: int = 1
-    tailscale_login: str
+    tailscale_login: str = ""
 
 
 class ProductCreatedUser(BaseModel):
@@ -49,7 +49,7 @@ class ProductInviteRecord(BaseModel):
     invite_id: str
     token: str
     signup_url: str
-    tailscale_login: str
+    tailscale_login: str = ""
     display_name: str
     created_at: int
     expires_at: int
@@ -235,20 +235,19 @@ def create_product_user_with_signup(
     config: dict[str, Any] | None = None,
 ) -> ProductCreatedUser:
     tailscale_login = _normalize_tailscale_login(email or username)
-    if not tailscale_login:
-        raise ValueError("A Tailscale login or email is required for the invite")
-    if get_product_user_by_tailscale_login(tailscale_login):
+    if tailscale_login and get_product_user_by_tailscale_login(tailscale_login):
         raise ValueError("This Tailscale account already has a product user")
-    if any(inv.status == "pending" and _normalize_tailscale_login(inv.tailscale_login) == tailscale_login for inv in _active_invites()):
+    if tailscale_login and any(inv.status == "pending" and _normalize_tailscale_login(inv.tailscale_login) == tailscale_login for inv in _active_invites()):
         raise ValueError("This Tailscale account already has a pending invite")
     token = secrets.token_urlsafe(24)
     created_at = int(time.time())
+    invite_label = _normalize_display_name(display_name, tailscale_login or "user")
     invite = ProductInviteRecord(
         invite_id=f"invite-{secrets.token_hex(8)}",
         token=token,
         signup_url=_invite_signup_url(token, config=config),
         tailscale_login=tailscale_login,
-        display_name=_normalize_display_name(display_name, tailscale_login),
+        display_name=invite_label,
         created_at=created_at,
         expires_at=created_at + _DEFAULT_INVITE_TOKEN_TTL,
     )
@@ -289,8 +288,6 @@ def claim_product_user_from_invite(
             break
     if match is None or match.status != "pending":
         raise ValueError("Invite is invalid or expired")
-    if _normalize_tailscale_login(match.tailscale_login) != normalized_login:
-        raise ValueError("This invite is not assigned to the current Tailscale account")
     user = ProductUser(
         id=f"user-{secrets.token_hex(8)}",
         username=_username_from_tailscale_login(normalized_login),
@@ -304,5 +301,6 @@ def claim_product_user_from_invite(
     _save_user(user)
     match.status = "claimed"
     match.claimed_by_user_id = user.id
+    match.tailscale_login = normalized_login
     _save_invites(invites)
     return user

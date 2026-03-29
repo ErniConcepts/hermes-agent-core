@@ -204,11 +204,7 @@ def test_product_app_claims_pending_invite_on_oidc_callback(tmp_path, monkeypatc
         "/api/auth/logout",
         headers={"Origin": "https://device.tail5fd7a5.ts.net", "X-Hermes-CSRF-Token": client.get("/api/auth/session").json()["csrf_token"]},
     )
-    invite = create_product_user_with_signup(
-        username="bob@example.com",
-        display_name="Bob Example",
-        email="bob@example.com",
-    ).signup
+    invite = create_product_user_with_signup(display_name="Bob Example").signup
     invited_claims = {
         "sub": "ts-user-sub",
         "email": "bob@example.com",
@@ -229,7 +225,7 @@ def test_product_app_claims_pending_invite_on_oidc_callback(tmp_path, monkeypatc
     assert session["user"]["tailscale_login"] == "bob@example.com"
 
 
-def test_product_app_admin_creates_invite_link_for_tailscale_login(tmp_path, monkeypatch):
+def test_product_app_admin_creates_generic_invite_link(tmp_path, monkeypatch):
     claims = {
         "sub": "ts-admin-sub",
         "email": "admin@example.com",
@@ -257,7 +253,7 @@ def test_product_app_admin_creates_invite_link_for_tailscale_login(tmp_path, mon
 
     response = client.post(
         "/api/admin/users",
-        json={"tailscale_login": "alice@example.com", "display_name": "Alice Example"},
+        json={"display_name": "Alice Example"},
     )
 
     assert response.status_code == 200
