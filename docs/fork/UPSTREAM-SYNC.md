@@ -49,8 +49,8 @@ And smoke-check:
 
 Keep fork behavior when upstream changes would break one of these product guarantees:
 
-- local multi-user product onboarding
-- auth-origin correctness (localhost/tailscale contract)
+- Tailnet-only multi-user product onboarding
+- `tsidp`-only auth for the product web surface
 - runtime isolation and user workspace boundaries
 - narrow product runtime/app API surface
 - clean setup boundary:

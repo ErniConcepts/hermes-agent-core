@@ -2,29 +2,30 @@
 
 `hermes-core` is a fork of [Hermes Agent](https://github.com/NousResearch/hermes-agent) focused on one use case:
 
-run a single local device that multiple people on your network can access, each with their own personalized agent session.
+run a single local device that multiple people can access through the same Tailscale tailnet, each with their own personalized agent session.
 
 It keeps upstream Hermes as the core, and adds:
 
-- multi-user web access on a local host
-- Pocket ID authentication
+- multi-user web access through a Tailnet URL
+- `tsidp` authentication through Tailscale OIDC
 - per-user isolated runtimes and workspaces
 - simple install/setup flow for deployment on Linux
-- optional Tailscale exposure for remote tailnet access
+- invite-based multi-user onboarding on the tailnet
 
 ## What This Fork Adds
 
 The deployment layer lives primarily in `hermes_cli/product_*` and includes:
 
 - `hermes-core install`
-  - prepares a Linux host for local multi-user access
+  - prepares a Linux host for Tailnet-only multi-user access
   - validates or installs Docker / `runsc` prerequisites on supported systems
-  - installs user-level app/auth services
+  - installs the user-level app service and bundled `tsidp`
 - `hermes-core setup`
   - configures deployment settings such as:
-    - public host
-    - optional Tailscale mode
-    - Pocket ID bootstrap
+    - Tailscale tailnet/device detection
+    - bundled `tsidp` auth key
+    - `tsidp` OIDC client credentials
+    - first-admin bootstrap link
     - workspace limits
 - `hermes-core uninstall`
   - removes deployment data and services
@@ -54,10 +55,11 @@ Current target:
 
 Current deployment assumptions:
 
-- Docker is used for Pocket ID and per-user runtimes
+- Docker is used for bundled `tsidp` and per-user runtimes
 - `runsc` is the preferred runtime isolation path
-- Pocket ID is the local auth provider
-- Tailscale is optional and, when enabled, becomes the single canonical browser/login origin
+- Tailscale is required
+- the Tailnet URL is the only supported browser/login origin
+- `tsidp` is the only product auth provider
 
 ## Quick Install
 
@@ -99,25 +101,33 @@ Typical install flow:
 
 1. run the installer as your normal user
 2. answer the product questions:
-   - public host
-   - optional Tailscale exposure
+   - Tailscale auth key
+   - `tsidp` hostname
    - optional SOUL template path
    - per-user workspace limit
-3. let `hermes-core install` start Pocket ID and the app/auth services
-4. open the first-admin sign-up URL from the setup summary
-5. create the first admin account in Pocket ID
+3. let `hermes-core install` start the bundled `tsidp` service and app service
+4. open the `tsidp` URL shown by setup and create a Hermes Core OIDC client
+5. paste the `tsidp` client id/secret back into setup
+6. open the one-time first-admin bootstrap URL from the setup summary
+7. sign in with Tailscale to create the first admin account
 6. configure Hermes itself with the upstream CLI:
    - `hermes setup model`
    - `hermes setup tools`
    - optional: `hermes setup gateway`
    - optional: `hermes setup agent`
-7. sign into the app and start using personalized agent sessions
+7. sign into the Tailnet app URL and start using personalized agent sessions
 
-For LAN/public host selection:
+This branch does not expose a local/LAN login surface:
 
-- `localhost` is always safe for a local-only install
-- `.local` or DNS hostnames are accepted only if they resolve to the current machine
-- if a hostname resolves somewhere else on your network, setup will reject it and ask again because auth/session refresh would break
+- users must be in the same Tailscale tailnet
+- the Tailnet URL is the only supported app URL
+- invites are claimed on that Tailnet URL after Tailscale sign-in
+
+If you enable Tailscale exposure and setup fails with `serve config denied`, grant your user permission to manage `tailscale serve` once and rerun the install/setup command:
+
+```bash
+sudo tailscale set --operator="$USER"
+```
 
 The first admin can be created before model configuration exists. In that state, auth works but chat runtimes will not answer until `hermes setup model` has been completed.
 
@@ -127,7 +137,8 @@ Useful commands:
 hermes-core install
 hermes-core install --skip-setup
 hermes-core setup
-hermes-core setup network
+hermes-core setup tailscale
+hermes-core setup identity
 hermes-core setup bootstrap
 hermes setup model
 hermes setup tools
@@ -185,10 +196,10 @@ The fork policy is to prefer sidecar adaptation over modifying upstream Hermes f
 Current high-level runtime flow:
 
 1. `hermes-core install` prepares host prerequisites and installs product services.
-2. `hermes-core setup` writes `~/.hermes/product.yaml` and bootstraps Pocket ID + OIDC client.
+2. `hermes-core setup` writes `~/.hermes/product.yaml`, starts bundled `tsidp`, and records its OIDC client credentials.
 3. `hermes setup ...` configures Hermes-native model/tools/gateway/agent behavior in `~/.hermes/config.yaml`.
 4. App service (`hermes_cli/product_app.py`) serves auth/session, chat proxy, workspace APIs, and narrow admin APIs.
-5. Pocket ID provides identity and signup-token onboarding; the app stays an OIDC client.
+5. `tsidp` provides identity through Tailscale OIDC; the app stays an OIDC client.
 6. Per-user runtime containers are launched by runtime orchestration (`hermes_cli/product_runtime.py` + `hermes_cli/product_runtime_service.py`).
 7. Runtime launch settings are derived from the main Hermes config, while product infrastructure comes from `product.yaml`.
 8. User workspace files are written to user-scoped storage and live-mounted into the corresponding runtime.
@@ -197,7 +208,7 @@ Primary runtime surfaces:
 
 - Product app HTTP surface (browser-facing)
 - Product runtime HTTP surface (`/healthz`, `/runtime/session`, `/runtime/turn`, `/runtime/turn/stream`)
-- Pocket ID service (provider-facing, proxied/controlled by product layer)
+- Bundled `tsidp` service (provider-facing)
 
 ## Fork File Map
 

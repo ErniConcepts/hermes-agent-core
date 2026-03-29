@@ -4,7 +4,7 @@ This is the implementation-facing contract for the current `hermes-core` fork.
 
 ## Product Goal
 
-Deliver a local, multi-user Hermes distribution that can be installed and operated with product-style workflows while keeping upstream Hermes internals largely intact.
+Deliver a Tailnet-only, multi-user Hermes distribution that can be installed and operated with product-style workflows while keeping upstream Hermes internals largely intact.
 
 ## Primary Commands
 
@@ -14,7 +14,7 @@ Deliver a local, multi-user Hermes distribution that can be installed and operat
   - runs setup unless explicitly skipped
 - `hermes-core setup`
   - configures product network/auth/identity/workspace settings only
-  - bootstraps Pocket ID + OIDC client
+  - bootstraps bundled `tsidp` + OIDC client
   - starts app/runtime stack
 - `hermes-core uninstall`
   - removes product-managed data/services
@@ -32,8 +32,9 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Canonical product config: `~/.hermes/product.yaml`
 - Generic Hermes config remains separate (`~/.hermes/config.yaml`).
 - Product config controls:
-  - host/origin settings
-  - Pocket ID integration
+  - Tailscale/tailnet settings
+  - `tsidp` integration
+  - bootstrap/invite auth state
   - workspace quota
   - runtime container infrastructure
 - Hermes config controls:
@@ -60,31 +61,28 @@ Hermes-native configuration remains on the upstream CLI surface:
 
 ## Auth and Access Contract
 
-- Pocket ID is the bundled auth provider.
+- `tsidp` is the bundled and only auth provider.
 - Product app is an OIDC client.
-- In Tailscale mode, Tailnet URL is canonical browser/login origin.
-- Native first-admin bootstrap is Pocket ID setup flow.
+- Tailnet URL is the only supported browser/login origin.
+- First admin bootstrap uses a one-time bootstrap link created during `hermes-core setup`.
 - First admin bootstrap can complete before any Hermes model is configured.
-- Post-bootstrap, setup exposure is blocked through product auth ingress.
+- Invited users claim accounts through one-time invite links on the Tailnet URL.
+- No localhost or LAN login surface is part of the product contract.
 
 ## Admin User Management Contract
 
-- Admin issues signup links (token-based), not pre-created user accounts.
-- Admin list is a merged view of:
-  - real Pocket ID users
-  - pending signup placeholders (`User`, `No signup`)
-- Placeholder lifecycle:
-  - appears when token is created
-  - disappears when token is used or expires
-  - refresh-safe due server-side reconciliation
+- Product users are fork-managed records keyed to Tailscale identity.
+- First admin is created by the one-time bootstrap link and first successful `tsidp` login through it.
+- Admin issues one-time invite links, not pre-created passwords or local accounts.
+- The first Tailscale identity that opens a valid invite link and completes `tsidp` login claims that account.
+- Pending invites are shown as placeholders until claimed or expired.
 
 ## Security/Isolation Contract
 
 - Runtime access remains user-scoped.
 - No LAN exposure for internal runtime control ports.
 - Browser-side mutations require both same-origin validation and CSRF validation.
-- Pocket ID proxying must not trust client-supplied forwarded headers.
-- Signup token material must stay server-side; admin placeholder IDs must not expose raw tokens.
+- `tsidp` tokens and invite/bootstrap token material must stay server-side where possible; admin placeholder IDs must not expose raw tokens.
 - Product-side adaptation is preferred over upstream Hermes patching.
 - Keep browser admin scope narrow (users/invites/deactivate), not full platform config.
 - Current control plane is still host-installed and should be treated as an interim architecture.
@@ -104,7 +102,7 @@ Target architecture:
   - tool policy
   - runtime defaults/templates
 - Per-user runtimes remain separate containers derived from that server-managed configuration.
-- Pocket ID and the product app continue as separate services with explicit network boundaries.
+- `tsidp` and the product app continue as separate services with explicit network boundaries.
 
 Why this is preferred over using the first admin runtime as the template/source of truth:
 
