@@ -159,7 +159,7 @@ def test_get_product_runtime_session_proxies_runtime(monkeypatch):
         seen["headers"] = kwargs.get("headers", {})
         return _Response()
 
-    monkeypatch.setattr("hermes_cli.product_runtime.httpx.get", _fake_get)
+    monkeypatch.setattr("hermes_cli.product_runtime_container.httpx.get", _fake_get)
 
     payload = get_product_runtime_session(_runtime_user())
     assert payload["session_id"] == "product_admin_123"
@@ -214,8 +214,8 @@ def test_wait_for_runtime_health_retries_until_ok(monkeypatch):
             raise RuntimeError("connection refused")
         return _Response()
 
-    monkeypatch.setattr("hermes_cli.product_runtime.httpx.get", _fake_get)
-    monkeypatch.setattr("hermes_cli.product_runtime.time.sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("hermes_cli.product_runtime_container.httpx.get", _fake_get)
+    monkeypatch.setattr("hermes_cli.product_runtime_container.time.sleep", lambda *_args, **_kwargs: None)
 
     _wait_for_runtime_health(record, timeout_seconds=2.0, interval_seconds=0.01)
 
@@ -363,7 +363,7 @@ def test_docker_run_command_adds_user_mapping_when_available(monkeypatch):
         auth_token="runtime-token",
         status="running",
     )
-    monkeypatch.setattr("hermes_cli.product_runtime._runtime_container_user", lambda _record: "1000:1000")
+    monkeypatch.setattr("hermes_cli.product_runtime_container.runtime_container_user", lambda _record: "1000:1000")
 
     command = _docker_run_command(record, config)
 
@@ -417,7 +417,7 @@ def test_stage_product_runtime_requires_ready_hermes_model_provider(tmp_path, mo
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _configure_hermes_runtime()
     monkeypatch.setattr(
-        "hermes_cli.product_runtime.resolve_runtime_provider",
+        "hermes_cli.product_runtime_staging.resolve_runtime_provider",
         lambda requested=None: {"provider": "custom", "base_url": "", "api_key": "", "api_mode": "chat_completions"},
     )
 
@@ -482,7 +482,7 @@ def test_stage_product_runtime_migrates_legacy_username_runtime(tmp_path, monkey
         ).model_dump_json(indent=2),
         encoding="utf-8",
     )
-    monkeypatch.setattr("hermes_cli.product_runtime._remove_container_if_exists", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("hermes_cli.product_runtime_container.remove_container_if_exists", lambda *_args, **_kwargs: None)
 
     record = stage_product_runtime(_runtime_user(), config=config)
 
