@@ -8,6 +8,7 @@ from hermes_cli.config import ensure_hermes_home
 from hermes_cli.product_config import initialize_product_config_file
 from hermes_cli.product_setup_bootstrap import (
     clear_terminal_screen as _clear_terminal_screen,
+    complete_first_admin_bootstrap,
     configure_tsidp_client_credentials as _configure_tsidp_client_credentials,
     print_install_handoff as _print_install_handoff,
     print_product_setup_summary as _print_product_setup_summary,
@@ -59,8 +60,8 @@ def run_product_setup_wizard(args: Any) -> None:
         elif section == "storage":
             setup_product_storage()
         elif section == "bootstrap":
-            setup_product_bootstrap_identity()
-            _run_bootstrap_section()
+            force_new_bootstrap = setup_product_bootstrap_identity()
+            _run_bootstrap_section(force_new_bootstrap=force_new_bootstrap)
         else:
             raise SystemExit(f"Unknown product setup section: {section}")
         _print_product_setup_summary()
@@ -77,8 +78,8 @@ def run_product_setup_wizard(args: Any) -> None:
     print_info("Setup will guide you through the full auth path in order.")
     print()
     setup_product_tailscale()
-    setup_product_bootstrap_identity()
-    _run_bootstrap_section()
+    force_new_bootstrap = setup_product_bootstrap_identity()
+    _run_bootstrap_section(force_new_bootstrap=force_new_bootstrap)
     setup_product_identity()
     setup_product_storage()
     _print_product_setup_summary()

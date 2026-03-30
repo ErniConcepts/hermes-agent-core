@@ -9,11 +9,12 @@ from hermes_cli.product_install import ensure_product_app_service_started, produ
 from hermes_cli.product_stack import (
     bootstrap_first_admin_enrollment,
     ensure_product_stack_started,
+    first_admin_bootstrap_completed,
     initialize_product_stack,
     load_first_admin_enrollment_state,
     resolve_product_urls,
 )
-from hermes_cli.setup import print_header, print_info, print_warning, prompt
+from hermes_cli.setup import print_header, print_info, print_success, print_warning, prompt
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -62,6 +63,29 @@ def configure_tsidp_client_credentials() -> None:
     save_product_config(product_config)
 
 
+def complete_first_admin_bootstrap(state: dict[str, object]) -> dict[str, object]:
+    current_state = dict(state)
+    if first_admin_bootstrap_completed(current_state):
+        return current_state
+
+    while True:
+        print()
+        print_header("Open Bootstrap Link")
+        print_info("Open the one-time bootstrap URL below in your browser.")
+        print_info("Sign in with Tailscale there to create the first admin account.")
+        print_info(f"  Bootstrap URL: {current_state['setup_url']}")
+        prompt("Press Enter after the bootstrap link shows you as signed in")
+        refreshed_state = load_first_admin_enrollment_state() or current_state
+        if first_admin_bootstrap_completed(refreshed_state):
+            claimed_login = str(refreshed_state.get("tailscale_login", "")).strip()
+            if claimed_login:
+                print_success(f"First admin bootstrap completed for {claimed_login}.")
+            else:
+                print_success("First admin bootstrap completed.")
+            return refreshed_state
+        print_warning("Bootstrap is not complete yet. Finish the sign-in flow, then try again.")
+
+
 def print_product_setup_summary() -> None:
     product_config = load_product_config()
     hermes_home = get_hermes_home()
@@ -81,21 +105,38 @@ def print_product_setup_summary() -> None:
     print_info(f"Tailnet app URL:         {urls['app_base_url']}")
     print_info(f"Tailnet OIDC issuer:     {urls['issuer_url']}")
     print_info(f"Tailnet policy:          {policy_status}")
-    if bool(enrollment_state.get("first_admin_login_seen", False)):
+    if first_admin_bootstrap_completed(enrollment_state):
         print_info("First admin bootstrap:   completed")
         claimed_login = str(enrollment_state.get("tailscale_login", "")).strip()
         if claimed_login:
             print_info(f"First admin account:     {claimed_login}")
     else:
-        print_info("First admin bootstrap:   pending")
+        if enrollment_state and bool(enrollment_state.get("first_admin_login_seen", False)):
+            print_info("First admin bootstrap:   needs repair")
+        else:
+            print_info("First admin bootstrap:   pending")
         print_info(f"First admin sign-in URL: {enrollment_state.get('bootstrap_url') or urls['app_base_url']}")
     print_info(f"SOUL template:           {soul_template}")
     print_info(f"Workspace cap:           {workspace_limit_mb / 1024:.1f} GB per user")
     print_info("Hermes agent setup:")
     print_info("  Model/provider:        hermes setup model")
     print_info("  Tools:                 hermes setup tools")
-    print_info("  Gateway/messaging:     hermes setup gateway")
     print_info("  Agent defaults:        hermes setup agent")
+    print()
+    print_header("Next Steps")
+    print_info("Hermes Core is now installed and reachable on your tailnet.")
+    print_info("To finish the full Hermes setup, prepare these items first:")
+    print_info("  a model endpoint and model name")
+    print_info("  any API keys your chosen model provider needs")
+    print_info("  any optional tool provider keys you want to use")
+    print_info("Then continue with these commands:")
+    print_info("  hermes setup model")
+    print_info("    Configure the model/provider Hermes will use for chats and agents.")
+    print_info("  hermes setup tools")
+    print_info("    Enable optional tools like web, browser, code execution, or image features.")
+    print_info("  hermes setup agent")
+    print_info("    Adjust default agent behavior and other runtime preferences.")
+    print_info("After that, open the Tailnet app URL above and sign in with Tailscale.")
 
 
 def clear_terminal_screen() -> None:
@@ -112,31 +153,36 @@ def print_install_handoff() -> None:
     print()
 
 
-def start_product_stack() -> None:
+def start_product_stack(force_new_bootstrap: bool = False) -> None:
     ensure_product_stack_started()
     configure_tsidp_client_credentials()
-    state = bootstrap_first_admin_enrollment()
+    state = bootstrap_first_admin_enrollment(force_new=force_new_bootstrap)
     product_config = load_product_config()
     ensure_product_app_service_started(product_config)
     urls = resolve_product_urls(product_config)
     print_info("Bundled tsidp service is configured.")
-    if bool(state.get("first_admin_login_seen", False)):
+    if first_admin_bootstrap_completed(state):
         print_info("  First admin bootstrap: already completed")
         claimed_login = str(state.get("tailscale_login", "")).strip()
         if claimed_login:
             print_info(f"  First admin account:   {claimed_login}")
     else:
-        print_info("  First admin bootstrap: one-time link required")
+        if bool(state.get("first_admin_login_seen", False)):
+            print_info("  First admin bootstrap: repaired and ready to be claimed again")
+        else:
+            print_info("  First admin bootstrap: one-time link required")
         print_info(f"  Bootstrap URL:         {state['setup_url']}")
     print_info(f"  Auth mode:            {state['auth_mode']}")
     print_info(f"  App URL:              {urls['app_base_url']}")
     print_info(f"  OIDC client:          {state['oidc_client_id']}")
+    if not first_admin_bootstrap_completed(state):
+        state = complete_first_admin_bootstrap(state)
 
 
-def run_bootstrap_section() -> None:
+def run_bootstrap_section(force_new_bootstrap: bool = False) -> None:
     try:
         validate_product_host_prereqs()
         initialize_product_stack()
-        start_product_stack()
+        start_product_stack(force_new_bootstrap=force_new_bootstrap)
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc

@@ -19,6 +19,7 @@ from hermes_cli.product_oidc import (
 from hermes_cli.product_stack_bootstrap import (
     READY_TIMEOUT_SECONDS as _READY_TIMEOUT_SECONDS,
     TSIDP_IMAGE,
+    active_admin_exists,
     bootstrap_first_admin_enrollment,
     bootstrap_product_oidc_client,
     bootstrap_product_tailscale_oidc_client,
@@ -28,6 +29,7 @@ from hermes_cli.product_stack_bootstrap import (
     ensure_product_stack_started,
     ensure_product_tsidp_started,
     ensure_session_secret as _ensure_session_secret,
+    first_admin_bootstrap_completed,
     initialize_product_stack,
     load_first_admin_enrollment_state,
     load_product_tailscale_oidc_client_settings,

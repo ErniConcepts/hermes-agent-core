@@ -4,16 +4,51 @@ import pytest
 
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_setup_tailscale import detect_tailscale_identity
-from hermes_cli.product_setup import _configure_tsidp_client_credentials, setup_product_bootstrap_identity, setup_product_tailscale
+from hermes_cli.product_setup import (
+    _configure_tsidp_client_credentials,
+    complete_first_admin_bootstrap,
+    setup_product_bootstrap_identity,
+    setup_product_tailscale,
+)
+from hermes_cli.product_stack import first_admin_bootstrap_completed
 
 
 def test_setup_product_bootstrap_identity_does_not_require_manual_login_value(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
-    setup_product_bootstrap_identity()
+    force_new = setup_product_bootstrap_identity()
 
     config = load_product_config()
     assert config["bootstrap"]["first_admin_display_name"] == "Administrator"
+    assert force_new is True
+
+
+def test_setup_product_bootstrap_identity_allows_keeping_existing_admin(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.product_setup_sections.first_admin_bootstrap_completed", lambda state=None: True)
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_sections.load_first_admin_enrollment_state",
+        lambda: {"tailscale_login": "admin@example.com", "first_admin_login_seen": True},
+    )
+    monkeypatch.setattr("hermes_cli.product_setup_sections.prompt_choice", lambda *args, **kwargs: 0)
+
+    force_new = setup_product_bootstrap_identity()
+
+    assert force_new is False
+
+
+def test_setup_product_bootstrap_identity_can_create_new_admin_link(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.product_setup_sections.first_admin_bootstrap_completed", lambda state=None: True)
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_sections.load_first_admin_enrollment_state",
+        lambda: {"tailscale_login": "admin@example.com", "first_admin_login_seen": True},
+    )
+    monkeypatch.setattr("hermes_cli.product_setup_sections.prompt_choice", lambda *args, **kwargs: 1)
+
+    force_new = setup_product_bootstrap_identity()
+
+    assert force_new is True
 
 
 def test_configure_tsidp_client_credentials_saves_client_values(tmp_path, monkeypatch):
@@ -186,3 +221,61 @@ def test_setup_product_tailscale_reports_missing_tailscale_cleanly(tmp_path, mon
     message = str(exc_info.value)
     assert "Tailscale must be installed and connected" in message
     assert "rerun `hermes-core setup`" in message
+
+
+def test_first_admin_bootstrap_completed_requires_active_admin(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    bootstrap_root = Path(tmp_path) / "product" / "bootstrap"
+    bootstrap_root.mkdir(parents=True, exist_ok=True)
+    (bootstrap_root / "first_admin_enrollment.json").write_text(
+        json.dumps(
+            {
+                "first_admin_login_seen": True,
+                "bootstrap_token": "",
+                "bootstrap_url": "https://device.tail5fd7a5.ts.net",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert first_admin_bootstrap_completed() is False
+
+
+def test_complete_first_admin_bootstrap_waits_until_admin_exists(monkeypatch):
+    prompts: list[tuple[str, str | None]] = []
+    states = iter(
+        [
+            {
+                "setup_url": "https://device.tail5fd7a5.ts.net/bootstrap/token-1",
+                "first_admin_login_seen": False,
+            },
+            {
+                "setup_url": "https://device.tail5fd7a5.ts.net/bootstrap/token-1",
+                "first_admin_login_seen": True,
+                "tailscale_login": "admin@example.com",
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_bootstrap.prompt",
+        lambda question, default=None, password=False: prompts.append((question, default)) or "",
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_bootstrap.load_first_admin_enrollment_state",
+        lambda: next(states),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_bootstrap.first_admin_bootstrap_completed",
+        lambda state=None: bool(state and state.get("first_admin_login_seen", False)),
+    )
+
+    final_state = complete_first_admin_bootstrap(
+        {
+            "setup_url": "https://device.tail5fd7a5.ts.net/bootstrap/token-1",
+            "first_admin_login_seen": False,
+        }
+    )
+
+    assert final_state["tailscale_login"] == "admin@example.com"
+    assert prompts == [("Press Enter after the bootstrap link shows you as signed in", None), ("Press Enter after the bootstrap link shows you as signed in", None)]

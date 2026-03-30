@@ -215,11 +215,24 @@ def load_first_admin_enrollment_state() -> dict[str, Any] | None:
     return json.loads(state_path.read_text(encoding="utf-8"))
 
 
+def active_admin_exists() -> bool:
+    from hermes_cli.product_users import list_product_users
+
+    return any(user.is_admin and not user.disabled for user in list_product_users())
+
+
+def first_admin_bootstrap_completed(state: dict[str, Any] | None = None) -> bool:
+    enrollment_state = state if state is not None else load_first_admin_enrollment_state()
+    if not enrollment_state:
+        return False
+    return bool(enrollment_state.get("first_admin_login_seen", False)) and active_admin_exists()
+
+
 def mark_first_admin_bootstrap_completed(tailscale_login: str | None = None) -> dict[str, Any] | None:
     state = load_first_admin_enrollment_state()
     if not state:
         return None
-    if bool(state.get("first_admin_login_seen")):
+    if first_admin_bootstrap_completed(state):
         return state
     state["first_admin_login_seen"] = True
     state["bootstrap_completed_at"] = int(time.time())
@@ -234,19 +247,20 @@ def mark_first_admin_bootstrap_completed(tailscale_login: str | None = None) -> 
     return state
 
 
-def bootstrap_first_admin_enrollment(config: dict[str, Any] | None = None) -> dict[str, Any]:
+def bootstrap_first_admin_enrollment(config: dict[str, Any] | None = None, force_new: bool = False) -> dict[str, Any]:
     product_config = initialize_product_stack(config or load_product_config())
     oidc_state = bootstrap_product_oidc_client(product_config)
     existing_state = load_first_admin_enrollment_state()
-    existing_login = str(existing_state.get("tailscale_login", "")).strip().lower() if existing_state else ""
+    bootstrap_completed = False if force_new else first_admin_bootstrap_completed(existing_state)
+    existing_login = str(existing_state.get("tailscale_login", "")).strip().lower() if existing_state and bootstrap_completed else ""
     username = str(product_config.get("bootstrap", {}).get("first_admin_username", "")).strip() or "admin"
     display_name = str(product_config.get("bootstrap", {}).get("first_admin_display_name", "Administrator")).strip() or "Administrator"
     email = existing_login if "@" in existing_login else ""
-    first_admin_login_seen = bool(existing_state.get("first_admin_login_seen", False)) if existing_state else False
+    first_admin_login_seen = bootstrap_completed
     bootstrap_token = ""
     if not first_admin_login_seen:
         bootstrap_token = str(existing_state.get("bootstrap_token", "")).strip() if existing_state else ""
-        if not bootstrap_token:
+        if force_new or not bootstrap_token:
             bootstrap_token = secrets.token_urlsafe(24)
     app_base_url = resolve_product_urls(product_config)["app_base_url"]
     bootstrap_url = f"{app_base_url.rstrip('/')}/bootstrap/{bootstrap_token}" if bootstrap_token else app_base_url

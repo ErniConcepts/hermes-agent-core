@@ -142,10 +142,9 @@ def resolve_product_urls(config: dict[str, object] | None = None) -> dict[str, s
 
 
 def first_admin_bootstrap_completed() -> bool:
-    from hermes_cli.product_stack_bootstrap import load_first_admin_enrollment_state
+    from hermes_cli.product_stack_bootstrap import first_admin_bootstrap_completed as _bootstrap_completed
 
-    state = load_first_admin_enrollment_state() or {}
-    return bool(state.get("first_admin_login_seen", False))
+    return _bootstrap_completed()
 
 
 def ensure_product_tailnet_started(

@@ -4,8 +4,8 @@ import re
 from pathlib import Path
 
 from hermes_cli.product_config import load_product_config, save_product_config
-from hermes_cli.product_stack import load_first_admin_enrollment_state
-from hermes_cli.setup import print_header, print_info, print_warning, prompt
+from hermes_cli.product_stack import first_admin_bootstrap_completed, load_first_admin_enrollment_state
+from hermes_cli.setup import print_header, print_info, print_warning, prompt, prompt_choice
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -67,19 +67,33 @@ def setup_product_storage() -> None:
         return
 
 
-def setup_product_bootstrap_identity() -> None:
+def setup_product_bootstrap_identity() -> bool:
     product_config = load_product_config()
     bootstrap = product_config.setdefault("bootstrap", {})
     bootstrap.setdefault("first_admin_display_name", "Administrator")
     save_product_config(product_config)
     enrollment_state = load_first_admin_enrollment_state() or {}
     print_header("Tailnet Auth Status")
-    if bool(enrollment_state.get("first_admin_login_seen", False)):
+    if first_admin_bootstrap_completed(enrollment_state):
         print_info("First admin bootstrap is already completed on this install.")
         claimed_login = str(enrollment_state.get("tailscale_login", "")).strip()
         if claimed_login:
             print_info(f"Current first admin account: {claimed_login}")
-        print_info("Setup will keep the existing first admin and refresh the current auth configuration.")
-    else:
-        print_info("Setup will create a one-time bootstrap link for the first admin.")
-        print_info("Open that link, sign in with Tailscale, and the first authenticated account becomes admin.")
+        choice = prompt_choice(
+            "Choose how to continue:",
+            ["Keep existing admin", "Create new bootstrap link"],
+            0,
+        )
+        if choice == 0:
+            print_info("Setup will keep the existing first admin and refresh the current auth configuration.")
+            return False
+        print_info("Setup will create a new one-time bootstrap link.")
+        print_info("Open that link, sign in with Tailscale, and the next authenticated account becomes admin.")
+        return True
+
+    if enrollment_state and bool(enrollment_state.get("first_admin_login_seen", False)):
+        print_warning("Saved bootstrap state did not match an existing admin user. Setup will repair it by generating a new bootstrap link.")
+        return True
+    print_info("Setup will create a one-time bootstrap link for the first admin.")
+    print_info("Open that link, sign in with Tailscale, and the first authenticated account becomes admin.")
+    return True
