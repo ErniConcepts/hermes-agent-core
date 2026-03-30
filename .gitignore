@@ -17,7 +17,10 @@ __pycache__/web_tools.cpython-310.pyc
 logs/
 data/
 .pytest_cache/
+.pytest-run-*/
+.pytest-tmp*/
 tmp/
+build/
 temp_vision_images/
 hermes-*/*
 examples/
@@ -39,8 +42,14 @@ privvy*
 images/
 __pycache__/
 hermes_agent.egg-info/
+*.egg-info/
 wandb/
 testlogs
+.tmp-*/
+.tmp*
+.noncode_files.txt
+tailscale-acl-current.json
+.tmp-*.log
 
 # CLI config (may contain sensitive SSH paths)
 cli-config.yaml

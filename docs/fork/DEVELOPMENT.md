@@ -2,6 +2,10 @@
 
 This document describes the **current implementation state** of the `hermes-core` fork and the maintainer workflow for product-side development.
 
+For agent-facing fork rules and session handover expectations, also see:
+
+- `docs/fork/AGENTS-FORK.md`
+
 ## Scope and Boundary
 
 - Public front page: `README.md`
