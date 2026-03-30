@@ -50,6 +50,17 @@ testlogs
 .noncode_files.txt
 tailscale-acl-current.json
 .tmp-*.log
+artifacts/
+CLAUDE.md
+Dockerfile.product-local
+docs/fork/PRE_PUBLISH_AUDIT.md
+scripts/__pycache__/
+scripts/bootstrap_product_admin.py
+scripts/capture_darkmode_fixed_icon.py
+scripts/capture_product_screenshots.py
+scripts/click_test_product.py
+scripts/run_product_e2e.py
+tests/e2e_product/
 
 # CLI config (may contain sensitive SSH paths)
 cli-config.yaml
