@@ -18,13 +18,13 @@ def test_configure_tsidp_client_credentials_saves_client_values(tmp_path, monkey
     prompts = iter(["hermes-core", "secret-123"])
     saved = {}
 
-    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr("hermes_cli.product_setup_bootstrap.prompt", lambda *args, **kwargs: next(prompts))
     monkeypatch.setattr(
-        "hermes_cli.product_setup.save_env_value_secure",
+        "hermes_cli.product_setup_bootstrap.save_env_value_secure",
         lambda key, value: saved.setdefault(key, value),
     )
     monkeypatch.setattr(
-        "hermes_cli.product_setup.resolve_product_urls",
+        "hermes_cli.product_setup_bootstrap.resolve_product_urls",
         lambda config=None: {
             "issuer_url": "https://idp.tail5fd7a5.ts.net",
             "oidc_callback_url": "https://device.tail5fd7a5.ts.net/api/auth/oidc/callback",
@@ -44,20 +44,20 @@ def test_setup_product_tailscale_requires_auth_key_and_saves_detected_values(tmp
     saved = {}
 
     monkeypatch.setattr(
-        "hermes_cli.product_setup._detect_tailscale_identity",
+        "hermes_cli.product_setup_tailscale.detect_tailscale_identity",
         lambda command_path: {
             "device_name": "laptop",
             "tailnet_name": "tail5fd7a5",
             "api_tailnet_name": "example.github",
         },
     )
-    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr("hermes_cli.product_setup_tailscale.prompt", lambda *args, **kwargs: next(prompts))
     monkeypatch.setattr(
-        "hermes_cli.product_setup.save_env_value_secure",
+        "hermes_cli.product_setup_tailscale.save_env_value_secure",
         lambda key, value: saved.setdefault(key, value),
     )
     monkeypatch.setattr(
-        "hermes_cli.product_setup.ensure_tsidp_policy",
+        "hermes_cli.product_setup_tailscale.ensure_tsidp_policy",
         lambda config=None: {"changed": False, "backup_path": "", "tailnet": "example.github"},
     )
 
@@ -79,20 +79,20 @@ def test_setup_product_tailscale_keeps_existing_secrets_on_blank_input(tmp_path,
     saved = {}
 
     monkeypatch.setattr(
-        "hermes_cli.product_setup._detect_tailscale_identity",
+        "hermes_cli.product_setup_tailscale.detect_tailscale_identity",
         lambda command_path: {
             "device_name": "laptop",
             "tailnet_name": "tail5fd7a5",
             "api_tailnet_name": "example.github",
         },
     )
-    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr("hermes_cli.product_setup_tailscale.prompt", lambda *args, **kwargs: next(prompts))
     monkeypatch.setattr(
-        "hermes_cli.product_setup.save_env_value_secure",
+        "hermes_cli.product_setup_tailscale.save_env_value_secure",
         lambda key, value: saved.setdefault(key, value),
     )
     monkeypatch.setattr(
-        "hermes_cli.product_setup.ensure_tsidp_policy",
+        "hermes_cli.product_setup_tailscale.ensure_tsidp_policy",
         lambda config=None: {"changed": False, "backup_path": "", "tailnet": "example.github"},
     )
 
