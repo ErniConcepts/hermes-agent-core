@@ -38,21 +38,22 @@ The fork adds a product layer around upstream Hermes:
   - per-user workspace upload/folder UX
   - narrow admin user management
 
-Current internal cleanup direction:
+Current internal structure:
 
-- `product_app.py` should act as the product HTTP composition layer:
-  - shared auth/session/proxy helpers
+- `product_app.py` acts as the HTTP composition layer:
+  - shared auth/session helpers
+  - explicit route-service wiring
   - route registration grouped by concern (`root`, `auth`, `chat`, `workspace`, `admin`)
-- `product_runtime.py` should center on:
+- `product_runtime.py` acts as the runtime composition layer:
   - runtime launch setting resolution
   - runtime file/env staging
   - container lifecycle and health checks
-- `product_install.py` should center on:
+- `product_install.py` acts as the install composition layer:
   - host prerequisite checks
   - service unit rendering
   - installer cleanup/build orchestration
 
-Current security hardening direction:
+Current security boundary:
 
 - `product_app.py` is the server-side policy boundary for:
   - session refresh and admin checks
@@ -62,7 +63,7 @@ Current security hardening direction:
 - `product_invites.py` and `product_users.py` should keep signup tokens server-side:
   - token-derived identifiers must not leak back into admin placeholder IDs
   - invite reconciliation should stay authoritative on the server
-- `product_runtime.py` and `product_runtime_service.py` should treat runtime secrets/config as a narrow launch contract:
+- `product_runtime.py` and `product_runtime_service.py` treat runtime secrets/config as a narrow launch contract:
   - runtime env files must reject unsafe values such as newline-delimited secrets
   - runtime auth must stay constant-time and token-scoped
   - generated runtime config inputs remain read-only mounts

@@ -60,6 +60,7 @@ Hermes-native configuration remains on the upstream CLI surface:
   - `GET /runtime/session`
   - `POST /runtime/turn`
   - `POST /runtime/turn/stream`
+- Product HTTP/install/setup/runtime entry files should remain thin orchestration layers over smaller fork-side helpers.
 - Runtime workspace is user-scoped and live-mounted for user uploads.
 - Runtime-local `SOUL.md` and generated runtime `config.yaml` are mounted read-only inside the container.
 

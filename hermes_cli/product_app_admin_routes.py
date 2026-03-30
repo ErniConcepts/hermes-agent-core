@@ -16,7 +16,7 @@ def register_admin_routes(app: FastAPI, services: AdminRouteServices) -> None:
         services.require_admin_user(request)
         services.require_csrf(request)
         validated = services.product_create_user_request_model.model_validate(payload)
-        return services.create_signup_user(validated)
+        return services.create_invited_user(validated)
 
     @app.post("/api/admin/users/{user_id}/deactivate", response_model=services.product_user_model)
     def admin_deactivate_user(request: Request, user_id: str) -> object:
@@ -24,4 +24,4 @@ def register_admin_routes(app: FastAPI, services: AdminRouteServices) -> None:
         services.require_csrf(request)
         if user_id == str(admin_user.get("sub") or ""):
             raise HTTPException(status_code=400, detail="Admins cannot deactivate their own account")
-        return services.deactivate_runtime_user(user_id)
+        return services.deactivate_product_user(user_id)

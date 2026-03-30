@@ -2,15 +2,15 @@
 
 `hermes-core` is a fork of [Hermes Agent](https://github.com/NousResearch/hermes-agent) focused on one use case:
 
-run a single local device that multiple people can access through the same Tailscale tailnet, each with their own personalized agent session.
+run one local Linux host that multiple people can access through the same Tailscale tailnet, each with their own Hermes session, workspace, and runtime.
 
 It keeps upstream Hermes as the core, and adds:
 
 - multi-user web access through a Tailnet URL
 - `tsidp` authentication through Tailscale OIDC
 - per-user isolated runtimes and workspaces
-- simple install/setup flow for deployment on Linux
-- invite-based multi-user onboarding on the tailnet
+- Linux-first install/setup flow
+- invite-based onboarding on the same tailnet
 
 ![Hermes Core Tailnet Architecture](docs/fork/architecture-diagram.png)
 
@@ -24,7 +24,7 @@ The deployment layer lives primarily in `hermes_cli/product_*` and includes:
   - installs the user-level app service and bundled `tsidp`
 - `hermes-core setup`
   - configures deployment settings such as:
-    - Tailscale tailnet detection
+    - Tailscale node/tailnet detection
     - bundled `tsidp` auth key
     - Tailscale API token for automatic policy patching
     - `tsidp` OIDC client credentials
@@ -54,7 +54,7 @@ Current target:
 
 - Linux first
 - Ubuntu/Debian are the supported installer target today
-- Windows is fine for development, but not the production target
+- Windows is fine for development, but not the deployment target
 
 Current deployment assumptions:
 
@@ -138,7 +138,7 @@ Typical install flow:
   - optional SOUL template path
   - per-user workspace limit
 
-What setup now automates:
+What setup automates:
 
 - it detects the current Tailscale device and MagicDNS suffix
 - it uses the API token to add the required `tailscale.com/cap/tsidp` grants
@@ -191,12 +191,6 @@ This product assumes:
 
 Normal setup handles the `tsidp` policy grant automatically through the Tailscale API token.
 
-If `tailscale serve` is denied, grant your user permission once:
-
-```bash
-sudo tailscale set --operator="$USER"
-```
-
 If the `tsidp` UI still says `Access denied: application capability not granted` after setup, the API token likely could not update the tailnet policy or did not have sufficient admin permission.
 
 There is no local/LAN login surface:
@@ -205,7 +199,7 @@ There is no local/LAN login surface:
 - the Tailnet URL is the only supported app URL
 - invites are claimed on that Tailnet URL after Tailscale sign-in
 
-If you enable Tailscale exposure and setup fails with `serve config denied`, grant your user permission to manage `tailscale serve` once and rerun the install/setup command:
+If setup fails with `serve config denied`, grant your user permission to manage `tailscale serve` once and rerun the install/setup command:
 
 ```bash
 sudo tailscale set --operator="$USER"

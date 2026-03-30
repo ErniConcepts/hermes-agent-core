@@ -79,5 +79,5 @@ class AdminRouteServices:
     product_create_user_request_model: type
     product_user_model: type
     list_admin_entries: Callable[[dict[str, Any]], Any]
-    create_signup_user: Callable[[Any], Any]
-    deactivate_runtime_user: Callable[[str], Any]
+    create_invited_user: Callable[[Any], Any]
+    deactivate_product_user: Callable[[str], Any]

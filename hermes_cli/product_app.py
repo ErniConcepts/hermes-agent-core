@@ -441,7 +441,7 @@ def _runtime_session_payload(user: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(exc) or "Runtime session unavailable") from exc
 
 
-def _create_signup_user(payload: ProductCreateUserRequest) -> ProductCreatedUser:
+def _create_invited_user(payload: ProductCreateUserRequest) -> ProductCreatedUser:
     try:
         return ProductCreatedUser.model_validate(
             create_product_user_with_signup(
@@ -454,7 +454,7 @@ def _create_signup_user(payload: ProductCreateUserRequest) -> ProductCreatedUser
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _deactivate_runtime_user(user_id: str) -> ProductUser:
+def _deactivate_product_user(user_id: str) -> ProductUser:
     try:
         updated = deactivate_product_user(user_id)
     except ValueError as exc:
@@ -699,8 +699,8 @@ def create_product_app() -> FastAPI:
             product_create_user_request_model=ProductCreateUserRequest,
             product_user_model=ProductUser,
             list_admin_entries=lambda *args, **kwargs: _list_admin_entries(*args, **kwargs),
-            create_signup_user=lambda *args, **kwargs: _create_signup_user(*args, **kwargs),
-            deactivate_runtime_user=lambda *args, **kwargs: _deactivate_runtime_user(*args, **kwargs),
+            create_invited_user=lambda *args, **kwargs: _create_invited_user(*args, **kwargs),
+            deactivate_product_user=lambda *args, **kwargs: _deactivate_product_user(*args, **kwargs),
         ),
     )
     return app
