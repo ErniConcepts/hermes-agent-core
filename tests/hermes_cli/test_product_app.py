@@ -222,8 +222,49 @@ def test_product_app_claims_pending_invite_on_oidc_callback(tmp_path, monkeypatc
 
     assert response.status_code == 303
     session = client.get("/api/auth/session").json()
-    assert session["authenticated"] is True
-    assert session["user"]["tailscale_login"] == "bob@example.com"
+    assert session["authenticated"] is False
+    assert session["pending_invite_claim"] is True
+    assert session["pending_invite_display_name"] == "Bob Example"
+    assert session["detected_tailscale_login"] == "bob@example.com"
+
+    claimed = client.post(
+        "/api/auth/invite/claim",
+        headers={"Origin": "https://device.tail5fd7a5.ts.net", "X-Hermes-CSRF-Token": session["csrf_token"]},
+    )
+    assert claimed.status_code == 200
+    assert claimed.json()["authenticated"] is True
+    assert claimed.json()["user"]["tailscale_login"] == "bob@example.com"
+
+
+def test_product_app_invite_rejects_existing_user_identity(tmp_path, monkeypatch):
+    admin_claims = {
+        "sub": "ts-admin-sub",
+        "email": "admin@example.com",
+        "preferred_username": "admin@example.com",
+        "name": "Admin Example",
+    }
+    _configure_app(monkeypatch, tmp_path, admin_claims)
+    monkeypatch.setattr("hermes_cli.product_users.resolve_product_urls", lambda config=None: _urls())
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    client.get("/bootstrap/bootstrap-token-123", follow_redirects=False)
+    client.get("/api/auth/login", follow_redirects=False)
+    client.get("/api/auth/oidc/callback?code=ok&state=state-123", follow_redirects=False)
+    invite = create_product_user_with_signup(display_name="Bob Example").signup
+
+    start = client.get(f"/invite/{invite.token}", follow_redirects=False)
+    assert start.status_code == 303
+    login = client.get(start.headers["location"], follow_redirects=False)
+    assert login.status_code == 307
+    response = client.get("/api/auth/oidc/callback?code=ok&state=state-123", follow_redirects=False)
+
+    assert response.status_code == 303
+    session = client.get("/api/auth/session").json()
+    assert session["authenticated"] is False
+    assert session["pending_invite_claim"] is False
+    assert session["detected_tailscale_login"] == "admin@example.com"
+    assert session["notice"] == "This Tailscale account already belongs to an existing Hermes Core user. Use a different Tailscale account to claim this invite."
 
 
 def test_product_app_admin_creates_generic_invite_link(tmp_path, monkeypatch):

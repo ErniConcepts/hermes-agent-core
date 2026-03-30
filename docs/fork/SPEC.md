@@ -6,6 +6,10 @@ This is the implementation-facing contract for the current `hermes-core` fork.
 
 Deliver a Tailnet-only, multi-user Hermes distribution that can be installed and operated with product-style workflows while keeping upstream Hermes internals largely intact.
 
+Reference architecture:
+
+![Hermes Core Tailnet Architecture](architecture-diagram.png)
+
 ## Primary Commands
 
 - `hermes-core install`

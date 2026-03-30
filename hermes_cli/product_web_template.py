@@ -36,6 +36,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <p class="lead" id="heroLead">This app is available only through your tailnet and authenticates with tsidp.</p>
 <div class="actions">
 <a class="button" id="loginButton" href="/api/auth/login">Sign in with Tailscale</a>
+<button class="button" id="claimInviteButton" type="button" hidden>Claim invite with this account</button>
 </div>
 <div id="authMessage" class="message"></div>
 </div>

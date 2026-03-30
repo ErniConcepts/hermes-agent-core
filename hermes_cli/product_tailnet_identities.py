@@ -28,6 +28,10 @@ def normalize_tailnet_login(value: str | None) -> str:
     return "".join(decoded_parts).strip().lower()
 
 
+def normalize_tailnet_subject(value: str | None) -> str:
+    return str(value or "").strip()
+
+
 def _load_bindings() -> list[dict[str, Any]]:
     path = get_tailnet_identity_bindings_path()
     if not path.exists():
@@ -44,14 +48,42 @@ def _save_bindings(bindings: list[dict[str, Any]]) -> None:
     _secure_file(path)
 
 
-def get_tailnet_login_for_user(user_id: str) -> str | None:
+def get_tailnet_account_for_user(user_id: str) -> dict[str, Any] | None:
     target = str(user_id or "").strip()
     if not target:
         return None
     for item in _load_bindings():
         if str(item.get("user_id", "")).strip() == target:
-            login = normalize_tailnet_login(item.get("tailscale_login"))
-            return login or None
+            account = {
+                "user_id": target,
+                "tailscale_subject": normalize_tailnet_subject(item.get("tailscale_subject")),
+                "tailscale_login": normalize_tailnet_login(item.get("tailscale_login")),
+                "tailscale_email": normalize_tailnet_login(item.get("tailscale_email")),
+                "display_name": str(item.get("display_name") or "").strip(),
+                "bound_at": item.get("bound_at"),
+            }
+            if account["tailscale_subject"] or account["tailscale_login"]:
+                return account
+            return None
+    return None
+
+
+def get_tailnet_login_for_user(user_id: str) -> str | None:
+    account = get_tailnet_account_for_user(user_id)
+    if not account:
+        return None
+    login = str(account.get("tailscale_login") or account.get("tailscale_email") or "").strip()
+    return login or None
+
+
+def get_user_id_for_tailnet_subject(tailscale_subject: str) -> str | None:
+    target = normalize_tailnet_subject(tailscale_subject)
+    if not target:
+        return None
+    for item in _load_bindings():
+        if normalize_tailnet_subject(item.get("tailscale_subject")) == target:
+            user_id = str(item.get("user_id", "")).strip()
+            return user_id or None
     return None
 
 
@@ -63,20 +95,40 @@ def get_user_id_for_tailnet_login(tailscale_login: str) -> str | None:
         if normalize_tailnet_login(item.get("tailscale_login")) == target:
             user_id = str(item.get("user_id", "")).strip()
             return user_id or None
+        if normalize_tailnet_login(item.get("tailscale_email")) == target:
+            user_id = str(item.get("user_id", "")).strip()
+            return user_id or None
     return None
 
 
-def bind_tailnet_login(user_id: str, tailscale_login: str) -> dict[str, Any]:
+def bind_tailnet_account(
+    user_id: str,
+    *,
+    tailscale_subject: str,
+    tailscale_login: str | None = None,
+    tailscale_email: str | None = None,
+    display_name: str | None = None,
+) -> dict[str, Any]:
     normalized_user_id = str(user_id or "").strip()
+    normalized_subject = normalize_tailnet_subject(tailscale_subject)
     normalized_login = normalize_tailnet_login(tailscale_login)
+    normalized_email = normalize_tailnet_login(tailscale_email)
     if not normalized_user_id:
         raise ValueError("User id is required")
-    if not normalized_login:
-        raise ValueError("A verified Tailnet login is required")
+    if not normalized_subject:
+        raise ValueError("A verified Tailscale subject is required")
 
-    existing_user_id = get_user_id_for_tailnet_login(normalized_login)
+    existing_user_id = get_user_id_for_tailnet_subject(normalized_subject)
     if existing_user_id and existing_user_id != normalized_user_id:
         raise ValueError("This Tailnet identity is already linked to another product user")
+    if normalized_login:
+        existing_user_id = get_user_id_for_tailnet_login(normalized_login)
+        if existing_user_id and existing_user_id != normalized_user_id:
+            raise ValueError("This Tailnet identity is already linked to another product user")
+    if normalized_email:
+        existing_user_id = get_user_id_for_tailnet_login(normalized_email)
+        if existing_user_id and existing_user_id != normalized_user_id:
+            raise ValueError("This Tailnet identity is already linked to another product user")
 
     bindings = [
         item
@@ -85,12 +137,24 @@ def bind_tailnet_login(user_id: str, tailscale_login: str) -> dict[str, Any]:
     ]
     payload = {
         "user_id": normalized_user_id,
+        "tailscale_subject": normalized_subject,
         "tailscale_login": normalized_login,
+        "tailscale_email": normalized_email,
+        "display_name": str(display_name or "").strip(),
         "bound_at": int(time.time()),
     }
     bindings.append(payload)
     _save_bindings(bindings)
     return payload
+
+
+def bind_tailnet_login(user_id: str, tailscale_login: str) -> dict[str, Any]:
+    normalized_login = normalize_tailnet_login(tailscale_login)
+    return bind_tailnet_account(
+        user_id,
+        tailscale_subject=normalized_login,
+        tailscale_login=normalized_login,
+    )
 
 
 def unbind_tailnet_login(user_id: str) -> bool:
