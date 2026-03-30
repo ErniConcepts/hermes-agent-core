@@ -9,6 +9,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -27,6 +28,54 @@ from hermes_cli.product_config import (
     runtime_host_access_host,
 )
 from hermes_cli.product_identity import render_product_soul
+from hermes_cli.product_runtime_container import (
+    container_env_map as _container_env_map_impl,
+    delete_product_runtime as _delete_product_runtime_impl,
+    docker_inspect_state as _docker_inspect_state_impl,
+    docker_run_command as _docker_run_command_impl,
+    ensure_product_runtime as _ensure_product_runtime_impl,
+    get_product_runtime_session as _get_product_runtime_session_impl,
+    normalize_runtime_session_payload as _normalize_runtime_session_payload_impl,
+    remove_container_if_exists as _remove_container_if_exists_impl,
+    running_container_matches_record as _running_container_matches_record_impl,
+    runtime_base_url as _runtime_base_url_impl,
+    runtime_container_user as _runtime_container_user_impl,
+    runtime_launch_env as _runtime_launch_env_impl,
+    runtime_mounts as _runtime_mounts_impl,
+    stream_product_runtime_turn as _stream_product_runtime_turn_impl,
+    wait_for_runtime_health as _wait_for_runtime_health_impl,
+)
+from hermes_cli.product_runtime_staging import (
+    env_path as _env_path_impl,
+    hermes_home as _hermes_home_impl,
+    legacy_user_ids as _legacy_user_ids_impl,
+    manifest_path as _manifest_path_impl,
+    migrate_legacy_runtime as _migrate_legacy_runtime_impl,
+    product_runtime_session_id as _product_runtime_session_id_impl,
+    product_storage_root as _product_storage_root_impl,
+    product_users_root as _product_users_root_impl,
+    resolve_runtime_api_key as _resolve_runtime_api_key_impl,
+    resolve_runtime_launch_settings as _resolve_runtime_launch_settings_impl,
+    resolve_runtime_model_base_url as _resolve_runtime_model_base_url_impl,
+    resolve_runtime_port as _resolve_runtime_port_impl,
+    runtime_binary as _runtime_binary_impl,
+    runtime_config_path as _runtime_config_path_impl,
+    runtime_environment as _runtime_environment_impl,
+    runtime_image as _runtime_image_impl,
+    runtime_internal_port as _runtime_internal_port_impl,
+    runtime_key as _runtime_key_impl,
+    runtime_port_range as _runtime_port_range_impl,
+    runtime_root as _runtime_root_impl,
+    runtime_toolsets as _runtime_toolsets_impl,
+    stage_product_runtime as _stage_product_runtime_impl,
+    user_id as _user_id_impl,
+    user_storage_root as _user_storage_root_impl,
+    workspace_root as _workspace_root_impl,
+    write_runtime_cli_config as _write_runtime_cli_config_impl,
+    write_runtime_env_file as _write_runtime_env_file_impl,
+    write_runtime_record as _write_runtime_record_impl,
+    write_runtime_text_if_changed as _write_runtime_text_if_changed_impl,
+)
 from hermes_cli.runtime_provider import format_runtime_provider_error, resolve_runtime_provider
 
 logger = logging.getLogger(__name__)
@@ -117,146 +166,83 @@ class ProductRuntimeEvent(BaseModel):
 
 
 def _user_id(user: dict[str, Any]) -> str:
-    stable_id = str(user.get("sub") or user.get("id") or "").strip()
-    if not stable_id:
-        raise ValueError("Signed-in user is missing a stable user identifier")
-    return stable_id
+    return _user_id_impl(user)
 
 
 def _legacy_user_ids(user: dict[str, Any]) -> list[str]:
-    candidates: list[str] = []
-    for value in (user.get("preferred_username"), user.get("username")):
-        normalized = str(value or "").strip()
-        if normalized and normalized not in candidates:
-            candidates.append(normalized)
-    return candidates
+    return _legacy_user_ids_impl(user)
 
 
 def _runtime_key(user_id: str) -> str:
-    normalized = re.sub(r"[^A-Za-z0-9._-]+", "_", user_id).strip("._-")
-    if not normalized:
-        normalized = "user"
-    normalized = normalized[:48]
-    digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:12]
-    return f"{normalized}-{digest}"
+    return _runtime_key_impl(user_id)
 
 
 def product_runtime_session_id(user_id: str) -> str:
-    runtime_key = _runtime_key(user_id).replace("-", "_")
-    digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:12]
-    return f"product_{runtime_key}_{digest}"
+    return _product_runtime_session_id_impl(user_id)
 
 
 def _product_storage_root(config: dict[str, Any]) -> Path:
-    return get_hermes_home() / str(config.get("storage", {}).get("root", "product"))
+    return _product_storage_root_impl(sys.modules[__name__], config)
 
 
 def _product_users_root(config: dict[str, Any]) -> Path:
-    return get_hermes_home() / str(config.get("storage", {}).get("users_root", "product/users"))
+    return _product_users_root_impl(sys.modules[__name__], config)
 
 
 def _runtime_root(config: dict[str, Any], user_id: str) -> Path:
-    return _product_users_root(config) / _runtime_key(user_id) / "runtime"
+    return _runtime_root_impl(sys.modules[__name__], config, user_id)
 
 
 def _user_storage_root(config: dict[str, Any], user_id: str) -> Path:
-    return _product_users_root(config) / _runtime_key(user_id)
+    return _user_storage_root_impl(sys.modules[__name__], config, user_id)
 
 
 def _workspace_root(config: dict[str, Any], user_id: str) -> Path:
-    return _product_users_root(config) / _runtime_key(user_id) / "workspace"
+    return _workspace_root_impl(sys.modules[__name__], config, user_id)
 
 
 def _hermes_home(config: dict[str, Any], user_id: str) -> Path:
-    return _runtime_root(config, user_id) / "hermes"
+    return _hermes_home_impl(sys.modules[__name__], config, user_id)
 
 
 def _manifest_path(config: dict[str, Any], user_id: str) -> Path:
-    return _runtime_root(config, user_id) / "launch-spec.json"
+    return _manifest_path_impl(sys.modules[__name__], config, user_id)
 
 
 def _env_path(config: dict[str, Any], user_id: str) -> Path:
-    return _runtime_root(config, user_id) / "runtime.env"
+    return _env_path_impl(sys.modules[__name__], config, user_id)
 
 
 def _runtime_config_path(config: dict[str, Any], user_id: str) -> Path:
-    return _hermes_home(config, user_id) / "config.yaml"
+    return _runtime_config_path_impl(sys.modules[__name__], config, user_id)
 
 
 def _runtime_toolsets(config: dict[str, Any]) -> list[str]:
-    _ = config
-    try:
-        return resolve_hermes_runtime_toolsets()
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
+    return _runtime_toolsets_impl(sys.modules[__name__], config)
 
 
 def _runtime_port_range(config: dict[str, Any]) -> tuple[int, int]:
-    runtime_config = config.get("runtime", {})
-    start = int(runtime_config.get("host_port_start", 18091))
-    end = int(runtime_config.get("host_port_end", 18150))
-    return start, end
+    return _runtime_port_range_impl(sys.modules[__name__], config)
 
 
 def _runtime_image(config: dict[str, Any]) -> str:
-    runtime_config = config.get("runtime", {})
-    image = str(runtime_config.get("image", "")).strip()
-    if not image:
-        raise RuntimeError("product runtime.image must be configured")
-    return image
+    return _runtime_image_impl(config)
 
 
 def _runtime_binary(config: dict[str, Any]) -> str:
-    runtime_config = config.get("runtime", {})
-    runtime = str(runtime_config.get("isolation_runtime", "")).strip()
-    if not runtime:
-        raise RuntimeError("product runtime.isolation_runtime must be configured")
-    return runtime
+    return _runtime_binary_impl(config)
 
 
 def _runtime_internal_port(config: dict[str, Any]) -> int:
-    runtime_port = config.get("runtime", {}).get("internal_port")
-    if runtime_port is None:
-        raise RuntimeError("product runtime.internal_port must be configured")
-    return int(runtime_port)
+    return _runtime_internal_port_impl(config)
 
 
 def _resolve_runtime_model_base_url(config: dict[str, Any], base_url: str) -> str:
-    normalized = str(base_url or "").strip()
-    if not normalized:
-        return normalized
-    parsed = urlparse(normalized)
-    if parsed.scheme not in {"http", "https"}:
-        return normalized
-    hostname = (parsed.hostname or "").strip().lower()
-    if hostname not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
-        return normalized.rstrip("/")
-    replacement_host = runtime_host_access_host(config)
-    netloc = replacement_host
-    if parsed.port is not None:
-        netloc = f"{netloc}:{parsed.port}"
-    rewritten = parsed._replace(netloc=netloc)
-    return urlunparse(rewritten).rstrip("/")
+    return _resolve_runtime_model_base_url_impl(sys.modules[__name__], config, base_url)
 
 
 def _resolve_runtime_port(config: dict[str, Any], user_id: str) -> int:
-    existing = load_runtime_record(user_id, config=config)
-    if existing is not None:
-        return existing.runtime_port
-    used_ports: set[int] = set()
-    users_root = _product_users_root(config)
-    if users_root.exists():
-        for manifest in users_root.glob("*/runtime/launch-spec.json"):
-            try:
-                payload = json.loads(manifest.read_text(encoding="utf-8"))
-                used_ports.add(int(payload["runtime_port"]))
-            except Exception:
-                continue
-    start, end = _runtime_port_range(config)
-    for port in range(start, end + 1):
-        if port not in used_ports:
-            return port
-    raise RuntimeError("No runtime ports are available in the configured product range")
+    return _resolve_runtime_port_impl(sys.modules[__name__], config, user_id)
 
 
 def load_runtime_record(user_id: str, *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord | None:
@@ -268,110 +254,23 @@ def load_runtime_record(user_id: str, *, config: dict[str, Any] | None = None) -
 
 
 def _write_runtime_record(record: ProductRuntimeRecord) -> None:
-    manifest_path = Path(record.manifest_file)
-    manifest_path.write_text(json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    _secure_runtime_file(manifest_path)
+    _write_runtime_record_impl(sys.modules[__name__], record)
 
 
 def _write_runtime_text_if_changed(path: Path, content: str) -> bool:
-    existing = path.read_text(encoding="utf-8") if path.exists() else None
-    if existing == content:
-        return False
-    path.write_text(content, encoding="utf-8")
-    return True
+    return _write_runtime_text_if_changed_impl(path, content)
 
 
 def _write_runtime_cli_config(config: dict[str, Any], user_id: str, *, base_url: str, model: str) -> None:
-    _ = config
-    model_cfg = resolve_hermes_model_config()
-    config_path = _runtime_config_path(config, user_id)
-    context_length = model_cfg.get("context_length")
-    try:
-        normalized_context_length = int(context_length) if context_length is not None else None
-    except (TypeError, ValueError):
-        normalized_context_length = None
-
-    if normalized_context_length is None or normalized_context_length <= 0:
-        if config_path.exists():
-            config_path.unlink()
-        return
-
-    runtime_config = {
-        "model": {
-            "default": model,
-            "base_url": base_url,
-            "provider": str(model_cfg.get("provider") or "").strip() or "custom",
-            "context_length": normalized_context_length,
-        }
-    }
-    _write_runtime_text_if_changed(config_path, yaml.safe_dump(runtime_config, sort_keys=False))
-    _secure_container_readable_file(config_path)
+    _write_runtime_cli_config_impl(sys.modules[__name__], config, user_id, base_url=base_url, model=model)
 
 
 def _resolve_runtime_launch_settings(product_config: dict[str, Any]) -> ProductRuntimeLaunchSettings:
-    try:
-        model_cfg = resolve_hermes_model_config()
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
-    try:
-        route = resolve_runtime_provider(requested=str(model_cfg.get("provider") or "").strip() or None)
-    except Exception as exc:
-        detail = format_runtime_provider_error(exc).strip()
-        message = "Hermes model/provider is not ready. Run 'hermes setup model'."
-        if detail:
-            message = f"{message} {detail}"
-        raise RuntimeError(message) from exc
-
-    model = str(model_cfg.get("default") or "").strip()
-    configured_provider = str(model_cfg.get("provider") or "").strip().lower()
-    provider = str(route.get("provider") or configured_provider or "").strip().lower() or "custom"
-    if configured_provider == "custom":
-        provider = "custom"
-    base_url = str(route.get("base_url") or "").strip()
-    api_mode = str(route.get("api_mode") or model_cfg.get("api_mode") or "chat_completions").strip() or "chat_completions"
-    api_key = str(route.get("api_key") or "").strip()
-    if not api_key:
-        api_key = _resolve_runtime_api_key(model_cfg)
-    if not api_key:
-        api_key = "product-runtime"
-    if not model:
-        raise RuntimeError("Hermes model.default must be configured. Run 'hermes setup model'.")
-    if not base_url:
-        raise RuntimeError("Hermes runtime base URL is not available. Run 'hermes setup model'.")
-
-    return ProductRuntimeLaunchSettings(
-        model=model,
-        provider=provider,
-        base_url=_resolve_runtime_model_base_url(product_config, base_url),
-        api_mode=api_mode,
-        api_key=api_key,
-        toolsets=_runtime_toolsets(product_config),
-    )
+    return _resolve_runtime_launch_settings_impl(sys.modules[__name__], product_config)
 
 
 def _resolve_runtime_api_key(model_cfg: dict[str, Any]) -> str:
-    direct_key = str(model_cfg.get("api_key") or model_cfg.get("api") or "").strip()
-    if direct_key:
-        return direct_key
-
-    configured_provider = str(model_cfg.get("provider") or "").strip().lower()
-    configured_base_url = str(model_cfg.get("base_url") or "").strip().rstrip("/")
-    if configured_provider == "custom" and configured_base_url:
-        custom_providers = load_product_config().get("custom_providers")
-        if not isinstance(custom_providers, list):
-            from hermes_cli.config import load_config
-
-            custom_providers = load_config().get("custom_providers")
-        if isinstance(custom_providers, list):
-            for entry in custom_providers:
-                if not isinstance(entry, dict):
-                    continue
-                entry_base_url = str(entry.get("base_url") or "").strip().rstrip("/")
-                entry_key = str(entry.get("api_key") or "").strip()
-                if entry_base_url == configured_base_url and entry_key:
-                    return entry_key
-
-    return str(get_env_value("OPENAI_API_KEY") or "").strip()
+    return _resolve_runtime_api_key_impl(sys.modules[__name__], model_cfg)
 
 
 def _runtime_environment(
@@ -381,292 +280,53 @@ def _runtime_environment(
     auth_token: str,
     internal_port: int,
 ) -> dict[str, str]:
-    return {
-        "HERMES_HOME": "/srv/hermes",
-        "HERMES_WRITE_SAFE_ROOT": _RUNTIME_WORKSPACE_PATH,
-        "TERMINAL_CWD": _RUNTIME_WORKSPACE_PATH,
-        "OPENAI_BASE_URL": settings.base_url,
-        "OPENAI_API_KEY": settings.api_key,
-        "HERMES_PRODUCT_RUNTIME_MODE": "product",
-        "HERMES_RUNTIME_HOST": "0.0.0.0",
-        "HERMES_RUNTIME_PORT": str(internal_port),
-        "HERMES_PRODUCT_SESSION_ID": session_id,
-        "HERMES_PRODUCT_TOOLSETS": ",".join(settings.toolsets),
-        "HERMES_PRODUCT_PROVIDER": settings.provider,
-        "HERMES_PRODUCT_API_MODE": settings.api_mode,
-        "HERMES_PRODUCT_MODEL": settings.model,
-        "HERMES_PRODUCT_RUNTIME_TOKEN": auth_token,
-    }
+    return _runtime_environment_impl(
+        sys.modules[__name__], settings, session_id=session_id, auth_token=auth_token, internal_port=internal_port
+    )
 
 
 def _write_runtime_env_file(path: Path, env: dict[str, str]) -> None:
-    invalid_keys: list[str] = []
-    for key, value in env.items():
-        if any(char in value for char in ("\n", "\r", "\x00")):
-            invalid_keys.append(key)
-    if invalid_keys:
-        joined = ", ".join(sorted(invalid_keys))
-        raise RuntimeError(f"Runtime env contains unsupported newline or NUL characters: {joined}")
-    path.write_text("".join(f"{key}={value}\n" for key, value in sorted(env.items())), encoding="utf-8")
-    _secure_runtime_file(path)
+    _write_runtime_env_file_impl(sys.modules[__name__], path, env)
 
 
 def _runtime_mounts(record: ProductRuntimeRecord) -> list[str]:
-    hermes_home = Path(record.hermes_home)
-    mounts = [
-        f"type=bind,src={hermes_home.as_posix()},dst=/srv/hermes",
-        f"type=bind,src={(hermes_home / 'SOUL.md').as_posix()},dst=/srv/hermes/SOUL.md,readonly",
-        f"type=bind,src={Path(record.workspace_root).as_posix()},dst={_RUNTIME_WORKSPACE_PATH}",
-    ]
-    runtime_config = hermes_home / "config.yaml"
-    if runtime_config.exists():
-        mounts.insert(
-            2,
-            f"type=bind,src={runtime_config.as_posix()},dst=/srv/hermes/config.yaml,readonly",
-        )
-    return mounts
+    return _runtime_mounts_impl(sys.modules[__name__], record)
 
 
 def _runtime_container_user(record: ProductRuntimeRecord) -> str | None:
-    if os.name == "nt":
-        return None
-    try:
-        workspace_stat = Path(record.workspace_root).stat()
-        uid = int(workspace_stat.st_uid)
-        gid = int(workspace_stat.st_gid)
-        if uid >= 0 and gid >= 0:
-            return f"{uid}:{gid}"
-    except Exception:
-        pass
-    try:
-        uid = os.getuid()
-        gid = os.getgid()
-        if uid >= 0 and gid >= 0:
-            return f"{uid}:{gid}"
-    except Exception:
-        return None
-    return None
+    return _runtime_container_user_impl(record)
 
 
 def _migrate_legacy_runtime(user: dict[str, Any], product_config: dict[str, Any], stable_user_id: str) -> ProductRuntimeRecord | None:
-    stable_root = _user_storage_root(product_config, stable_user_id)
-    if stable_root.exists():
-        return None
-    for legacy_user_id in _legacy_user_ids(user):
-        if legacy_user_id == stable_user_id:
-            continue
-        legacy_record = load_runtime_record(legacy_user_id, config=product_config)
-        if legacy_record is None:
-            continue
-        legacy_root = _user_storage_root(product_config, legacy_user_id)
-        if not legacy_root.exists():
-            continue
-        _remove_container_if_exists(legacy_record.container_name)
-        stable_root.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(legacy_root), str(stable_root))
-        migrated = legacy_record.model_copy(
-            update={
-                "user_id": stable_user_id,
-                "runtime_key": _runtime_key(stable_user_id),
-                "container_name": f"hermes-product-runtime-{_runtime_key(stable_user_id)}",
-                "runtime_root": str(_runtime_root(product_config, stable_user_id)),
-                "hermes_home": str(_hermes_home(product_config, stable_user_id)),
-                "workspace_root": str(_workspace_root(product_config, stable_user_id)),
-                "env_file": str(_env_path(product_config, stable_user_id)),
-                "manifest_file": str(_manifest_path(product_config, stable_user_id)),
-                "display_name": str(user.get("name") or user.get("preferred_username") or "").strip() or legacy_record.display_name,
-                "status": "staged",
-            }
-        )
-        _write_runtime_record(migrated)
-        return migrated
-    return None
+    return _migrate_legacy_runtime_impl(sys.modules[__name__], user, product_config, stable_user_id)
 
 
 def stage_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord:
-    product_config = config or load_product_config()
-    ensure_hermes_home()
-    user_id = _user_id(user)
-    existing = load_runtime_record(user_id, config=product_config) or _migrate_legacy_runtime(user, product_config, user_id)
-    runtime_root = _runtime_root(product_config, user_id)
-    hermes_home = _hermes_home(product_config, user_id)
-    workspace_root = _workspace_root(product_config, user_id)
-    for path in (
-        _product_storage_root(product_config),
-        _product_users_root(product_config),
-        runtime_root,
-    ):
-        path.mkdir(parents=True, exist_ok=True)
-        _secure_runtime_dir(path)
-    for path in (
-        hermes_home,
-        hermes_home / "memories",
-        workspace_root,
-    ):
-        path.mkdir(parents=True, exist_ok=True)
-        _secure_runtime_writable_dir(path)
-
-    soul_path = hermes_home / "SOUL.md"
-    _write_runtime_text_if_changed(soul_path, render_product_soul(product_config))
-    _secure_container_readable_file(soul_path)
-
-    launch_settings = _resolve_runtime_launch_settings(product_config)
-    _write_runtime_cli_config(
-        product_config,
-        user_id,
-        base_url=launch_settings.base_url,
-        model=launch_settings.model,
-    )
-    session_id = existing.session_id if existing is not None else product_runtime_session_id(user_id)
-    runtime_port = existing.runtime_port if existing is not None else _resolve_runtime_port(product_config, user_id)
-    runtime_key = existing.runtime_key if existing is not None and existing.runtime_key else _runtime_key(user_id)
-    container_name = existing.container_name if existing is not None else f"hermes-product-runtime-{runtime_key}"
-    auth_token = existing.auth_token if existing is not None and existing.auth_token else secrets.token_urlsafe(32)
-
-    env_path = _env_path(product_config, user_id)
-    _write_runtime_env_file(
-        env_path,
-        _runtime_environment(
-            launch_settings,
-            session_id=session_id,
-            auth_token=auth_token,
-            internal_port=_runtime_internal_port(product_config),
-        ),
-    )
-
-    record = ProductRuntimeRecord(
-        user_id=user_id,
-        runtime_key=runtime_key,
-        display_name=str(user.get("name") or user.get("preferred_username") or "").strip() or None,
-        session_id=session_id,
-        container_name=container_name,
-        runtime=_runtime_binary(product_config),
-        runtime_port=runtime_port,
-        runtime_root=str(runtime_root),
-        hermes_home=str(hermes_home),
-        workspace_root=str(workspace_root),
-        env_file=str(env_path),
-        manifest_file=str(_manifest_path(product_config, user_id)),
-        auth_token=auth_token,
-        status="staged",
-    )
-    _write_runtime_record(record)
-    return record
+    return _stage_product_runtime_impl(sys.modules[__name__], user, config=config)
 
 
 def _docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) -> list[str]:
-    internal_port = _runtime_internal_port(config)
-    mounts = _runtime_mounts(record)
-    user_spec = _runtime_container_user(record)
-    command = [
-        "docker",
-        "run",
-        "--detach",
-        "--restart",
-        "unless-stopped",
-        "--runtime",
-        record.runtime,
-        "--name",
-        record.container_name,
-        "--publish",
-        f"127.0.0.1:{record.runtime_port}:{internal_port}",
-        "--read-only",
-        "--cap-drop=ALL",
-        "--security-opt",
-        "no-new-privileges",
-        "--pids-limit",
-        str(int(config.get("runtime", {}).get("pids_limit", 256))),
-        "--tmpfs",
-        "/tmp:rw,noexec,nosuid,size=64m",
-        "--tmpfs",
-        "/var/tmp:rw,noexec,nosuid,size=32m",
-        "--env-file",
-        record.env_file,
-        "--workdir",
-        _RUNTIME_WORKSPACE_PATH,
-        "--add-host",
-        f"{runtime_host_access_host(config)}:host-gateway",
-        "--label",
-        f"ch.hermes.product.user_id={record.user_id}",
-        "--label",
-        "ch.hermes.product.role=runtime",
-        _runtime_image(config),
-        "python",
-        "-m",
-        "hermes_cli.product_runtime_service",
-    ]
-    if user_spec:
-        workdir_index = command.index("--workdir")
-        command[workdir_index:workdir_index] = ["--user", user_spec]
-    label_index = command.index("--label")
-    mount_args: list[str] = []
-    for mount in mounts:
-        mount_args.extend(["--mount", mount])
-    command[label_index:label_index] = mount_args
-    return command
+    return _docker_run_command_impl(sys.modules[__name__], record, config)
 
 
 def _docker_inspect_state(container_name: str) -> dict[str, Any] | None:
-    result = subprocess.run(
-        ["docker", "inspect", container_name],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    payload = json.loads(result.stdout)
-    if not payload:
-        return None
-    return payload[0]
+    return _docker_inspect_state_impl(container_name)
 
 
 def _container_env_map(container_state: dict[str, Any] | None) -> dict[str, str]:
-    if not isinstance(container_state, dict):
-        return {}
-    raw_env = container_state.get("Config", {}).get("Env", [])
-    if not isinstance(raw_env, list):
-        return {}
-    env_map: dict[str, str] = {}
-    for item in raw_env:
-        if not isinstance(item, str) or "=" not in item:
-            continue
-        key, value = item.split("=", 1)
-        env_map[key] = value
-    return env_map
+    return _container_env_map_impl(container_state)
 
 
 def _runtime_launch_env(record: ProductRuntimeRecord) -> dict[str, str]:
-    env_path = Path(record.env_file)
-    if not env_path.exists():
-        return {}
-    env_map: dict[str, str] = {}
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        if not line or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        env_map[key] = value
-    return env_map
+    return _runtime_launch_env_impl(record)
 
 
 def _running_container_matches_record(record: ProductRuntimeRecord, container_state: dict[str, Any] | None) -> bool:
-    container_env = _container_env_map(container_state)
-    expected_env = _runtime_launch_env(record)
-    if not container_env or not expected_env:
-        return False
-    for key in _RUNTIME_ENV_MATCH_KEYS:
-        if container_env.get(key, "") != expected_env.get(key, ""):
-            return False
-    return True
+    return _running_container_matches_record_impl(sys.modules[__name__], record, container_state)
 
 
 def _remove_container_if_exists(container_name: str) -> None:
-    subprocess.run(
-        ["docker", "rm", "-f", container_name],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    _remove_container_if_exists_impl(container_name)
 
 
 def _wait_for_runtime_health(
@@ -675,105 +335,25 @@ def _wait_for_runtime_health(
     timeout_seconds: float = 20.0,
     interval_seconds: float = 0.25,
 ) -> None:
-    started = time.perf_counter()
-    deadline = time.monotonic() + timeout_seconds
-    last_error: str | None = None
-    while time.monotonic() < deadline:
-        try:
-            response = httpx.get(f"{runtime_base_url(record)}/healthz", timeout=2.0)
-            response.raise_for_status()
-            payload = response.json()
-            if str(payload.get("status", "")).strip().lower() == "ok":
-                _RUNTIME_HEALTH_CACHE[record.container_name] = time.monotonic()
-                logger.info(
-                    "product_runtime health check for %s completed in %.0fms",
-                    record.container_name,
-                    (time.perf_counter() - started) * 1000,
-                )
-                return
-            last_error = "runtime health endpoint did not report ok"
-        except Exception as exc:
-            last_error = str(exc)
-        time.sleep(interval_seconds)
-    raise RuntimeError(f"Runtime failed to become ready: {last_error or 'health check timeout'}")
+    _wait_for_runtime_health_impl(
+        sys.modules[__name__], record, timeout_seconds=timeout_seconds, interval_seconds=interval_seconds
+    )
 
 
 def ensure_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord:
-    started = time.perf_counter()
-    product_config = config or load_product_config()
-    record = stage_product_runtime(user, config=product_config)
-    container_state = _docker_inspect_state(record.container_name)
-    if container_state and bool(container_state.get("State", {}).get("Running")):
-        if not _running_container_matches_record(record, container_state):
-            _remove_container_if_exists(record.container_name)
-            container_state = None
-            _RUNTIME_HEALTH_CACHE.pop(record.container_name, None)
-        else:
-            running = ProductRuntimeRecord(**{**record.model_dump(), "status": "running"})
-            last_healthy_at = _RUNTIME_HEALTH_CACHE.get(running.container_name, 0.0)
-            if time.monotonic() - last_healthy_at > _RUNTIME_HEALTH_TTL_SECONDS:
-                _wait_for_runtime_health(running)
-            logger.info(
-                "product_runtime ensure for %s reused running container in %.0fms",
-                running.container_name,
-                (time.perf_counter() - started) * 1000,
-            )
-            return running
-
-    _remove_container_if_exists(record.container_name)
-    result = subprocess.run(
-        _docker_run_command(record, product_config),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout).strip() or "docker run failed")
-    running = ProductRuntimeRecord(**{**record.model_dump(), "status": "running"})
-    _wait_for_runtime_health(running)
-    logger.info(
-        "product_runtime ensure for %s started container in %.0fms",
-        running.container_name,
-        (time.perf_counter() - started) * 1000,
-    )
-    return running
+    return _ensure_product_runtime_impl(sys.modules[__name__], user, config=config)
 
 
 def runtime_base_url(record: ProductRuntimeRecord) -> str:
-    return f"http://127.0.0.1:{record.runtime_port}"
+    return _runtime_base_url_impl(record)
 
 
 def _normalize_runtime_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(payload)
-    runtime_mode = str(normalized.get("runtime_mode") or "").strip()
-    if not runtime_mode:
-        raise RuntimeError("Runtime session payload is missing runtime_mode")
-    normalized["runtime_mode"] = runtime_mode
-    runtime_toolsets = normalized.get("runtime_toolsets")
-    if isinstance(runtime_toolsets, list):
-        normalized["runtime_toolsets"] = [str(item).strip() for item in runtime_toolsets if str(item).strip()]
-    else:
-        raise RuntimeError("Runtime session payload is missing runtime_toolsets")
-
-    return normalized
+    return _normalize_runtime_session_payload_impl(payload)
 
 
 def get_product_runtime_session(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> dict[str, Any]:
-    started = time.perf_counter()
-    record = ensure_product_runtime(user, config=config)
-    response = httpx.get(
-        f"{runtime_base_url(record)}/runtime/session",
-        timeout=10.0,
-        headers={"X-Hermes-Product-Runtime-Token": record.auth_token},
-    )
-    response.raise_for_status()
-    payload = _normalize_runtime_session_payload(response.json())
-    logger.info(
-        "product_runtime session fetch for %s completed in %.0fms",
-        record.container_name,
-        (time.perf_counter() - started) * 1000,
-    )
-    return ProductRuntimeSession.model_validate(payload).model_dump(mode="json")
+    return _get_product_runtime_session_impl(sys.modules[__name__], user, config=config)
 
 
 def stream_product_runtime_turn(
@@ -782,30 +362,8 @@ def stream_product_runtime_turn(
     *,
     config: dict[str, Any] | None = None,
 ) -> Iterator[str]:
-    message = user_message.strip()
-    if not message:
-        raise ValueError("User message must not be empty")
-    record = ensure_product_runtime(user, config=config)
-    with httpx.Client(timeout=120.0) as client:
-        with client.stream(
-            "POST",
-            f"{runtime_base_url(record)}/runtime/turn/stream",
-            json=ProductRuntimeTurnRequest(user_message=message).model_dump(),
-            headers={
-                "Accept": "text/event-stream",
-                "X-Hermes-Product-Runtime-Token": record.auth_token,
-            },
-        ) as response:
-            response.raise_for_status()
-            for chunk in response.iter_text():
-                yield chunk
+    yield from _stream_product_runtime_turn_impl(sys.modules[__name__], user, user_message, config=config)
 
 
 def delete_product_runtime(user_id: str, *, config: dict[str, Any] | None = None) -> None:
-    product_config = config or load_product_config()
-    record = load_runtime_record(user_id, config=product_config)
-    if record is not None:
-        _remove_container_if_exists(record.container_name)
-        runtime_root = Path(record.runtime_root)
-        if runtime_root.exists():
-            shutil.rmtree(runtime_root)
+    _delete_product_runtime_impl(sys.modules[__name__], user_id, config=config)
