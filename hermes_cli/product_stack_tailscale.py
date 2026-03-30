@@ -3,19 +3,20 @@ from __future__ import annotations
 import ipaddress
 import subprocess
 import time
-from typing import Any
 
 import httpx
 
+from hermes_cli.product_config import load_product_config
 
-def public_host(config: dict[str, Any]) -> str:
+
+def public_host(config: dict[str, object]) -> str:
     host = str(config.get("network", {}).get("public_host", "")).strip()
     if not host:
         raise ValueError("product network.public_host must be configured")
     return host
 
 
-def url_scheme(config: dict[str, Any]) -> str:
+def url_scheme(config: dict[str, object]) -> str:
     network = config.get("network", {})
     configured = str(network.get("url_scheme", "")).strip().lower()
     if configured:
@@ -40,28 +41,28 @@ def validate_public_host(host: str) -> None:
     raise ValueError("product network.public_host must be a hostname or domain, not a raw IP address")
 
 
-def tailscale_config(config: dict[str, Any]) -> dict[str, Any]:
+def tailscale_config(config: dict[str, object]) -> dict[str, object]:
     network = config.get("network", {})
     tailscale = network.get("tailscale", {})
     return tailscale if isinstance(tailscale, dict) else {}
 
 
-def tailscale_enabled(config: dict[str, Any]) -> bool:
+def tailscale_enabled(config: dict[str, object]) -> bool:
     return bool(tailscale_config(config).get("enabled", False))
 
 
-def required_tailnet_value(config: dict[str, Any], key: str) -> str:
+def required_tailnet_value(config: dict[str, object], key: str) -> str:
     value = str(tailscale_config(config).get(key, "")).strip().lower()
     if not value:
         raise ValueError(f"product network.tailscale.{key} must be configured when Tailscale is enabled")
     return value
 
 
-def tailscale_host(config: dict[str, Any]) -> str:
+def tailscale_host(config: dict[str, object]) -> str:
     return f"{required_tailnet_value(config, 'device_name')}.{required_tailnet_value(config, 'tailnet_name')}.ts.net"
 
 
-def tailscale_https_port(config: dict[str, Any], key: str, default: int) -> int:
+def tailscale_https_port(config: dict[str, object], key: str, default: int) -> int:
     raw_value = tailscale_config(config).get(key, default)
     try:
         port = int(raw_value)
@@ -72,18 +73,18 @@ def tailscale_https_port(config: dict[str, Any], key: str, default: int) -> int:
     return port
 
 
-def tsidp_hostname(config: dict[str, Any]) -> str:
+def tsidp_hostname(config: dict[str, object]) -> str:
     value = str(tailscale_config(config).get("idp_hostname", "idp")).strip().lower()
     if not value:
         raise ValueError("product network.tailscale.idp_hostname must not be empty")
     return value
 
 
-def tsidp_host(config: dict[str, Any]) -> str:
+def tsidp_host(config: dict[str, object]) -> str:
     return f"{tsidp_hostname(config)}.{required_tailnet_value(config, 'tailnet_name')}.ts.net"
 
 
-def tsidp_issuer_url(config: dict[str, Any]) -> str:
+def tsidp_issuer_url(config: dict[str, object]) -> str:
     return f"https://{tsidp_host(config)}"
 
 
@@ -102,14 +103,14 @@ def format_tailscale_reset_error(exc: subprocess.CalledProcessError, *, command:
     return message
 
 
-def tailscale_command_path(config: dict[str, Any]) -> str:
+def tailscale_command_path(config: dict[str, object]) -> str:
     configured = str(tailscale_config(config).get("command_path", "tailscale")).strip()
     if not configured:
         raise ValueError("product network.tailscale.command_path must not be empty")
     return configured
 
 
-def tailscale_serve_command(config: dict[str, Any], *, https_port: int, target_url: str) -> list[str]:
+def tailscale_serve_command(config: dict[str, object], *, https_port: int, target_url: str) -> list[str]:
     return [tailscale_command_path(config), "serve", "--bg", f"--https={https_port}", target_url]
 
 
@@ -130,27 +131,27 @@ def format_tailscale_serve_error(exc: subprocess.CalledProcessError, *, command:
     return message
 
 
-def ensure_product_tailnet_stopped(hooks: Any, config: dict[str, Any] | None = None) -> list[subprocess.CompletedProcess[str]]:
-    product_config = config or hooks.load_product_config()
-    if not hooks._tailscale_enabled(product_config):
+def ensure_product_tailnet_stopped(config: dict[str, object] | None = None) -> list[subprocess.CompletedProcess[str]]:
+    product_config = config or load_product_config()
+    if not tailscale_enabled(product_config):
         return []
-    command = [hooks._tailscale_command_path(product_config), "serve", "reset"]
+    command = [tailscale_command_path(product_config), "serve", "reset"]
     try:
         return [subprocess.run(command, check=True, capture_output=True, text=True)]
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError(hooks._format_tailscale_reset_error(exc, command=command)) from exc
+        raise RuntimeError(format_tailscale_reset_error(exc, command=command)) from exc
 
 
-def resolve_product_urls(hooks: Any, config: dict[str, Any] | None = None) -> dict[str, str]:
-    product_config = config or hooks.load_product_config()
-    if not hooks._tailscale_enabled(product_config):
+def resolve_product_urls(config: dict[str, object] | None = None) -> dict[str, str]:
+    product_config = config or load_product_config()
+    if not tailscale_enabled(product_config):
         raise ValueError("Tailscale must be enabled for this product install")
     network = product_config.get("network", {})
     app_port = int(network.get("app_port", 8086))
-    tailnet_host = hooks._tailscale_host(product_config)
-    app_https_port = hooks._tailscale_https_port(product_config, "app_https_port", 443)
-    tailnet_app_base_url = hooks._format_https_url(tailnet_host, app_https_port)
-    tailnet_issuer_url = hooks._tsidp_issuer_url(product_config)
+    tailnet_host = tailscale_host(product_config)
+    app_https_port = tailscale_https_port(product_config, "app_https_port", 443)
+    tailnet_app_base_url = format_https_url(tailnet_host, app_https_port)
+    tailnet_issuer_url = tsidp_issuer_url(product_config)
     return {
         "public_host": tailnet_host,
         "url_scheme": "https",
@@ -164,45 +165,40 @@ def resolve_product_urls(hooks: Any, config: dict[str, Any] | None = None) -> di
     }
 
 
-def first_admin_bootstrap_completed(hooks: Any) -> bool:
-    state = hooks.load_first_admin_enrollment_state() or {}
+def first_admin_bootstrap_completed() -> bool:
+    from hermes_cli.product_stack_bootstrap import load_first_admin_enrollment_state
+
+    state = load_first_admin_enrollment_state() or {}
     return bool(state.get("first_admin_login_seen", False))
 
 
 def ensure_product_tailnet_started(
-    hooks: Any,
-    config: dict[str, Any] | None = None,
+    config: dict[str, object] | None = None,
     *,
     include_app: bool = True,
 ) -> list[subprocess.CompletedProcess[str]]:
-    product_config = config or hooks.load_product_config()
-    if not hooks._tailscale_enabled(product_config):
+    product_config = config or load_product_config()
+    if not tailscale_enabled(product_config):
         return []
-
     network = product_config.get("network", {})
     app_port = int(network.get("app_port", 8086))
-    app_https_port = hooks._tailscale_https_port(product_config, "app_https_port", 443)
-
+    app_https_port = tailscale_https_port(product_config, "app_https_port", 443)
     commands: list[list[str]] = []
     if include_app:
         commands.append(
-            hooks._tailscale_serve_command(
-                product_config,
-                https_port=app_https_port,
-                target_url=f"http://127.0.0.1:{app_port}",
-            )
+            tailscale_serve_command(product_config, https_port=app_https_port, target_url=f"http://127.0.0.1:{app_port}")
         )
     results: list[subprocess.CompletedProcess[str]] = []
     for command in commands:
         try:
             results.append(subprocess.run(command, check=True, capture_output=True, text=True))
         except subprocess.CalledProcessError as exc:
-            raise RuntimeError(hooks._format_tailscale_serve_error(exc, command=command)) from exc
+            raise RuntimeError(format_tailscale_serve_error(exc, command=command)) from exc
     return results
 
 
-def wait_for_tsidp_ready(hooks: Any, config: dict[str, Any], timeout_seconds: float) -> None:
-    health_url = hooks._tsidp_issuer_url(config).rstrip("/") + "/.well-known/openid-configuration"
+def wait_for_tsidp_ready(config: dict[str, object], timeout_seconds: float) -> None:
+    health_url = tsidp_issuer_url(config).rstrip("/") + "/.well-known/openid-configuration"
     deadline = time.time() + timeout_seconds
     last_error: Exception | None = None
     while time.time() < deadline:

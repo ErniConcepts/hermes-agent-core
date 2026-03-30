@@ -64,7 +64,7 @@ def test_bootstrap_first_admin_enrollment_creates_one_time_link(tmp_path, monkey
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_SECRET", "session-secret")
     monkeypatch.setenv("HERMES_PRODUCT_TAILSCALE_AUTH_KEY", "tskey-auth-kv")
     monkeypatch.setattr(
-        "hermes_cli.product_stack.bootstrap_product_oidc_client",
+        "hermes_cli.product_stack_bootstrap.bootstrap_product_oidc_client",
         lambda config=None: {"client_id": "hermes-core"},
     )
 
