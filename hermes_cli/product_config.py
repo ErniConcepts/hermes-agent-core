@@ -44,7 +44,6 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
     },
     "network": {
         "bind_host": "127.0.0.1",
-        "public_host": "",
         "url_scheme": "https",
         "app_port": 8086,
         "tailscale": {

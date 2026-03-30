@@ -55,7 +55,6 @@ from hermes_cli.product_stack_tailscale import (
     format_https_url as _format_https_url,
     format_tailscale_reset_error as _format_tailscale_reset_error,
     format_tailscale_serve_error as _format_tailscale_serve_error,
-    public_host as _public_host,
     required_tailnet_value as _required_tailnet_value,
     resolve_product_urls,
     tailscale_command_path as _tailscale_command_path,
@@ -68,7 +67,6 @@ from hermes_cli.product_stack_tailscale import (
     tsidp_hostname as _tsidp_hostname,
     tsidp_issuer_url as _tsidp_issuer_url,
     url_scheme as _url_scheme,
-    validate_public_host as _validate_public_host,
     wait_for_tsidp_ready as _wait_for_tsidp_ready,
 )
 from utils import atomic_json_write, atomic_yaml_write

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 
@@ -20,7 +21,17 @@ def _sanitize_prompt_text(value: str) -> str:
     return cleaned.strip()
 
 
-def detect_tailscale_identity(command_path: str) -> dict[str, str]:
+def _candidate_tailscale_commands(command_path: str) -> list[str]:
+    normalized = str(command_path or "tailscale").strip() or "tailscale"
+    candidates = [normalized]
+    if normalized == "tailscale" and "WSL_DISTRO_NAME" in os.environ:
+        windows_tailscale = "/mnt/c/Program Files/Tailscale/tailscale.exe"
+        if os.path.exists(windows_tailscale):
+            candidates.append(windows_tailscale)
+    return candidates
+
+
+def _load_tailscale_status(command_path: str) -> dict:
     try:
         result = subprocess.run([command_path, "status", "--json"], check=True, capture_output=True, text=True)
     except FileNotFoundError as exc:
@@ -31,8 +42,10 @@ def detect_tailscale_identity(command_path: str) -> dict[str, str]:
         if detail:
             message = f"{message}: {detail}"
         raise RuntimeError(message) from exc
+    return json.loads(result.stdout or "{}")
 
-    data = json.loads(result.stdout or "{}")
+
+def _parse_tailscale_identity(data: dict) -> dict[str, str]:
     self_payload = data.get("Self", {}) if isinstance(data, dict) else {}
     tailnet_payload = data.get("CurrentTailnet", {}) if isinstance(data, dict) else {}
     if not isinstance(self_payload, dict):
@@ -54,46 +67,62 @@ def detect_tailscale_identity(command_path: str) -> dict[str, str]:
     return {"device_name": device_name, "tailnet_name": tailnet_name, "api_tailnet_name": api_tailnet_name}
 
 
+def detect_tailscale_identity(command_path: str) -> dict[str, str]:
+    errors: list[str] = []
+    for candidate in _candidate_tailscale_commands(command_path):
+        try:
+            detected = _parse_tailscale_identity(_load_tailscale_status(candidate))
+            detected["command_path"] = candidate
+            return detected
+        except RuntimeError as exc:
+            errors.append(str(exc))
+    if errors:
+        raise RuntimeError(errors[-1])
+    raise RuntimeError("Tailscale setup could not find a usable Tailscale CLI")
+
+
 def setup_product_tailscale() -> None:
     product_config = load_product_config()
     tailscale = product_config.setdefault("network", {}).setdefault("tailscale", {})
     services = product_config.setdefault("services", {}).setdefault("tsidp", {})
-    current_idp_hostname = str(tailscale.get("idp_hostname", "idp")).strip() or "idp"
     command_path = str(tailscale.get("command_path", "tailscale")).strip() or "tailscale"
 
     print_header("Tailscale")
-    print_info("This branch exposes Hermes Core only through your tailnet.")
-    print_info("Setup will:")
-    print_info("  1. Verify the current Tailscale node and tailnet")
-    print_info("  2. Save a tsidp auth key and Tailscale API token")
-    print_info("  3. Patch tailnet policy so tsidp login and admin UI work")
-    print_info("  4. Continue into tsidp startup and first-admin bootstrap")
+    print_info("Checking the current Tailscale node and tailnet...")
 
-    detected = detect_tailscale_identity(command_path)
+    try:
+        detected = detect_tailscale_identity(command_path)
+    except RuntimeError as exc:
+        detail = str(exc).strip()
+        guidance = [
+            "Tailscale must be installed and connected before Hermes Core setup can continue.",
+            "Install Tailscale, sign this machine into your tailnet, then rerun `hermes-core setup`.",
+        ]
+        if "WSL_DISTRO_NAME" in os.environ:
+            guidance.append("If you are running setup from WSL, the Windows Tailscale client may be used automatically once it is signed in.")
+        if detail:
+            guidance.append(f"Detection detail: {detail}")
+        raise RuntimeError("\n".join(guidance)) from exc
     tailscale["enabled"] = True
     tailscale["tailnet_name"] = detected["tailnet_name"]
     tailscale["device_name"] = detected["device_name"]
     tailscale["api_tailnet_name"] = detected["api_tailnet_name"]
+    tailscale["idp_hostname"] = "idp"
+    tailscale["command_path"] = str(detected.get("command_path") or command_path).strip() or command_path
     tailscale["app_https_port"] = int(tailscale.get("app_https_port", 443) or 443)
     print_info(f"  Detected Tailnet device:     {detected['device_name']}")
     print_info(f"  Detected MagicDNS suffix:    {detected['tailnet_name']}")
     print_info(f"  Detected policy tailnet key: {detected['api_tailnet_name']}")
 
-    while True:
-        chosen_idp_hostname = _sanitize_prompt_text(prompt("tsidp hostname", current_idp_hostname) or current_idp_hostname).lower()
-        if chosen_idp_hostname:
-            tailscale["idp_hostname"] = chosen_idp_hostname
-            break
-        print_warning("tsidp hostname must not be empty.")
-
     auth_key_ref = str(services.get("auth_key_ref", "")).strip()
     api_token_ref = str(services.get("api_token_ref", "")).strip()
     existing_auth_key = str(get_env_value(auth_key_ref) or "").strip()
     existing_api_token = str(get_env_value(api_token_ref) or "").strip()
+    print_info("Next, save a Tailscale auth key for the bundled tsidp service.")
+    print_info("Create one in the Tailscale admin console under Keys > Generate auth key.")
+    print_info("This key lets the bundled tsidp identity provider join your tailnet.")
     if existing_auth_key:
-        print_info("  Tailscale auth key: already saved; press Enter to keep it.")
-    if existing_api_token:
-        print_info("  Tailscale API token: already saved; press Enter to keep it.")
+        print_info("Press Enter to keep the current saved auth key.")
     while True:
         auth_key = _sanitize_prompt_text(prompt("Tailscale auth key", ""))
         if auth_key:
@@ -103,6 +132,11 @@ def setup_product_tailscale() -> None:
             break
         print_warning("A Tailscale auth key is required for the bundled tsidp service.")
 
+    print_info("Next, save a Tailscale API token for automatic policy setup.")
+    print_info("Create one in the Tailscale admin console under Settings > Keys > API access tokens.")
+    print_info("This token lets setup patch your tailnet policy so tsidp login and admin UI work.")
+    if existing_api_token:
+        print_info("Press Enter to keep the current saved API token.")
     while True:
         api_token = _sanitize_prompt_text(prompt("Tailscale API token", ""))
         if api_token:
@@ -112,9 +146,12 @@ def setup_product_tailscale() -> None:
             break
         print_warning("A Tailscale API token is required so setup can patch tailnet policy automatically.")
 
-    tailscale["command_path"] = command_path
     save_product_config(product_config)
-    policy_status = ensure_tsidp_policy(product_config)
+    print_info("Applying the required tailnet policy for tsidp...")
+    try:
+        policy_status = ensure_tsidp_policy(product_config)
+    except RuntimeError:
+        raise
     urls = resolve_product_urls(product_config)
     print_success("Tailnet policy is ready for tsidp.")
     if policy_status["changed"]:

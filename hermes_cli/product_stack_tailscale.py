@@ -1,19 +1,11 @@
 from __future__ import annotations
 
-import ipaddress
 import subprocess
 import time
 
 import httpx
 
 from hermes_cli.product_config import load_product_config
-
-
-def public_host(config: dict[str, object]) -> str:
-    host = str(config.get("network", {}).get("public_host", "")).strip()
-    if not host:
-        raise ValueError("product network.public_host must be configured")
-    return host
 
 
 def url_scheme(config: dict[str, object]) -> str:
@@ -24,21 +16,6 @@ def url_scheme(config: dict[str, object]) -> str:
             raise ValueError("product network.url_scheme must be http or https")
         return configured
     return "http"
-
-
-def validate_public_host(host: str) -> None:
-    candidate = (host or "").strip()
-    if not candidate:
-        raise ValueError("product network.public_host must not be empty")
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in candidate):
-        raise ValueError("product network.public_host must not contain control characters")
-    if any(ch.isspace() for ch in candidate):
-        raise ValueError("product network.public_host must not contain whitespace")
-    try:
-        ipaddress.ip_address(candidate)
-    except ValueError:
-        return
-    raise ValueError("product network.public_host must be a hostname or domain, not a raw IP address")
 
 
 def tailscale_config(config: dict[str, object]) -> dict[str, object]:
@@ -153,7 +130,6 @@ def resolve_product_urls(config: dict[str, object] | None = None) -> dict[str, s
     tailnet_app_base_url = format_https_url(tailnet_host, app_https_port)
     tailnet_issuer_url = tsidp_issuer_url(product_config)
     return {
-        "public_host": tailnet_host,
         "url_scheme": "https",
         "app_base_url": tailnet_app_base_url,
         "issuer_url": tailnet_issuer_url,

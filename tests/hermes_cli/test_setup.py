@@ -2,8 +2,6 @@ import json
 
 from hermes_cli.auth import _update_config_for_provider, get_active_provider
 from hermes_cli.config import load_config, save_config
-from hermes_cli.product_config import load_product_config
-from hermes_cli.product_setup import setup_product_network
 from hermes_cli.setup import setup_model_provider
 
 
@@ -182,25 +180,3 @@ def test_codex_setup_uses_runtime_access_token_for_live_model_list(tmp_path, mon
     assert reloaded["model"]["provider"] == "openai-codex"
     assert reloaded["model"]["default"] == "gpt-5.2-codex"
     assert reloaded["model"]["base_url"] == "https://chatgpt.com/backend-api/codex"
-
-
-def test_setup_product_network_updates_public_host(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: "officebox.local")
-
-    setup_product_network()
-
-    product_config = load_product_config()
-    assert product_config["network"]["public_host"] == "officebox.local"
-
-
-def test_setup_product_network_retries_after_raw_ip(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-
-    answers = iter(["192.168.1.27", "officebox.local"])
-    monkeypatch.setattr("hermes_cli.product_setup.prompt", lambda *args, **kwargs: next(answers))
-
-    setup_product_network()
-
-    product_config = load_product_config()
-    assert product_config["network"]["public_host"] == "officebox.local"

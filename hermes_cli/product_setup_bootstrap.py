@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import sys
 
-from hermes_cli.config import get_config_path, get_env_path, get_hermes_home, save_env_value_secure
+from hermes_cli.config import get_config_path, get_env_path, get_env_value, get_hermes_home, save_env_value_secure
 from hermes_cli.product_config import load_product_config, save_product_config
 from hermes_cli.product_install import ensure_product_app_service_started, product_install_root, validate_product_host_prereqs
 from hermes_cli.product_stack import (
@@ -31,18 +31,20 @@ def configure_tsidp_client_credentials() -> None:
     urls = resolve_product_urls(product_config)
     current_client_id = str(auth.get("client_id", "")).strip() or "hermes-core"
     client_secret_ref = str(auth.get("client_secret_ref", "")).strip()
+    existing_client_secret = str(get_env_value(client_secret_ref) or "").strip()
     print()
     print_header("tsidp Client")
     print_info("The bundled tsidp service is running.")
-    print_info("Next steps:")
-    print_info("  1. Open the tsidp URL below")
-    print_info("  2. Create a client named Hermes Core")
-    print_info("  3. Use the redirect URI shown below")
-    print_info("  4. Paste the client id and client secret back here")
+    print_info("Open the tsidp URL below and create or update the Hermes Core OIDC client.")
     print_info(f"  tsidp URL:      {urls['issuer_url']}")
     print_info(f"  Redirect URI:   {urls['oidc_callback_url']}")
     print_info("  Suggested name: Hermes Core")
     print_info("  Scopes:         openid profile email")
+    print_info("Paste the client id and client secret here after saving the client in tsidp.")
+    if current_client_id:
+        print_info("Press Enter to keep the current saved client id.")
+    if existing_client_secret:
+        print_info("Press Enter to keep the current saved client secret.")
     while True:
         client_id = _sanitize_prompt_text(prompt("tsidp OIDC client id", current_client_id) or current_client_id)
         if client_id:
@@ -53,6 +55,8 @@ def configure_tsidp_client_credentials() -> None:
         client_secret = _sanitize_prompt_text(prompt("tsidp OIDC client secret", ""))
         if client_secret:
             save_env_value_secure(client_secret_ref, client_secret)
+            break
+        if existing_client_secret:
             break
         print_warning("tsidp OIDC client secret must not be empty.")
     save_product_config(product_config)
@@ -112,11 +116,20 @@ def start_product_stack() -> None:
     ensure_product_stack_started()
     configure_tsidp_client_credentials()
     state = bootstrap_first_admin_enrollment()
-    ensure_product_app_service_started(load_product_config())
+    product_config = load_product_config()
+    ensure_product_app_service_started(product_config)
+    urls = resolve_product_urls(product_config)
     print_info("Bundled tsidp service is configured.")
-    print_info("  First admin bootstrap: one-time link required")
+    if bool(state.get("first_admin_login_seen", False)):
+        print_info("  First admin bootstrap: already completed")
+        claimed_login = str(state.get("tailscale_login", "")).strip()
+        if claimed_login:
+            print_info(f"  First admin account:   {claimed_login}")
+    else:
+        print_info("  First admin bootstrap: one-time link required")
+        print_info(f"  Bootstrap URL:         {state['setup_url']}")
     print_info(f"  Auth mode:            {state['auth_mode']}")
-    print_info(f"  App URL:              {state['setup_url']}")
+    print_info(f"  App URL:              {urls['app_base_url']}")
     print_info(f"  OIDC client:          {state['oidc_client_id']}")
 
 

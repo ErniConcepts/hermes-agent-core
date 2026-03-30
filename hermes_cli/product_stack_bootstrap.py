@@ -142,7 +142,6 @@ def initialize_product_stack(config: dict[str, Any] | None = None) -> dict[str, 
     ensure_product_home()
     secure_tree(get_product_services_root(), get_tsidp_service_root(), get_tsidp_data_root(), get_product_bootstrap_root())
     urls = resolve_product_urls(product_config)
-    product_config["network"]["public_host"] = urls["public_host"]
     product_config["auth"]["provider"] = "tsidp"
     product_config["auth"]["issuer_url"] = urls["issuer_url"]
     tsidp_service_config(product_config)

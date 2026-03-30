@@ -107,7 +107,6 @@ Typical install flow:
 3. enter:
    - Tailscale auth key for the bundled `tsidp` node
    - Tailscale API token so setup can patch tailnet policy automatically
-   - `tsidp` hostname
 4. let setup patch the tailnet policy and start the bundled `tsidp` service
 5. open the `tsidp` URL shown by setup and create a Hermes Core OIDC client
 6. paste the `tsidp` client id/secret back into setup
@@ -134,13 +133,13 @@ Typical install flow:
   - `tsidp` OIDC client id
   - `tsidp` OIDC client secret
 - prompted by setup:
-  - `tsidp` hostname
   - optional SOUL template path
   - per-user workspace limit
 
 What setup automates:
 
 - it detects the current Tailscale device and MagicDNS suffix
+- it uses the fixed `idp.<tailnet>.ts.net` hostname for the bundled `tsidp` issuer
 - it uses the API token to add the required `tailscale.com/cap/tsidp` grants
 - it verifies the policy before continuing to the `tsidp` client step
 
@@ -155,6 +154,8 @@ Current first-admin flow:
 5. Open that exact bootstrap link in a browser that can access the same tailnet.
 6. Sign in with Tailscale through `tsidp`.
 7. The first successful login through that bootstrap link becomes the first admin account.
+
+If setup is rerun after the first admin already exists, it keeps the current first admin and refreshes the active `tsidp` client configuration instead of creating a new bootstrap link.
 
 Properties of this flow:
 
@@ -223,6 +224,17 @@ hermes-core uninstall --yes
 
 The normal `hermes-core setup` flow already includes the bootstrap/start step at the end.
 `hermes-core setup bootstrap` remains available as a manual recovery command.
+
+## Rerunning Setup
+
+Rerunning `hermes-core setup` is safe and is the normal way to refresh product configuration.
+
+On reruns:
+
+- Tailscale detection is repeated from the current host/tailnet state
+- pressing Enter keeps the existing saved Tailscale auth key and API token
+- the `tsidp` client step can keep the existing client id and client secret by pressing Enter
+- if the first admin was already created earlier, setup reports that bootstrap is already completed and keeps that account in place
 
 ## Cleanup / Fresh Reinstall
 

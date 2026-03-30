@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from hermes_cli.product_config import load_product_config, save_product_config
+from hermes_cli.product_stack import load_first_admin_enrollment_state
 from hermes_cli.setup import print_header, print_info, print_warning, prompt
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -71,6 +72,14 @@ def setup_product_bootstrap_identity() -> None:
     bootstrap = product_config.setdefault("bootstrap", {})
     bootstrap.setdefault("first_admin_display_name", "Administrator")
     save_product_config(product_config)
-    print_header("Tailnet Auth")
-    print_info("Setup will create a one-time bootstrap link for the first admin.")
-    print_info("Open that link, sign in with Tailscale, and the first authenticated account becomes admin.")
+    enrollment_state = load_first_admin_enrollment_state() or {}
+    print_header("Tailnet Auth Status")
+    if bool(enrollment_state.get("first_admin_login_seen", False)):
+        print_info("First admin bootstrap is already completed on this install.")
+        claimed_login = str(enrollment_state.get("tailscale_login", "")).strip()
+        if claimed_login:
+            print_info(f"Current first admin account: {claimed_login}")
+        print_info("Setup will keep the existing first admin and refresh the current auth configuration.")
+    else:
+        print_info("Setup will create a one-time bootstrap link for the first admin.")
+        print_info("Open that link, sign in with Tailscale, and the first authenticated account becomes admin.")
