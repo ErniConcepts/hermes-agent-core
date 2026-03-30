@@ -164,7 +164,7 @@ def _request_json(
     if response.status_code == 403:
         raise RuntimeError("The Tailscale API token does not have permission to edit tailnet policy.")
     if response.status_code >= 400:
-        raise RuntimeError(f"Tailscale API {method} {path} failed with {response.status_code}: {response.text}")
+        raise RuntimeError(f"Tailscale API {method} {path} failed with HTTP {response.status_code}.")
     try:
         payload = response.json()
     except ValueError as exc:

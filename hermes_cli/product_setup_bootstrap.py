@@ -77,7 +77,6 @@ def print_product_setup_summary() -> None:
     print_info(f"Tailnet app URL:         {urls['app_base_url']}")
     print_info(f"Tailnet OIDC issuer:     {urls['issuer_url']}")
     print_info(f"Tailnet policy:          {policy_status}")
-    print_info(f"Local debug URL:         {urls['local_app_base_url']}")
     if bool(enrollment_state.get("first_admin_login_seen", False)):
         print_info("First admin bootstrap:   completed")
         claimed_login = str(enrollment_state.get("tailscale_login", "")).strip()
