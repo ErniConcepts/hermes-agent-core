@@ -6,17 +6,23 @@ from dataclasses import dataclass
 import hashlib
 import logging
 import secrets
+import sys
 import time
 from collections import deque
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 from hermes_cli.config import get_env_value
+from hermes_cli.product_app_admin_routes import register_admin_routes
+from hermes_cli.product_app_auth_routes import register_auth_routes
+from hermes_cli.product_app_chat_routes import register_chat_routes
+from hermes_cli.product_app_root_routes import register_root_routes
+from hermes_cli.product_app_workspace_routes import register_workspace_routes
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_invites import list_pending_product_signup_invites
 from hermes_cli.product_oidc import (
@@ -583,257 +589,9 @@ def _handle_tsidp_identity(request: Request, identity: dict[str, str]) -> Produc
     raise HTTPException(status_code=403, detail="This Tailscale account is not invited to this app.")
 
 
-def _register_root_routes(app: FastAPI, context: ProductAppContext) -> None:
-    @app.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
-        return HTMLResponse(build_product_index_html(product_name=context.product_name, account_url=context.app_base_url))
-
-    @app.get("/healthz", response_model=ProductHealthResponse)
-    def healthz() -> ProductHealthResponse:
-        return ProductHealthResponse(
-            auth_provider=context.auth_provider,
-            issuer_url=_current_product_urls()["issuer_url"],
-            app_base_url=_current_app_base_url(),
-        )
-
-    @app.get("/invite/{token}")
-    def invite_login(request: Request, token: str) -> RedirectResponse:
-        _set_pending_invite_token(request, token)
-        return RedirectResponse("/api/auth/login", status_code=303)
-
-    @app.get("/bootstrap/{token}")
-    def bootstrap_login(request: Request, token: str) -> RedirectResponse:
-        _set_pending_bootstrap_token(request, token)
-        return RedirectResponse("/api/auth/login", status_code=303)
-
-
-def _register_auth_routes(app: FastAPI, context: ProductAppContext) -> None:
-    @app.get("/api/auth/login")
-    def auth_login(request: Request) -> RedirectResponse:
-        _enforce_auth_rate_limit(request, "login")
-        _csrf_token(request)
-        _clear_notice(request)
-        _set_pending_invite_identity(request, None)
-        existing = request.session.get("user")
-        if isinstance(existing, dict) and not _pending_invite_token(request) and not _pending_bootstrap_token(request):
-            try:
-                refreshed = _resolve_session_user(request)
-            except HTTPException:
-                refreshed = None
-            if refreshed is not None:
-                _mark_bootstrap_completed_if_admin(refreshed)
-                return RedirectResponse(_current_app_base_url(), status_code=303)
-            request.session.clear()
-        return _start_tsidp_login(request, context)
-
-    @app.get("/api/auth/oidc/callback")
-    def auth_callback(request: Request, code: str, state: str) -> RedirectResponse:
-        _enforce_auth_rate_limit(request, "callback")
-        pending = request.session.get("oidc_pending")
-        if not isinstance(pending, dict):
-            return RedirectResponse(_current_app_base_url(), status_code=303)
-        if state != pending.get("state"):
-            request.session.pop("oidc_pending", None)
-            _set_notice(request, "The Tailscale login state was invalid. Please try again.")
-            return RedirectResponse(_current_app_base_url(), status_code=303)
-
-        settings = load_product_oidc_client_settings(config=context.product_config)
-        metadata = discover_product_oidc_provider_metadata(settings)
-        token_response = exchange_product_oidc_code(
-            settings,
-            metadata,
-            code=code,
-            verifier=str(pending.get("verifier", "")),
-        )
-        request.session.pop("oidc_pending", None)
-        id_token_claims: dict[str, Any] | None = None
-        id_token = str(token_response.get("id_token", "")).strip()
-        if id_token:
-            id_token_claims = validate_product_oidc_id_token(
-                id_token,
-                settings,
-                metadata,
-                nonce=str(pending.get("nonce", "")),
-            )
-        access_token = str(token_response.get("access_token", "")).strip()
-        if access_token and metadata.userinfo_endpoint:
-            claims = fetch_product_oidc_userinfo(access_token, metadata)
-        elif isinstance(id_token_claims, dict):
-            claims = id_token_claims
-        else:
-            _set_notice(request, "The Tailscale login response did not include identity claims.")
-            return RedirectResponse(_current_app_base_url(), status_code=303)
-
-        identity = _tailscale_identity_from_claims(claims)
-        if not identity.get("sub") or not identity.get("login"):
-            _set_notice(request, "The Tailscale login response did not include a stable account identity.")
-            return RedirectResponse(_current_app_base_url(), status_code=303)
-
-        try:
-            provider_user = _handle_tsidp_identity(request, identity)
-        except HTTPException:
-            request.session.pop("user", None)
-            request.session.pop("user_refreshed_at", None)
-            return RedirectResponse(_current_app_base_url(), status_code=303)
-
-        _clear_notice(request)
-        _store_session_user(request, _provider_user_session_payload(provider_user))
-        _mark_bootstrap_completed_if_admin(request.session["user"])
-        _csrf_token(request)
-        return RedirectResponse(_current_app_base_url(), status_code=303)
-
-    @app.get("/api/auth/session", response_model=ProductSessionResponse)
-    def auth_session(request: Request) -> ProductSessionResponse:
-        try:
-            return _session_response_payload(request)
-        except HTTPException:
-            return ProductSessionResponse(authenticated=False, csrf_token=_csrf_token(request))
-
-    @app.post("/api/auth/invite/claim", response_model=ProductSessionResponse)
-    def auth_claim_invite(request: Request) -> ProductSessionResponse:
-        _require_csrf(request)
-        invite_token = _pending_invite_token(request)
-        identity = _pending_invite_identity(request)
-        if not invite_token or identity is None:
-            raise HTTPException(status_code=400, detail="No invite claim is pending")
-        try:
-            provider_user = claim_product_user_from_invite(
-                token=invite_token,
-                tailscale_subject=identity["sub"],
-                tailscale_login=identity["login"],
-                display_name=identity.get("name"),
-            )
-        except ValueError as exc:
-            _set_notice(request, str(exc), tailscale_login=identity.get("login"))
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        _set_pending_invite_token(request, None)
-        _set_pending_invite_identity(request, None)
-        _clear_notice(request)
-        _store_session_user(request, _provider_user_session_payload(provider_user))
-        _csrf_token(request)
-        return _session_response_payload(request)
-
-    @app.post("/api/auth/logout", response_model=ProductSessionResponse)
-    def auth_logout(request: Request) -> ProductSessionResponse:
-        _require_csrf(request)
-        request.session.clear()
-        _csrf_token(request)
-        return ProductSessionResponse(authenticated=False, csrf_token=request.session.get("csrf_token"))
-
-
-def _register_chat_routes(app: FastAPI) -> None:
-    @app.get("/api/chat/session", response_model=ProductChatSessionResponse)
-    def chat_session(request: Request) -> ProductChatSessionResponse:
-        user = _require_product_user(request)
-        return ProductChatSessionResponse(**_runtime_session_payload(user))
-
-    @app.post("/api/chat/turn/stream")
-    def chat_turn_stream(request: Request, payload: ProductChatTurnRequest) -> StreamingResponse:
-        user = _require_product_user(request)
-        _require_csrf(request)
-        try:
-            event_stream = stream_product_runtime_turn(user, payload.user_message)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return StreamingResponse(
-            event_stream,
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-
-def _register_workspace_routes(app: FastAPI) -> None:
-    @app.get("/api/workspace", response_model=ProductWorkspaceResponse)
-    def workspace_state(request: Request, path: str = "") -> ProductWorkspaceResponse:
-        user = _require_product_user(request)
-        try:
-            payload = get_workspace_state(user, path=path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _workspace_response_payload(payload)
-
-    @app.get("/api/workspace/download")
-    def workspace_download(request: Request, path: str) -> FileResponse:
-        user = _require_product_user(request)
-        try:
-            target, _normalized = resolve_workspace_file(user, path=path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return FileResponse(target, filename=target.name, media_type="application/octet-stream")
-
-    @app.post("/api/workspace/folders", response_model=ProductWorkspaceResponse)
-    def workspace_create_folder(request: Request, payload: ProductCreateWorkspaceFolderRequest) -> ProductWorkspaceResponse:
-        user = _require_product_user(request)
-        _require_csrf(request)
-        try:
-            state = create_workspace_folder(user, parent_path=payload.path, folder_name=payload.name)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _workspace_response_payload(state)
-
-    @app.post("/api/workspace/files", response_model=ProductWorkspaceResponse)
-    async def workspace_upload_files(
-        request: Request,
-        path: str = Form(default=""),
-        files: list[UploadFile] = File(...),
-    ) -> ProductWorkspaceResponse:
-        user = _require_product_user(request)
-        _require_csrf(request)
-        current_state = None
-        try:
-            for upload in files:
-                content = await upload.read()
-                current_state = store_workspace_file(
-                    user,
-                    parent_path=path,
-                    filename=upload.filename or "",
-                    content=content,
-                )
-        except ProductWorkspaceQuotaError as exc:
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        finally:
-            for upload in files:
-                await upload.close()
-        if current_state is None:
-            raise HTTPException(status_code=400, detail="At least one file is required")
-        return _workspace_response_payload(current_state)
-
-    @app.post("/api/workspace/delete", response_model=ProductWorkspaceResponse)
-    def workspace_delete(request: Request, payload: ProductDeleteWorkspacePathRequest) -> ProductWorkspaceResponse:
-        user = _require_product_user(request)
-        _require_csrf(request)
-        try:
-            state = delete_workspace_path(user, path=payload.path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _workspace_response_payload(state)
-
-
-def _register_admin_routes(app: FastAPI) -> None:
-    @app.get("/api/admin/users", response_model=ProductAdminUsersResponse)
-    def admin_list_users(request: Request) -> ProductAdminUsersResponse:
-        admin_user = _require_admin_user(request)
-        return _list_admin_entries(admin_user)
-
-    @app.post("/api/admin/users", response_model=ProductCreatedUser)
-    def admin_create_user(request: Request, payload: ProductCreateUserRequest) -> ProductCreatedUser:
-        _require_admin_user(request)
-        _require_csrf(request)
-        return _create_signup_user(payload)
-
-    @app.post("/api/admin/users/{user_id}/deactivate", response_model=ProductUser)
-    def admin_deactivate_user(request: Request, user_id: str) -> ProductUser:
-        admin_user = _require_admin_user(request)
-        _require_csrf(request)
-        if user_id == str(admin_user.get("sub") or ""):
-            raise HTTPException(status_code=400, detail="Admins cannot deactivate their own account")
-        return _deactivate_runtime_user(user_id)
-
-
 def create_product_app() -> FastAPI:
     context = _build_product_app_context()
+    hooks = sys.modules[__name__]
 
     app = FastAPI(title="Hermes Core Product App", version="0.1.0")
     app.state.product_app_context = context
@@ -854,9 +612,9 @@ def create_product_app() -> FastAPI:
             return RedirectResponse(redirect_url, status_code=307)
         return await call_next(request)
 
-    _register_root_routes(app, context)
-    _register_auth_routes(app, context)
-    _register_chat_routes(app)
-    _register_workspace_routes(app)
-    _register_admin_routes(app)
+    register_root_routes(app, context, hooks)
+    register_auth_routes(app, context, hooks)
+    register_chat_routes(app, hooks)
+    register_workspace_routes(app, hooks)
+    register_admin_routes(app, hooks)
     return app
