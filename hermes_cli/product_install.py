@@ -3,21 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import subprocess
-import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-try:
-    import grp
-except ModuleNotFoundError:  # pragma: no cover - Windows
-    grp = None
-
-from hermes_cli.config import get_env_path, get_hermes_home
-from hermes_cli.product_config import (
-    ensure_product_home,
-    get_product_config_path,
-    get_product_storage_root,
-)
+from hermes_cli.config import get_env_path
+from hermes_cli.product_config import get_product_config_path, get_product_storage_root
 from hermes_cli.product_install_cleanup import (
     build_product_runtime_image as _build_product_runtime_image_impl,
     perform_product_cleanup as _perform_product_cleanup_impl,
@@ -59,34 +49,26 @@ from hermes_cli.product_install_host import (
 )
 from hermes_cli.product_install_service import (
     ensure_product_app_service_started as _ensure_product_app_service_started_impl,
-    get_product_install_state_path as _get_product_install_state_path_impl,
-    load_product_install_state as _load_product_install_state_impl,
+    get_product_install_state_path,
+    load_product_install_state,
     product_app_service_path as _product_app_service_path_impl,
     product_build_context_ignored as _product_build_context_ignored_impl,
     product_install_root as _product_install_root_impl,
-    product_install_state as _product_install_state_impl,
+    product_install_state,
     product_runtime_dockerfile as _product_runtime_dockerfile_impl,
     render_product_app_service_unit as _render_product_app_service_unit_impl,
     render_product_service_unit as _render_product_service_unit_impl,
-    save_product_install_state as _save_product_install_state_impl,
+    save_product_install_state,
     service_bind_host_and_home as _service_bind_host_and_home_impl,
     write_product_app_service_unit as _write_product_app_service_unit_impl,
 )
-from hermes_cli.product_stack import (
-    get_product_services_root,
-    get_tsidp_compose_path,
-    load_product_config,
-)
-from utils import atomic_json_write
+from hermes_cli.product_stack import get_product_services_root, get_tsidp_compose_path
 
 
 DEFAULT_INSTALL_DIR_NAME = "hermes-core"
 DOCKER_DAEMON_CONFIG_PATH = Path("/etc/docker/daemon.json")
 RUNSC_RUNTIME_NAME = "runsc"
-RUNSC_RUNTIME_CONFIG = {
-    "path": "runsc",
-    "runtimeArgs": ["--network=host"],
-}
+RUNSC_RUNTIME_CONFIG = {"path": "runsc", "runtimeArgs": ["--network=host"]}
 PRODUCT_SECRET_KEYS = [
     "HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET",
     "HERMES_PRODUCT_SESSION_SECRET",
@@ -95,15 +77,8 @@ PRODUCT_SECRET_KEYS = [
 PRODUCT_APP_SERVICE_NAME = "hermes-core-product-app.service"
 PRODUCT_RUNTIME_IMAGE_TAG = "hermes-core-product-runtime:local"
 DOCKER_GROUP_RELOGIN_EXIT_CODE = 42
-APT_INSTALL_PACKAGES = [
-    "docker.io",
-    "runsc",
-]
-APT_DOCKER_COMPOSE_PACKAGE_CANDIDATES = [
-    "docker-compose-v2",
-    "docker-compose-plugin",
-    "docker-compose",
-]
+APT_INSTALL_PACKAGES = ["docker.io", "runsc"]
+APT_DOCKER_COMPOSE_PACKAGE_CANDIDATES = ["docker-compose-v2", "docker-compose-plugin", "docker-compose"]
 PRODUCT_DOCKER_BUILD_IGNORE_PATTERNS = (
     ".git",
     ".git/**",
@@ -120,6 +95,8 @@ PRODUCT_DOCKER_BUILD_IGNORE_PATTERNS = (
     ".noncode_files.txt",
     "Dockerfile.product-local",
 )
+
+
 @dataclass(frozen=True)
 class ProductServiceUnitSpec:
     description: str
@@ -144,19 +121,10 @@ def _run(
         command = ["sudo", *command]
         using_sudo = True
     try:
-        return subprocess.run(
-            command,
-            check=check,
-            capture_output=capture_output,
-            text=True,
-        )
+        return subprocess.run(command, check=check, capture_output=capture_output, text=True)
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip().lower()
-        if using_sudo and (
-            "a password is required" in stderr
-            or "no tty present" in stderr
-            or "terminal is required" in stderr
-        ):
+        if using_sudo and ("a password is required" in stderr or "no tty present" in stderr or "terminal is required" in stderr):
             raise RuntimeError(
                 "Host prerequisite installation needs sudo in an interactive local shell. "
                 "Rerun 'hermes-core install' directly on the Linux device and enter your sudo password when prompted."
@@ -165,197 +133,273 @@ def _run(
 
 
 def _product_app_service_path() -> Path:
-    return _product_app_service_path_impl(sys.modules[__name__])
+    return _product_app_service_path_impl(PRODUCT_APP_SERVICE_NAME)
 
 
 def product_install_root() -> Path:
-    return _product_install_root_impl(sys.modules[__name__])
+    return _product_install_root_impl(DEFAULT_INSTALL_DIR_NAME)
 
 
 def product_runtime_dockerfile() -> Path:
-    return _product_runtime_dockerfile_impl(sys.modules[__name__])
+    return _product_runtime_dockerfile_impl(DEFAULT_INSTALL_DIR_NAME)
 
 
 def _linux_distro_id() -> str:
-    return _linux_distro_id_impl(sys.modules[__name__])
+    return _linux_distro_id_impl(_is_linux)
 
 
 def _apt_supported_linux() -> bool:
-    return _apt_supported_linux_impl(sys.modules[__name__])
+    return _apt_supported_linux_impl(_linux_distro_id)
 
 
 def _systemd_available() -> bool:
-    return _systemd_available_impl(sys.modules[__name__])
+    return _systemd_available_impl(_run)
 
 
 def _product_service_identity() -> tuple[str, str]:
-    return _product_service_identity_impl(sys.modules[__name__])
+    return _product_service_identity_impl(_is_linux)
 
 
 def _current_user_name() -> str:
-    return _current_user_name_impl(sys.modules[__name__])
+    return _current_user_name_impl()
 
 
 def _user_in_group(group_name: str, user_name: str | None = None) -> bool:
-    return _user_in_group_impl(sys.modules[__name__], group_name, user_name)
+    return _user_in_group_impl(group_name, user_name)
 
 
 def _service_bind_host_and_home(config: dict[str, Any] | None = None) -> tuple[str, str, str]:
-    return _service_bind_host_and_home_impl(sys.modules[__name__], config)
+    from hermes_cli.product_stack import load_product_config
+
+    return _service_bind_host_and_home_impl(load_product_config, DEFAULT_INSTALL_DIR_NAME, config)
 
 
 def _render_product_service_unit(spec: ProductServiceUnitSpec, *, bind_host: str, hermes_home: str, install_root: str) -> str:
-    return _render_product_service_unit_impl(
-        sys.modules[__name__], spec, bind_host=bind_host, hermes_home=hermes_home, install_root=install_root
-    )
+    return _render_product_service_unit_impl(_product_service_identity, spec, bind_host=bind_host, hermes_home=hermes_home, install_root=install_root)
 
 
 def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> str:
-    return _render_product_app_service_unit_impl(sys.modules[__name__], config)
+    from hermes_cli.product_stack import load_product_config
+
+    return _render_product_app_service_unit_impl(
+        load_product_config_fn=load_product_config,
+        service_bind_host_and_home_fn=_service_bind_host_and_home_impl,
+        render_product_service_unit_fn=_render_product_service_unit,
+        product_service_unit_spec_cls=ProductServiceUnitSpec,
+        default_install_dir_name=DEFAULT_INSTALL_DIR_NAME,
+        config=config,
+    )
 
 
 def _write_product_app_service_unit(config: dict[str, Any] | None = None) -> None:
-    _write_product_app_service_unit_impl(sys.modules[__name__], config)
+    _write_product_app_service_unit_impl(
+        product_app_service_path_fn=_product_app_service_path_impl,
+        render_product_app_service_unit_fn=_render_product_app_service_unit,
+        service_name=PRODUCT_APP_SERVICE_NAME,
+        config=config,
+    )
 
 
 def ensure_product_app_service_started(config: dict[str, Any] | None = None) -> None:
-    _ensure_product_app_service_started_impl(sys.modules[__name__], config)
-
-
-def get_product_install_state_path() -> Path:
-    return _get_product_install_state_path_impl(sys.modules[__name__])
-
-
-def load_product_install_state() -> dict[str, Any]:
-    return _load_product_install_state_impl(sys.modules[__name__])
-
-
-def save_product_install_state(state: dict[str, Any]) -> None:
-    _save_product_install_state_impl(sys.modules[__name__], state)
+    _ensure_product_app_service_started_impl(
+        is_linux_fn=_is_linux,
+        systemd_available_fn=_systemd_available,
+        write_product_app_service_unit_fn=_write_product_app_service_unit,
+        run_fn=_run,
+        service_name=PRODUCT_APP_SERVICE_NAME,
+        config=config,
+    )
 
 
 def _product_install_state() -> dict[str, Any]:
-    return _product_install_state_impl(sys.modules[__name__])
+    return product_install_state()
 
 
 def _product_build_context_ignored(relative_path: PurePosixPath, *, is_dir: bool) -> bool:
-    return _product_build_context_ignored_impl(sys.modules[__name__], relative_path, is_dir=is_dir)
+    return _product_build_context_ignored_impl(PRODUCT_DOCKER_BUILD_IGNORE_PATTERNS, relative_path, is_dir=is_dir)
 
 
 def _stage_product_build_context(source_root: Path, destination_root: Path) -> Path:
-    return _stage_product_build_context_impl(sys.modules[__name__], source_root, destination_root)
+    return _stage_product_build_context_impl(_product_build_context_ignored, source_root, destination_root)
 
 
 def _docker_compose_available() -> bool:
-    return _docker_compose_available_impl(sys.modules[__name__])
+    return _docker_compose_available_impl(_run)
 
 
 def _docker_available() -> bool:
-    return _docker_available_impl(sys.modules[__name__])
-
-
-def _docker_readiness_probe() -> tuple[bool, str]:
-    return _docker_readiness_probe_impl(sys.modules[__name__])
-
-
-def _runsc_available() -> bool:
-    return _runsc_available_impl(sys.modules[__name__])
+    return _docker_available_impl(_run)
 
 
 def _docker_runtimes() -> dict[str, Any]:
-    return _docker_runtimes_impl(sys.modules[__name__])
+    return _docker_runtimes_impl(_run)
 
 
 def _runsc_runtime_matches(config: Any) -> bool:
-    return _runsc_runtime_matches_impl(sys.modules[__name__], config)
+    return _runsc_runtime_matches_impl(RUNSC_RUNTIME_NAME, RUNSC_RUNTIME_CONFIG, config)
+
+
+def _docker_readiness_probe() -> tuple[bool, str]:
+    return _docker_readiness_probe_impl(
+        run_fn=_run,
+        systemd_available_fn=_systemd_available,
+        docker_runtimes_fn=_docker_runtimes,
+        runsc_runtime_matches_fn=_runsc_runtime_matches,
+        runtime_name=RUNSC_RUNTIME_NAME,
+    )
+
+
+def _runsc_available() -> bool:
+    return _runsc_available_impl(_run)
 
 
 def _runsc_registered() -> bool:
-    return _runsc_registered_impl(sys.modules[__name__])
+    return _runsc_registered_impl(_run, RUNSC_RUNTIME_NAME, RUNSC_RUNTIME_CONFIG)
 
 
 def _load_docker_daemon_config() -> tuple[dict[str, Any], bool]:
-    return _load_docker_daemon_config_impl(sys.modules[__name__])
+    return _load_docker_daemon_config_impl(_run, DOCKER_DAEMON_CONFIG_PATH)
 
 
 def _write_docker_daemon_config(config: dict[str, Any]) -> None:
-    _write_docker_daemon_config_impl(sys.modules[__name__], config)
+    _write_docker_daemon_config_impl(_run, DOCKER_DAEMON_CONFIG_PATH, config)
 
 
 def _restart_docker_service() -> None:
-    _restart_docker_service_impl(sys.modules[__name__])
+    _restart_docker_service_impl(_run, _systemd_available)
 
 
 def _start_and_enable_docker_service() -> None:
-    _start_and_enable_docker_service_impl(sys.modules[__name__])
+    _start_and_enable_docker_service_impl(_run, _systemd_available)
 
 
 def _docker_service_active() -> bool:
-    return _docker_service_active_impl(sys.modules[__name__])
+    return _docker_service_active_impl(_run, _systemd_available)
 
 
 def _apt_install(packages: list[str]) -> None:
-    _apt_install_impl(sys.modules[__name__], packages)
+    _apt_install_impl(_run, packages)
 
 
 def _apt_package_available(package_name: str) -> bool:
-    return _apt_package_available_impl(sys.modules[__name__], package_name)
+    return _apt_package_available_impl(_run, package_name)
 
 
 def _linux_host_prereq_packages() -> list[str]:
-    return _linux_host_prereq_packages_impl(sys.modules[__name__])
+    return _linux_host_prereq_packages_impl(APT_DOCKER_COMPOSE_PACKAGE_CANDIDATES, APT_INSTALL_PACKAGES, _apt_package_available)
 
 
 def ensure_linux_product_host_prereqs() -> dict[str, bool]:
-    return _ensure_linux_product_host_prereqs_impl(sys.modules[__name__])
+    return _ensure_linux_product_host_prereqs_impl(
+        is_linux_fn=_is_linux,
+        apt_supported_linux_fn=_apt_supported_linux,
+        docker_available_fn=_docker_available,
+        docker_compose_available_fn=_docker_compose_available,
+        runsc_available_fn=_runsc_available,
+        apt_install_fn=_apt_install,
+        linux_host_prereq_packages_fn=_linux_host_prereq_packages,
+        docker_service_active_fn=_docker_service_active,
+        start_and_enable_docker_service_fn=_start_and_enable_docker_service,
+        current_user_name_fn=_current_user_name,
+        user_in_group_fn=_user_in_group,
+        run_fn=_run,
+    )
 
 
 def ensure_runsc_registered_with_docker() -> bool:
-    return _ensure_runsc_registered_with_docker_impl(sys.modules[__name__])
+    return _ensure_runsc_registered_with_docker_impl(
+        load_docker_daemon_config_fn=_load_docker_daemon_config,
+        runsc_runtime_matches_fn=_runsc_runtime_matches,
+        runsc_registered_fn=_runsc_registered,
+        write_docker_daemon_config_fn=_write_docker_daemon_config,
+        restart_docker_service_fn=_restart_docker_service,
+        runtime_name=RUNSC_RUNTIME_NAME,
+        runtime_config=RUNSC_RUNTIME_CONFIG,
+    )
 
 
 def validate_product_host_prereqs() -> None:
-    _validate_product_host_prereqs_impl(sys.modules[__name__])
+    _validate_product_host_prereqs_impl(
+        is_linux_fn=_is_linux,
+        docker_readiness_probe_fn=_docker_readiness_probe,
+        docker_compose_available_fn=_docker_compose_available,
+        runsc_available_fn=_runsc_available,
+    )
 
 
 def _remove_env_keys(keys: list[str]) -> None:
-    _remove_env_keys_impl(sys.modules[__name__], keys)
+    _remove_env_keys_impl(get_env_path, keys)
 
 
 def _remove_runtime_containers() -> None:
-    _remove_runtime_containers_impl(sys.modules[__name__])
+    _remove_runtime_containers_impl(_run)
 
 
 def _remove_runtime_image() -> None:
-    _remove_runtime_image_impl(sys.modules[__name__])
+    _remove_runtime_image_impl(_run, PRODUCT_RUNTIME_IMAGE_TAG)
 
 
 def _remove_tsidp_stack() -> None:
-    _remove_tsidp_stack_impl(sys.modules[__name__])
+    _remove_tsidp_stack_impl(_run, get_tsidp_compose_path())
 
 
 def _remove_path(path: Path) -> None:
-    _remove_path_impl(sys.modules[__name__], path)
+    _remove_path_impl(_is_linux, _run, path)
 
 
 def _remove_install_tree_and_launchers() -> None:
-    _remove_install_tree_and_launchers_impl(sys.modules[__name__])
+    _remove_install_tree_and_launchers_impl(_remove_path, product_install_root)
 
 
 def _remove_product_user_services() -> None:
-    _remove_product_user_services_impl(sys.modules[__name__])
+    _remove_product_user_services_impl(
+        is_linux_fn=_is_linux,
+        systemd_available_fn=_systemd_available,
+        run_fn=_run,
+        product_app_service_path_fn=_product_app_service_path_impl,
+        service_name=PRODUCT_APP_SERVICE_NAME,
+    )
 
 
 def _remove_runsc_registration_if_managed() -> bool:
-    return _remove_runsc_registration_if_managed_impl(sys.modules[__name__])
+    return _remove_runsc_registration_if_managed_impl(
+        product_install_state_fn=_product_install_state,
+        is_linux_fn=_is_linux,
+        load_docker_daemon_config_fn=_load_docker_daemon_config,
+        runsc_runtime_matches_fn=_runsc_runtime_matches,
+        write_docker_daemon_config_fn=_write_docker_daemon_config,
+        restart_docker_service_fn=_restart_docker_service,
+        save_product_install_state_fn=save_product_install_state,
+        runtime_name=RUNSC_RUNTIME_NAME,
+    )
 
 
 def build_product_runtime_image() -> None:
-    _build_product_runtime_image_impl(sys.modules[__name__])
+    _build_product_runtime_image_impl(
+        product_runtime_dockerfile_fn=product_runtime_dockerfile,
+        product_install_root_fn=product_install_root,
+        stage_product_build_context_fn=_stage_product_build_context,
+        run_fn=_run,
+        runtime_image_tag=PRODUCT_RUNTIME_IMAGE_TAG,
+    )
 
 
 def perform_product_cleanup() -> dict[str, bool]:
-    return _perform_product_cleanup_impl(sys.modules[__name__])
+    return _perform_product_cleanup_impl(
+        docker_available_fn=_docker_available,
+        remove_tsidp_stack_fn=_remove_tsidp_stack,
+        remove_runtime_containers_fn=_remove_runtime_containers,
+        remove_runtime_image_fn=_remove_runtime_image,
+        remove_product_user_services_fn=_remove_product_user_services,
+        remove_runsc_registration_if_managed_fn=_remove_runsc_registration_if_managed,
+        remove_path_fn=_remove_path,
+        get_product_services_root_fn=get_product_services_root,
+        get_product_storage_root_fn=get_product_storage_root,
+        get_product_config_path_fn=get_product_config_path,
+        remove_env_keys_fn=_remove_env_keys,
+        remove_install_tree_and_launchers_fn=_remove_install_tree_and_launchers,
+        product_secret_keys=PRODUCT_SECRET_KEYS,
+    )
 
 
 def run_product_install(args: Any) -> None:
@@ -369,13 +413,10 @@ def run_product_install(args: Any) -> None:
         raise SystemExit(str(exc)) from exc
     docker_ready, docker_message = _docker_readiness_probe()
     if prereq_state.get("added_docker_group_membership") and not docker_ready:
-        print(
-            "Added your user to the docker group. Run 'newgrp docker' or start a new login shell, then rerun 'hermes-core install'."
-        )
+        print("Added your user to the docker group. Run 'newgrp docker' or start a new login shell, then rerun 'hermes-core install'.")
         raise SystemExit(DOCKER_GROUP_RELOGIN_EXIT_CODE)
     if not _docker_compose_available():
         raise SystemExit("docker compose is not available")
-
     if not _runsc_available():
         raise SystemExit("runsc is not installed on this machine")
     try:
@@ -389,10 +430,8 @@ def run_product_install(args: Any) -> None:
     state["managed_runsc_registration"] = bool(changed or state.get("managed_runsc_registration"))
     save_product_install_state(state)
     build_product_runtime_image()
-
     if getattr(args, "skip_setup", False):
         return
-
     validate_product_host_prereqs()
     setattr(args, "from_install", True)
     run_product_setup_wizard(args)
