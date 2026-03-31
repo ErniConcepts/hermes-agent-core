@@ -19,6 +19,11 @@ import uvicorn
 from hermes_state import SessionDB
 from hermes_cli.product_runtime import _RUNTIME_WORKSPACE_PATH
 
+_ACTIVE_AGENT_LOCK = threading.Lock()
+_ACTIVE_AGENTS: dict[str, Any] = {}
+_THINK_OPEN_TAGS = ("<REASONING_SCRATCHPAD>", "<think>", "<reasoning>", "<THINKING>", "<thinking>")
+_THINK_CLOSE_TAGS = ("</REASONING_SCRATCHPAD>", "</think>", "</reasoning>", "</THINKING>", "</thinking>")
+
 
 def _required_env(name: str) -> str:
     value = os.getenv(name)
@@ -126,10 +131,146 @@ def _visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         if role not in {"user", "assistant", "system"}:
             continue
         content = str(message.get("content") or "")
+        if role != "user":
+            content = _strip_reasoning_blocks(content)
         if role != "user" and not content.strip():
             continue
         visible.append({"role": role, "content": content})
     return visible
+
+
+def _strip_reasoning_blocks(content: str, *, trim: bool = True) -> str:
+    if not content:
+        return ""
+    stripped = content
+    stripped = re.sub(r"<think>.*?</think>", "", stripped, flags=re.DOTALL | re.IGNORECASE)
+    stripped = re.sub(r"<reasoning>.*?</reasoning>", "", stripped, flags=re.DOTALL | re.IGNORECASE)
+    stripped = re.sub(
+        r"<REASONING_SCRATCHPAD>.*?</REASONING_SCRATCHPAD>",
+        "",
+        stripped,
+        flags=re.DOTALL,
+    )
+    stripped = re.sub(r"</?(?:think|thinking|reasoning)>", "", stripped, flags=re.IGNORECASE)
+    stripped = re.sub(r"</REASONING_SCRATCHPAD>", "", stripped)
+    if "</think>" in content.lower() and "<think>" not in content.lower():
+        trailing = re.split(r"</think>", stripped, flags=re.IGNORECASE)[-1]
+        if trailing.strip():
+            stripped = trailing
+    return stripped.strip() if trim else stripped
+
+
+class _ReasoningStreamMux:
+    def __init__(self, *, on_answer: Any, on_reasoning: Any) -> None:
+        self._on_answer = on_answer
+        self._on_reasoning = on_reasoning
+        self._buffer = ""
+        self._in_reasoning = False
+        self._has_visible_answer = False
+
+    def feed(self, text: str | None) -> None:
+        if not text:
+            return
+        self._buffer += str(text)
+        while self._buffer:
+            if self._in_reasoning:
+                close_idx, close_tag = self._find_first_tag(self._buffer, _THINK_CLOSE_TAGS)
+                if close_tag is None:
+                    self._emit_safe_reasoning_tail()
+                    return
+                reasoning = self._buffer[:close_idx]
+                if reasoning:
+                    self._on_reasoning(reasoning)
+                self._buffer = self._buffer[close_idx + len(close_tag) :]
+                self._in_reasoning = False
+                continue
+
+            open_idx, open_tag = self._find_first_tag(self._buffer, _THINK_OPEN_TAGS)
+            close_idx, close_tag = self._find_first_tag(self._buffer, _THINK_CLOSE_TAGS)
+            if close_tag is not None and (open_tag is None or close_idx < open_idx) and not self._has_visible_answer:
+                reasoning = self._buffer[:close_idx]
+                if reasoning:
+                    self._on_reasoning(reasoning)
+                self._buffer = self._buffer[close_idx + len(close_tag) :]
+                continue
+            if open_tag is not None:
+                before = self._buffer[:open_idx]
+                if before:
+                    self._emit_answer(before)
+                self._buffer = self._buffer[open_idx + len(open_tag) :]
+                self._in_reasoning = True
+                continue
+            self._emit_safe_answer_tail()
+            return
+
+    def flush(self) -> None:
+        if not self._buffer:
+            return
+        if self._in_reasoning:
+            self._on_reasoning(self._buffer)
+        else:
+            self._emit_answer(self._buffer)
+        self._buffer = ""
+        self._in_reasoning = False
+
+    def _emit_answer(self, text: str) -> None:
+        visible = _strip_reasoning_blocks(text, trim=False)
+        if visible:
+            if visible.strip():
+                self._has_visible_answer = True
+            self._on_answer(visible)
+
+    def _emit_safe_answer_tail(self) -> None:
+        safe = self._buffer
+        for tag in _THINK_OPEN_TAGS:
+            for i in range(1, len(tag)):
+                if self._buffer.endswith(tag[:i]):
+                    safe = self._buffer[:-i]
+                    break
+        if safe:
+            self._emit_answer(safe)
+            self._buffer = self._buffer[len(safe) :]
+
+    def _emit_safe_reasoning_tail(self) -> None:
+        max_tag_len = max(len(tag) for tag in _THINK_CLOSE_TAGS)
+        if len(self._buffer) <= max_tag_len:
+            return
+        safe_reasoning = self._buffer[:-max_tag_len]
+        if safe_reasoning:
+            self._on_reasoning(safe_reasoning)
+        self._buffer = self._buffer[-max_tag_len:]
+
+    @staticmethod
+    def _find_first_tag(buffer: str, tags: tuple[str, ...]) -> tuple[int, str | None]:
+        first_idx = -1
+        first_tag = None
+        lowered = buffer.lower()
+        for tag in tags:
+            idx = lowered.find(tag.lower())
+            if idx != -1 and (first_idx == -1 or idx < first_idx):
+                first_idx = idx
+                first_tag = tag
+        return first_idx, first_tag
+
+
+def _register_active_agent(session_id: str, agent: Any) -> None:
+    with _ACTIVE_AGENT_LOCK:
+        _ACTIVE_AGENTS[session_id] = agent
+
+
+def _clear_active_agent(session_id: str, agent: Any) -> None:
+    with _ACTIVE_AGENT_LOCK:
+        if _ACTIVE_AGENTS.get(session_id) is agent:
+            _ACTIVE_AGENTS.pop(session_id, None)
+
+
+def _interrupt_active_agent(session_id: str) -> bool:
+    with _ACTIVE_AGENT_LOCK:
+        agent = _ACTIVE_AGENTS.get(session_id)
+    if agent is None:
+        return False
+    agent.interrupt()
+    return True
 
 
 def _conversation_for_agent(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -233,6 +374,7 @@ def create_product_runtime_app() -> FastAPI:
         try:
             db = SessionDB()
             agent = build_runtime_agent(db, session_id)
+            _register_active_agent(session_id, agent)
             history = _load_session_messages(db, session_id)
             result = agent.run_conversation(
                 request.user_message,
@@ -244,9 +386,11 @@ def create_product_runtime_app() -> FastAPI:
             status_code, detail = _classify_runtime_error(exc)
             raise HTTPException(status_code=status_code, detail=detail) from exc
         finally:
+            if "agent" in locals():
+                _clear_active_agent(session_id, agent)
             if "db" in locals():
                 db.close()
-        final_response = str(result.get("final_response") or result.get("response") or "")
+        final_response = _strip_reasoning_blocks(str(result.get("final_response") or result.get("response") or ""))
         return RuntimeTurnResponse(
             final_response=final_response,
             session_id=session_id,
@@ -254,6 +398,11 @@ def create_product_runtime_app() -> FastAPI:
             runtime_mode=runtime_mode,
             runtime_toolsets=runtime_toolsets,
         )
+
+    @app.post("/runtime/turn/stop")
+    def runtime_turn_stop(x_hermes_product_runtime_token: str | None = Header(default=None)) -> dict[str, bool]:
+        _require_runtime_token(x_hermes_product_runtime_token, runtime_token)
+        return {"stopped": _interrupt_active_agent(session_id)}
 
     @app.post("/runtime/turn/stream")
     def runtime_turn_stream(
@@ -266,30 +415,37 @@ def create_product_runtime_app() -> FastAPI:
         def _run() -> None:
             try:
                 db = SessionDB()
+                event_queue.put(("start", {"session_id": session_id}))
+                reasoning_emitter = lambda text: event_queue.put(("reasoning", {"delta": str(text or "")}))
+                answer_emitter = lambda text: event_queue.put(("answer", {"delta": str(text or "")}))
+                mux = _ReasoningStreamMux(on_answer=answer_emitter, on_reasoning=reasoning_emitter)
                 agent = build_runtime_agent(
                     db,
                     session_id,
-                    reasoning_callback=lambda text: event_queue.put(("reasoning", {"delta": str(text or "")})),
+                    reasoning_callback=reasoning_emitter,
                 )
+                _register_active_agent(session_id, agent)
                 setattr(
                     agent,
                     "reasoning_callback",
-                    lambda text: event_queue.put(("reasoning", {"delta": str(text or "")})),
+                    reasoning_emitter,
                 )
                 history = _load_session_messages(db, session_id)
-                event_queue.put(("start", {"session_id": session_id}))
                 result = agent.run_conversation(
                     request.user_message,
                     conversation_history=_conversation_for_agent(history),
-                    stream_callback=lambda text: event_queue.put(("answer", {"delta": str(text or "")})),
+                    stream_callback=mux.feed,
                     sync_honcho=False,
                 )
+                mux.flush()
                 updated_messages = _load_session_messages(db, session_id)
                 event_queue.put(
                     (
                         "final",
                         RuntimeTurnResponse(
-                            final_response=str(result.get("final_response") or result.get("response") or ""),
+                            final_response=_strip_reasoning_blocks(
+                                str(result.get("final_response") or result.get("response") or "")
+                            ),
                             session_id=session_id,
                             messages=[RuntimeMessage(**message) for message in _visible_messages(updated_messages)],
                             runtime_mode=runtime_mode,
@@ -301,6 +457,8 @@ def create_product_runtime_app() -> FastAPI:
                 _, detail = _classify_runtime_error(exc)
                 event_queue.put(("error", {"detail": detail}))
             finally:
+                if "agent" in locals():
+                    _clear_active_agent(session_id, agent)
                 if "db" in locals():
                     db.close()
                 event_queue.put(("done", {}))
@@ -309,7 +467,11 @@ def create_product_runtime_app() -> FastAPI:
             worker = threading.Thread(target=_run, daemon=True)
             worker.start()
             while True:
-                event, payload = event_queue.get()
+                try:
+                    event, payload = event_queue.get(timeout=1.0)
+                except queue.Empty:
+                    yield b": keepalive\n\n"
+                    continue
                 if event == "done":
                     break
                 yield _encode_sse(event, payload)

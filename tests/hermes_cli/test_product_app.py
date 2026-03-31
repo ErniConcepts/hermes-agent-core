@@ -302,6 +302,40 @@ def test_product_app_admin_creates_generic_invite_link(tmp_path, monkeypatch):
     assert response.json()["signup"]["signup_url"].startswith("https://device.tail5fd7a5.ts.net/invite/")
 
 
+def test_product_app_stop_route_proxies_runtime_interrupt(tmp_path, monkeypatch):
+    _configure_app(
+        monkeypatch,
+        tmp_path,
+        {
+            "sub": "ts-sub",
+            "email": "admin@example.com",
+            "preferred_username": "admin@example.com",
+            "name": "Admin Example",
+        },
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app._require_product_user",
+        lambda request: {
+            "id": "user-admin",
+            "sub": "user-admin",
+            "name": "Admin Example",
+            "preferred_username": "admin",
+            "email": "admin@example.com",
+            "is_admin": True,
+            "tailscale_login": "admin@example.com",
+        },
+    )
+    monkeypatch.setattr("hermes_cli.product_app._require_csrf", lambda request: None)
+    monkeypatch.setattr("hermes_cli.product_app.stop_product_runtime_turn", lambda *args, **kwargs: True)
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    response = client.post("/api/chat/turn/stop")
+
+    assert response.status_code == 200
+    assert response.json() == {"stopped": True}
+
+
 def test_product_app_rejects_first_admin_without_bootstrap_link(tmp_path, monkeypatch):
     claims = {
         "sub": "ts-admin-sub",

@@ -26,3 +26,9 @@ def register_chat_routes(app: FastAPI, services: ChatRouteServices) -> None:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/api/chat/turn/stop")
+    def chat_turn_stop(request: Request) -> dict[str, bool]:
+        user = services.require_product_user(request)
+        services.require_csrf(request)
+        return {"stopped": bool(services.stop_product_runtime_turn(user))}

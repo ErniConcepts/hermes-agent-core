@@ -60,6 +60,7 @@ PAGE_TEMPLATE = """<!doctype html>
 </label>
 <div class="actions">
 <button class="button" id="chatSubmit" type="submit">Send</button>
+<button class="chat-stop-button" id="chatStop" type="button" aria-label="Stop response"><span class="chat-stop-icon" aria-hidden="true"></span></button>
 </div>
 </form>
 </div>

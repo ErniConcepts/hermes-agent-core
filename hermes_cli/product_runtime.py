@@ -34,6 +34,7 @@ from hermes_cli.product_runtime_container import (
     runtime_container_user as _runtime_container_user,
     runtime_launch_env as _runtime_launch_env,
     runtime_mounts as _runtime_mounts,
+    stop_product_runtime_turn as _stop_product_runtime_turn_impl,
     stream_product_runtime_turn as _stream_product_runtime_turn_impl,
     wait_for_runtime_health as _wait_for_runtime_health,
 )
@@ -90,6 +91,11 @@ def stream_product_runtime_turn(
 ) -> Iterator[str]:
     record = ensure_product_runtime(user, config=config)
     yield from _stream_product_runtime_turn_impl(record, user_message)
+
+
+def stop_product_runtime_turn(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> bool:
+    record = ensure_product_runtime(user, config=config)
+    return _stop_product_runtime_turn_impl(record)
 
 
 def delete_product_runtime(user_id: str, *, config: dict[str, Any] | None = None) -> None:

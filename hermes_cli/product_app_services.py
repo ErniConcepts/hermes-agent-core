@@ -50,6 +50,7 @@ class ChatRouteServices:
     require_csrf: Callable[[Any], None]
     runtime_session_payload: Callable[[dict[str, Any]], dict[str, Any]]
     stream_product_runtime_turn: Callable[..., Any]
+    stop_product_runtime_turn: Callable[..., bool]
     product_chat_session_response_model: type
     product_chat_turn_request_model: type
 

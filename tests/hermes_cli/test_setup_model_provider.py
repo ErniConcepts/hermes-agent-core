@@ -141,6 +141,59 @@ def test_setup_custom_endpoint_saves_working_v1_base_url(tmp_path, monkeypatch):
         assert model_cfg.get("default") == "llm"
 
 
+def test_setup_custom_endpoint_does_not_get_overwritten_by_stale_model_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _clear_provider_env(monkeypatch)
+
+    config = load_config()
+    config["model"] = {
+        "default": "anthropic/claude-opus-4.6",
+        "provider": "openrouter",
+    }
+    save_config(config)
+
+    def fake_prompt_choice(question, choices, default=0):
+        if question == "Select your inference provider:":
+            return 3
+        if question == "Configure vision:":
+            return len(choices) - 1
+        tts_idx = _maybe_keep_current_tts(question, choices)
+        if tts_idx is not None:
+            return tts_idx
+        raise AssertionError(f"Unexpected prompt_choice call: {question}")
+
+    input_values = iter([
+        "http://100.101.10.42:11438/v1",
+        "local",
+        "qwen3.5-9b-local",
+        "",
+    ])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(input_values))
+    monkeypatch.setattr("hermes_cli.setup.prompt_choice", fake_prompt_choice)
+    monkeypatch.setattr("hermes_cli.setup.prompt_yes_no", lambda *args, **kwargs: False)
+    monkeypatch.setattr("hermes_cli.auth.get_active_provider", lambda: None)
+    monkeypatch.setattr("hermes_cli.auth.detect_external_credentials", lambda: [])
+    monkeypatch.setattr("agent.auxiliary_client.get_available_vision_backends", lambda: [])
+    monkeypatch.setattr("hermes_cli.main._save_custom_provider", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "hermes_cli.models.probe_api_models",
+        lambda api_key, base_url: {
+            "models": ["qwen3.5-9b-local"],
+            "probed_url": "http://100.101.10.42:11438/v1/models",
+            "resolved_base_url": "http://100.101.10.42:11438/v1",
+            "suggested_base_url": None,
+            "used_fallback": False,
+        },
+    )
+
+    setup_model_provider(config)
+
+    reloaded = load_config()
+    assert reloaded["model"]["provider"] == "custom"
+    assert reloaded["model"]["default"] == "qwen3.5-9b-local"
+    assert reloaded["model"]["base_url"] == "http://100.101.10.42:11438/v1"
+
+
 def test_setup_keep_current_config_provider_uses_provider_specific_model_menu(tmp_path, monkeypatch):
     """Keep-current should respect config-backed providers, not fall back to OpenRouter."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))

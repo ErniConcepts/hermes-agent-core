@@ -1052,6 +1052,7 @@ def setup_model_provider(config: dict):
         # env saving, config.yaml updates, and custom_providers persistence.
         from hermes_cli.main import _model_flow_custom
         _model_flow_custom(config)
+        _sync_model_from_disk(config)
         # _model_flow_custom handles model selection, config, env vars,
         # and custom_providers. Keep selected_provider = "custom" so
         # the model selection step below is skipped (line 1631 check)

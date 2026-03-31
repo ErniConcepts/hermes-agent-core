@@ -6,6 +6,11 @@ from hermes_cli.product_runtime_service import create_product_runtime_app
 from hermes_cli.product_runtime_service import build_runtime_agent
 
 
+class DummyDB:
+    def close(self):
+        return None
+
+
 class FakeAgent:
     def __init__(self):
         self.session_id = "product_admin_123"
@@ -20,6 +25,67 @@ class FakeAgent:
         history.append({"role": "user", "content": user_message})
         history.append({"role": "assistant", "content": "done"})
         return {"final_response": "done", "messages": history}
+
+
+class ThinkStreamingAgent:
+    def __init__(self):
+        self.session_id = "product_admin_123"
+        self.reasoning_callback = None
+
+    def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
+        if stream_callback is not None:
+            stream_callback("<think>The user is testing</think>Visible answer")
+        history = list(conversation_history or [])
+        history.append({"role": "user", "content": user_message})
+        history.append({"role": "assistant", "content": "<think>The user is testing</think>Visible answer"})
+        return {"final_response": "<think>The user is testing</think>Visible answer", "messages": history}
+
+
+class SpacedStreamingAgent:
+    def __init__(self):
+        self.session_id = "product_admin_123"
+        self.reasoning_callback = None
+
+    def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
+        if stream_callback is not None:
+            stream_callback("this ")
+            stream_callback("is ")
+            stream_callback("a demo text")
+        history = list(conversation_history or [])
+        history.append({"role": "user", "content": user_message})
+        history.append({"role": "assistant", "content": "this is a demo text"})
+        return {"final_response": "this is a demo text", "messages": history}
+
+
+class WhitespaceChunkAgent:
+    def __init__(self):
+        self.session_id = "product_admin_123"
+        self.reasoning_callback = None
+
+    def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
+        if stream_callback is not None:
+            stream_callback("this")
+            stream_callback(" ")
+            stream_callback("is")
+            stream_callback(" ")
+            stream_callback("a demo text")
+        history = list(conversation_history or [])
+        history.append({"role": "user", "content": user_message})
+        history.append({"role": "assistant", "content": "this is a demo text"})
+        return {"final_response": "this is a demo text", "messages": history}
+
+
+class InterruptibleAgent:
+    def __init__(self):
+        self.session_id = "product_admin_123"
+        self.reasoning_callback = None
+        self.interrupted = False
+
+    def interrupt(self, message=None):
+        self.interrupted = True
+
+    def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
+        return {"final_response": "done", "messages": list(conversation_history or [])}
 
 
 def test_product_runtime_session_and_turn(monkeypatch, tmp_path):
@@ -41,6 +107,7 @@ def test_product_runtime_session_and_turn(monkeypatch, tmp_path):
         "hermes_cli.product_runtime_service._load_session_messages",
         lambda db, session_id: [{"role": "assistant", "content": "earlier"}],
     )
+    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
 
     client = TestClient(create_product_runtime_app())
     session = client.get("/runtime/session", headers={"X-Hermes-Product-Runtime-Token": "runtime-token"})
@@ -70,6 +137,7 @@ def test_product_runtime_stream_emits_reasoning_and_final(monkeypatch, tmp_path)
     monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
     monkeypatch.setattr("hermes_cli.product_runtime_service.build_runtime_agent", lambda db, session_id, reasoning_callback=None: FakeAgent())
     monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: [])
+    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
 
     client = TestClient(create_product_runtime_app())
     with client.stream("POST", "/runtime/turn/stream", json={"user_message": "hello"}, headers={"X-Hermes-Product-Runtime-Token": "runtime-token"}) as response:
@@ -81,6 +149,141 @@ def test_product_runtime_stream_emits_reasoning_and_final(monkeypatch, tmp_path)
     assert "event: final" in payload
     assert "\"final_response\": \"done\"" in payload
     assert "\"runtime_toolsets\": [\"memory\", \"session_search\"]" in payload
+
+
+def test_product_runtime_stream_routes_think_blocks_to_reasoning(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory,session_search")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service.build_runtime_agent", lambda db, session_id, reasoning_callback=None: ThinkStreamingAgent())
+    monkeypatch.setattr(
+        "hermes_cli.product_runtime_service._load_session_messages",
+        lambda db, session_id: [{"role": "assistant", "content": "<think>The user is testing</think>Visible answer"}],
+    )
+    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
+
+    client = TestClient(create_product_runtime_app())
+    with client.stream("POST", "/runtime/turn/stream", json={"user_message": "hello"}, headers={"X-Hermes-Product-Runtime-Token": "runtime-token"}) as response:
+        payload = "\n".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "event: reasoning" in payload
+    assert "The user is testing" in payload
+    assert "event: answer" in payload
+    assert "Visible answer" in payload
+    assert "\"final_response\": \"Visible answer\"" in payload
+
+
+def test_product_runtime_stream_preserves_answer_chunk_spaces(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory,session_search")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr(
+        "hermes_cli.product_runtime_service.build_runtime_agent",
+        lambda db, session_id, reasoning_callback=None: SpacedStreamingAgent(),
+    )
+    monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: [])
+    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
+
+    client = TestClient(create_product_runtime_app())
+    with client.stream(
+        "POST",
+        "/runtime/turn/stream",
+        json={"user_message": "hello"},
+        headers={"X-Hermes-Product-Runtime-Token": "runtime-token"},
+    ) as response:
+        payload = "\n".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "\"delta\": \"this \"" in payload
+    assert "\"delta\": \"is \"" in payload
+    assert "\"delta\": \"a demo text\"" in payload
+    assert "\"final_response\": \"this is a demo text\"" in payload
+
+
+def test_product_runtime_stream_preserves_whitespace_only_chunks(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory,session_search")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr(
+        "hermes_cli.product_runtime_service.build_runtime_agent",
+        lambda db, session_id, reasoning_callback=None: WhitespaceChunkAgent(),
+    )
+    monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: [])
+    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
+
+    client = TestClient(create_product_runtime_app())
+    with client.stream(
+        "POST",
+        "/runtime/turn/stream",
+        json={"user_message": "hello"},
+        headers={"X-Hermes-Product-Runtime-Token": "runtime-token"},
+    ) as response:
+        payload = "\n".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "\"delta\": \"this\"" in payload
+    assert "\"delta\": \" \"" in payload
+    assert "\"delta\": \"is\"" in payload
+    assert "\"final_response\": \"this is a demo text\"" in payload
+
+
+def test_product_runtime_stop_interrupts_active_agent(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    agent = InterruptibleAgent()
+    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
+
+    from hermes_cli.product_runtime_service import _register_active_agent
+
+    _register_active_agent("product_admin_123", agent)
+    client = TestClient(create_product_runtime_app())
+    response = client.post("/runtime/turn/stop", headers={"X-Hermes-Product-Runtime-Token": "runtime-token"})
+
+    assert response.status_code == 200
+    assert response.json() == {"stopped": True}
+    assert agent.interrupted is True
 
 
 def test_product_runtime_service_rejects_missing_runtime_token(monkeypatch, tmp_path):
@@ -148,6 +351,7 @@ def test_product_runtime_session_filters_blank_assistant_messages(monkeypatch, t
             {"role": "assistant", "content": "done"},
         ],
     )
+    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
 
     client = TestClient(create_product_runtime_app())
     response = client.get("/runtime/session", headers={"X-Hermes-Product-Runtime-Token": "runtime-token"})
@@ -218,6 +422,7 @@ def test_product_runtime_turn_reports_model_not_available(monkeypatch, tmp_path)
         lambda db, session_id, reasoning_callback=None: FailingAgent(),
     )
     monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: [])
+    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
 
     client = TestClient(create_product_runtime_app())
     response = client.post(
@@ -258,6 +463,7 @@ def test_product_runtime_stream_reports_model_not_available(monkeypatch, tmp_pat
         lambda db, session_id, reasoning_callback=None: FailingAgent(),
     )
     monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: [])
+    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
 
     client = TestClient(create_product_runtime_app())
     with client.stream(

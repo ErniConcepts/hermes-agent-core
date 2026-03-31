@@ -279,6 +279,17 @@ def stream_product_runtime_turn(record: ProductRuntimeRecord, user_message: str)
                 yield chunk
 
 
+def stop_product_runtime_turn(record: ProductRuntimeRecord) -> bool:
+    response = httpx.post(
+        f"{runtime_base_url(record)}/runtime/turn/stop",
+        timeout=10.0,
+        headers={"X-Hermes-Product-Runtime-Token": record.auth_token},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return bool(payload.get("stopped"))
+
+
 def delete_product_runtime(user_id: str, *, config: dict[str, Any] | None = None) -> None:
     from hermes_cli.product_runtime_staging import load_runtime_record
 
