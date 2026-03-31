@@ -297,6 +297,9 @@ def runtime_environment(
         "HERMES_HOME": "/srv/hermes",
         "HERMES_WRITE_SAFE_ROOT": _RUNTIME_WORKSPACE_PATH,
         "TERMINAL_CWD": _RUNTIME_WORKSPACE_PATH,
+        "TMPDIR": f"{_RUNTIME_WORKSPACE_PATH}/.tmp",
+        "TEMP": f"{_RUNTIME_WORKSPACE_PATH}/.tmp",
+        "TMP": f"{_RUNTIME_WORKSPACE_PATH}/.tmp",
         "OPENAI_BASE_URL": settings.base_url,
         "OPENAI_API_KEY": settings.api_key,
         "HERMES_PRODUCT_RUNTIME_MODE": "product",
@@ -368,7 +371,7 @@ def stage_product_runtime(user: dict[str, object], *, config: dict[str, object] 
     for path in (product_storage_root(product_config), product_users_root(product_config), staged_runtime_root):
         path.mkdir(parents=True, exist_ok=True)
         secure_runtime_dir(path)
-    for path in (staged_hermes_home, staged_hermes_home / "memories", staged_workspace_root):
+    for path in (staged_hermes_home, staged_hermes_home / "memories", staged_workspace_root, staged_workspace_root / ".tmp"):
         path.mkdir(parents=True, exist_ok=True)
         secure_runtime_writable_dir(path)
 

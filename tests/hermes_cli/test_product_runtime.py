@@ -253,6 +253,9 @@ def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, mo
 
     assert f"HERMES_WRITE_SAFE_ROOT={_RUNTIME_WORKSPACE_PATH}" in env_text
     assert f"TERMINAL_CWD={_RUNTIME_WORKSPACE_PATH}" in env_text
+    assert f"TMPDIR={_RUNTIME_WORKSPACE_PATH}/.tmp" in env_text
+    assert f"TEMP={_RUNTIME_WORKSPACE_PATH}/.tmp" in env_text
+    assert f"TMP={_RUNTIME_WORKSPACE_PATH}/.tmp" in env_text
     assert "HERMES_PRODUCT_PROVIDER=custom" in env_text
     assert "OPENAI_BASE_URL=http://host.docker.internal:8080/v1" in env_text
 
@@ -313,6 +316,8 @@ def test_docker_run_command_adds_host_gateway_mapping():
     assert "--read-only" in command
     assert "--cap-drop=ALL" in command
     assert "no-new-privileges" in command
+    assert "/tmp:ro,noexec,nosuid,size=64m" in command
+    assert "/var/tmp:ro,noexec,nosuid,size=32m" in command
 
 
 @pytest.mark.skipif(os.name == "nt", reason="UID/GID mapping is POSIX-specific")
