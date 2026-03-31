@@ -8,6 +8,7 @@ from hermes_cli.product_workspace import (
     humanize_bytes,
     store_workspace_file,
 )
+from hermes_cli.product_runtime import _workspace_root
 
 
 def _user():
@@ -142,3 +143,22 @@ def test_workspace_delete_rejects_empty_path(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="must not be empty"):
         delete_workspace_path(_user(), path="")
+
+
+def test_workspace_hides_runtime_tmp_directory_from_entries(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    store_workspace_file(
+        _user(),
+        parent_path="",
+        filename="visible.txt",
+        content=b"hello",
+    )
+    workspace_root = _workspace_root({}, "user-1")
+    hidden_tmp = workspace_root / ".tmp"
+    hidden_tmp.mkdir(parents=True, exist_ok=True)
+    (hidden_tmp / "scratch.txt").write_text("temp", encoding="utf-8")
+
+    state = get_workspace_state(_user())
+
+    assert [entry.name for entry in state.entries] == ["visible.txt"]

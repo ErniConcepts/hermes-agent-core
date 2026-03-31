@@ -10,6 +10,8 @@ from pydantic import BaseModel
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_runtime import _workspace_root, _user_id
 
+_HIDDEN_WORKSPACE_NAMES = frozenset({".tmp"})
+
 
 class ProductWorkspaceEntry(BaseModel):
     name: str
@@ -136,6 +138,8 @@ def get_workspace_state(
 
     entries: list[ProductWorkspaceEntry] = []
     for child in sorted(target.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
+        if child.name in _HIDDEN_WORKSPACE_NAMES:
+            continue
         relative = child.relative_to(root).as_posix()
         entries.append(
             ProductWorkspaceEntry(
