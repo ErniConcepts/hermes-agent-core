@@ -44,15 +44,12 @@ import yaml
 
 from hermes_cli.colors import Colors, color
 from hermes_cli.default_soul import DEFAULT_SOUL_MD
+from hermes_constants import get_hermes_home
 
 
 # =============================================================================
 # Config paths
 # =============================================================================
-
-def get_hermes_home() -> Path:
-    """Get the Hermes home directory (~/.hermes)."""
-    return Path(os.getenv("HERMES_HOME", Path.home() / ".hermes"))
 
 def get_config_path() -> Path:
     """Get the main config file path."""

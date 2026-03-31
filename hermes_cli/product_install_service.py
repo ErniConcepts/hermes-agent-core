@@ -6,8 +6,8 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from hermes_cli.config import get_hermes_home
 from hermes_cli.product_config import ensure_product_home, get_product_storage_root
+from hermes_constants import get_hermes_home
 from utils import atomic_json_write
 
 

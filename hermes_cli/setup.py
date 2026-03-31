@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
+from hermes_constants import display_hermes_home, get_hermes_home
+
 
 def _model_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     current_model = config.get("model")
@@ -275,7 +277,6 @@ def _sync_model_from_disk(config: Dict[str, Any]) -> None:
 
 # Import config helpers
 from hermes_cli.config import (
-    get_hermes_home,
     get_config_path,
     get_env_path,
     load_config,
@@ -679,7 +680,7 @@ def _print_setup_summary(config: dict, hermes_home):
         print_warning(
             "Some tools are disabled. Run 'hermes setup tools' to configure them,"
         )
-        print_warning("or edit ~/.hermes/.env directly to add the missing API keys.")
+        print_warning(f"or edit {display_hermes_home()}/.env directly to add the missing API keys.")
         print()
 
     # Done banner
@@ -702,7 +703,7 @@ def _print_setup_summary(config: dict, hermes_home):
     print()
 
     # Show file locations prominently
-    print(color("📁 All your files are in ~/.hermes/:", Colors.CYAN, Colors.BOLD))
+    print(color(f"📁 All your files are in {display_hermes_home()}/:", Colors.CYAN, Colors.BOLD))
     print()
     print(f"   {color('Settings:', Colors.YELLOW)}  {get_config_path()}")
     print(f"   {color('API Keys:', Colors.YELLOW)}  {get_env_path()}")

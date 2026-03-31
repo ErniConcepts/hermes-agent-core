@@ -4,6 +4,7 @@ from pathlib import Path
 
 from hermes_cli.config import _secure_dir
 from hermes_cli.product_config import get_product_storage_root
+from hermes_constants import display_hermes_home
 
 
 def get_product_services_root() -> Path:
@@ -41,9 +42,10 @@ def secure_tree(*paths: Path) -> None:
 
 
 def permission_error_message(path: Path) -> str:
+    hermes_home = display_hermes_home()
     return (
         f"Permission denied while writing {path}. "
-        "This usually means files in ~/.hermes/product are owned by root from a previous sudo run. "
+        f"This usually means files in {hermes_home}/product are owned by root from a previous sudo run. "
         "Fix ownership and rerun install: "
-        "sudo chown -R \"$USER:$USER\" ~/.hermes/product ~/.hermes/product.yaml ~/.hermes/.env"
+        f"sudo chown -R \"$USER:$USER\" {hermes_home}/product {hermes_home}/product.yaml {hermes_home}/.env"
     )

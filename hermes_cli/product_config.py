@@ -13,9 +13,9 @@ from typing import Any, Dict
 
 import yaml
 
+from hermes_constants import get_hermes_home
 from hermes_cli.config import (
     ensure_hermes_home,
-    get_hermes_home,
     load_config,
     _secure_dir,
     _secure_file,

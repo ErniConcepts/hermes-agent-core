@@ -19,6 +19,7 @@ from hermes_cli.config import (
     sanitize_env_file,
     _sanitize_env_lines,
 )
+from hermes_constants import display_hermes_home
 
 
 class TestGetHermesHome:
@@ -32,6 +33,15 @@ class TestGetHermesHome:
         with patch.dict(os.environ, {"HERMES_HOME": "/custom/path"}):
             home = get_hermes_home()
             assert home == Path("/custom/path")
+
+    def test_display_hermes_home_default(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HERMES_HOME", None)
+            assert display_hermes_home() == "~/.hermes"
+
+    def test_display_hermes_home_custom(self):
+        with patch.dict(os.environ, {"HERMES_HOME": "/custom/path"}):
+            assert display_hermes_home() == str(Path("/custom/path"))
 
 
 class TestEnsureHermesHome:
