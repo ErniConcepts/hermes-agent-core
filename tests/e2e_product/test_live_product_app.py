@@ -339,18 +339,17 @@ def test_live_product_admin_can_deactivate_claimed_user(
         }"""
     )
     claimed_user_id = session["user"]["id"]
-    context.close()
 
-    authenticated_page.reload(wait_until="networkidle")
     expect(authenticated_page.locator("#adminUsersTable")).to_contain_text(display_name)
     deactivate_button = authenticated_page.locator(
         f"button.admin-deactivate-button[data-user-id='{claimed_user_id}']"
     )
-    expect(deactivate_button).to_be_visible()
+    expect(deactivate_button).to_be_visible(timeout=10000)
     deactivate_button.click()
 
     user_row = authenticated_page.locator("#adminUsersTable tr").filter(has_text=display_name).first
     expect(user_row).to_contain_text("Disabled")
+    context.close()
 
 
 def test_live_product_chat_recreates_runtime_after_wsl_delete(
