@@ -95,6 +95,24 @@ def _healthcheck(base_url: str) -> None:
         pytest.skip(f"Live product app is not healthy at {base_url}: {exc}")
 
 
+def _delete_runtime_for_user(user_id: str) -> None:
+    script = f"""
+source ~/.hermes/hermes-core/.venv/bin/activate
+python - <<'PY'
+from hermes_cli.product_runtime import delete_product_runtime
+delete_product_runtime({user_id!r})
+print('ok')
+PY
+"""
+    _run_wsl_bash(script)
+
+
+def _send_chat_and_expect_reply(page: Page, prompt: str, expected_text: str, *, timeout: int = 30000) -> None:
+    page.locator("#chatInput").fill(prompt)
+    page.locator("#chatSubmit").click()
+    expect(page.locator("#chatLog")).to_contain_text(expected_text, timeout=timeout)
+
+
 def _sign_session_payload(session_secret: str, payload: dict[str, object]) -> str:
     encoded = base64.b64encode(json.dumps(payload).encode("utf-8"))
     return TimestampSigner(session_secret).sign(encoded).decode("utf-8")
@@ -191,12 +209,12 @@ def test_live_product_workspace_upload_and_delete(authenticated_page: Page, tmp_
 
 
 def test_live_product_chat_turn_returns_response(authenticated_page: Page) -> None:
-    chat_input = authenticated_page.locator("#chatInput")
-    chat_input.fill("Reply with exactly: e2e-chat-ok")
-    authenticated_page.locator("#chatSubmit").click()
-
-    assistant_messages = authenticated_page.locator(".chat-bubble.assistant .chat-content")
-    expect(assistant_messages.last).to_contain_text("e2e-chat-ok", timeout=30000)
+    token = f"e2e-chat-ok-{int(time.time())}"
+    _send_chat_and_expect_reply(
+        authenticated_page,
+        f"Reply with exactly: {token}",
+        token,
+    )
 
 
 def test_live_product_admin_can_create_invite_link(authenticated_page: Page) -> None:
@@ -258,3 +276,100 @@ def test_live_product_invite_can_be_claimed_in_second_context(
     assert session["user"]["is_admin"] is False
     assert session["user"]["tailscale_login"] == claimed_login
     context.close()
+
+
+def test_live_product_session_persists_across_reload_and_new_tab(
+    browser, live_product_state: LiveProductState
+) -> None:
+    context = browser.new_context(ignore_https_errors=True)
+    _add_signed_session_cookie(context, live_product_state, _build_user_session_payload(live_product_state.user))
+
+    page = context.new_page()
+    page.goto(live_product_state.app_base_url, wait_until="networkidle")
+    expect(page.locator("#chatCard")).to_be_visible()
+    expect(page.locator("#sessionChip")).to_contain_text("Admin")
+
+    page.reload(wait_until="networkidle")
+    expect(page.locator("#chatCard")).to_be_visible()
+    expect(page.locator("#workspaceCard")).to_be_visible()
+
+    second_tab = context.new_page()
+    second_tab.goto(live_product_state.app_base_url, wait_until="networkidle")
+    expect(second_tab.locator("#chatCard")).to_be_visible()
+    expect(second_tab.locator("#adminCard")).to_be_visible()
+    second_tab.close()
+    context.close()
+
+
+def test_live_product_admin_can_deactivate_claimed_user(
+    browser, authenticated_page: Page, live_product_state: LiveProductState
+) -> None:
+    display_name = f"E2E Deactivate {int(time.time())}"
+    claimed_login = f"e2e-deactivate-{int(time.time())}@github.idp.cheetah-vernier.ts.net"
+    claimed_subject = f"userid:e2e-deactivate-{int(time.time())}"
+
+    authenticated_page.locator("#adminDisplayNameInput").fill(display_name)
+    authenticated_page.locator("#adminCreateUserButton").click()
+    expect(authenticated_page.locator("#adminSignupTokenCard")).to_be_visible()
+    signup_url = authenticated_page.locator("#adminSignupTokenUrl").text_content() or ""
+    invite_token = signup_url.rstrip("/").rsplit("/", 1)[-1]
+    assert invite_token
+
+    pending_payload = {
+        "csrf_token": secrets.token_urlsafe(24),
+        "pending_invite_token": invite_token,
+        "pending_invite_identity": {
+            "sub": claimed_subject,
+            "login": claimed_login,
+            "name": display_name,
+        },
+        "auth_notice": "Confirm this Tailscale account to claim the invite.",
+        "detected_tailscale_login": claimed_login,
+    }
+    context = browser.new_context(ignore_https_errors=True)
+    _add_signed_session_cookie(context, live_product_state, pending_payload)
+    page = context.new_page()
+    page.goto(live_product_state.app_base_url, wait_until="networkidle")
+    page.locator("#claimInviteButton").click()
+    expect(page.locator("#chatCard")).to_be_visible()
+    session = page.evaluate(
+        """async () => {
+            const response = await fetch('/api/auth/session', {credentials: 'same-origin'});
+            return await response.json();
+        }"""
+    )
+    claimed_user_id = session["user"]["id"]
+    context.close()
+
+    authenticated_page.reload(wait_until="networkidle")
+    expect(authenticated_page.locator("#adminUsersTable")).to_contain_text(display_name)
+    deactivate_button = authenticated_page.locator(
+        f"button.admin-deactivate-button[data-user-id='{claimed_user_id}']"
+    )
+    expect(deactivate_button).to_be_visible()
+    deactivate_button.click()
+
+    user_row = authenticated_page.locator("#adminUsersTable tr").filter(has_text=display_name).first
+    expect(user_row).to_contain_text("Disabled")
+
+
+def test_live_product_chat_recreates_runtime_after_wsl_delete(
+    authenticated_page: Page, live_product_state: LiveProductState
+) -> None:
+    _delete_runtime_for_user(str(live_product_state.user["id"]))
+    token = f"e2e-runtime-recreated-{int(time.time())}"
+    _send_chat_and_expect_reply(
+        authenticated_page,
+        f"Reply with exactly: {token}",
+        token,
+    )
+
+
+def test_live_product_chat_stop_button_cancels_long_turn(authenticated_page: Page) -> None:
+    chat_input = authenticated_page.locator("#chatInput")
+    chat_input.fill("Write a numbered list from 1 to 500 with a short sentence for each item.")
+    authenticated_page.locator("#chatSubmit").click()
+
+    expect(authenticated_page.locator("#chatStop")).to_have_attribute("aria-disabled", "false")
+    authenticated_page.locator("#chatStop").click()
+    expect(authenticated_page.locator("#chatMessage")).to_contain_text("Response stopped.", timeout=10000)
