@@ -64,6 +64,7 @@ from hermes_cli.product_workspace import (
     create_workspace_folder,
     delete_workspace_path,
     get_workspace_state,
+    move_workspace_path,
     resolve_workspace_file,
     store_workspace_file,
 )
@@ -161,6 +162,11 @@ class ProductCreateWorkspaceFolderRequest(BaseModel):
 
 class ProductDeleteWorkspacePathRequest(BaseModel):
     path: str
+
+
+class ProductMoveWorkspacePathRequest(BaseModel):
+    source_path: str
+    destination_parent_path: str = ""
 
 
 def _workspace_response_payload(payload: Any) -> ProductWorkspaceResponse:
@@ -683,9 +689,11 @@ def create_product_app() -> FastAPI:
             create_workspace_folder=lambda *args, **kwargs: create_workspace_folder(*args, **kwargs),
             store_workspace_file=lambda *args, **kwargs: store_workspace_file(*args, **kwargs),
             delete_workspace_path=lambda *args, **kwargs: delete_workspace_path(*args, **kwargs),
+            move_workspace_path=lambda *args, **kwargs: move_workspace_path(*args, **kwargs),
             product_workspace_response_model=ProductWorkspaceResponse,
             product_create_workspace_folder_request_model=ProductCreateWorkspaceFolderRequest,
             product_delete_workspace_path_request_model=ProductDeleteWorkspacePathRequest,
+            product_move_workspace_path_request_model=ProductMoveWorkspacePathRequest,
             product_workspace_quota_error=ProductWorkspaceQuotaError,
             workspace_response_payload=lambda *args, **kwargs: _workspace_response_payload(*args, **kwargs),
         ),

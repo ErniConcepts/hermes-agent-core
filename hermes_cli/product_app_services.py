@@ -64,9 +64,11 @@ class WorkspaceRouteServices:
     create_workspace_folder: Callable[..., Any]
     store_workspace_file: Callable[..., Any]
     delete_workspace_path: Callable[..., Any]
+    move_workspace_path: Callable[..., Any]
     product_workspace_response_model: type
     product_create_workspace_folder_request_model: type
     product_delete_workspace_path_request_model: type
+    product_move_workspace_path_request_model: type
     product_workspace_quota_error: type[Exception]
     workspace_response_payload: Callable[[Any], Any]
 

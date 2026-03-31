@@ -238,3 +238,36 @@ def delete_workspace_path(
     else:
         target.unlink()
     return get_workspace_state(user, path=parent_normalized, config=product_config)
+
+
+def move_workspace_path(
+    user: dict[str, Any],
+    *,
+    source_path: str,
+    destination_parent_path: str | None,
+    config: dict[str, Any] | None = None,
+) -> ProductWorkspaceState:
+    product_config = config or load_product_config()
+    root = _workspace_root_for_user(user, product_config)
+    source, normalized_source = _resolve_workspace_path(root, source_path)
+    destination_parent, normalized_destination_parent = _resolve_workspace_path(root, destination_parent_path)
+    if not normalized_source:
+        raise ValueError("Workspace source path must not be empty")
+    if not source.exists():
+        raise ValueError("Workspace source path does not exist")
+    if not destination_parent.exists() or not destination_parent.is_dir():
+        raise ValueError("Workspace destination folder does not exist")
+    destination = destination_parent / source.name
+    if destination == source:
+        return get_workspace_state(user, path=normalized_destination_parent, config=product_config)
+    if destination.exists():
+        raise ValueError("A file or folder with that name already exists in the destination")
+    if source.is_dir():
+        try:
+            destination_parent.relative_to(source)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("Cannot move a folder into itself")
+    source.rename(destination)
+    return get_workspace_state(user, path=normalized_destination_parent, config=product_config)

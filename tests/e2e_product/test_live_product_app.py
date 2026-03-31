@@ -113,6 +113,35 @@ def _send_chat_and_expect_reply(page: Page, prompt: str, expected_text: str, *, 
     expect(page.locator("#chatLog")).to_contain_text(expected_text, timeout=timeout)
 
 
+def _wait_for_authenticated_shell(page: Page, *, timeout: int = 15000) -> None:
+    page.wait_for_function(
+        """async () => {
+            const response = await fetch('/api/auth/session', {credentials: 'same-origin'});
+            const payload = await response.json();
+            return payload && payload.authenticated === true;
+        }""",
+        timeout=timeout,
+    )
+    page.wait_for_function(
+        """() => {
+            const chatCard = document.getElementById('chatCard');
+            const workspaceCard = document.getElementById('workspaceCard');
+            return Boolean(chatCard && workspaceCard && !chatCard.hidden && !workspaceCard.hidden);
+        }""",
+        timeout=timeout,
+    )
+    expect(page.locator("#chatCard")).to_be_visible(timeout=timeout)
+    expect(page.locator("#workspaceCard")).to_be_visible(timeout=timeout)
+
+
+def _drag_and_drop(page: Page, source_selector: str, target_selector: str) -> None:
+    data_transfer = page.evaluate_handle("new DataTransfer()")
+    page.locator(source_selector).dispatch_event("dragstart", {"dataTransfer": data_transfer})
+    page.locator(target_selector).dispatch_event("dragover", {"dataTransfer": data_transfer})
+    page.locator(target_selector).dispatch_event("drop", {"dataTransfer": data_transfer})
+    page.locator(source_selector).dispatch_event("dragend", {"dataTransfer": data_transfer})
+
+
 def _sign_session_payload(session_secret: str, payload: dict[str, object]) -> str:
     encoded = base64.b64encode(json.dumps(payload).encode("utf-8"))
     return TimestampSigner(session_secret).sign(encoded).decode("utf-8")
@@ -170,6 +199,7 @@ def authenticated_page(browser, live_product_state: LiveProductState) -> Page:
     _add_signed_session_cookie(context, live_product_state, _build_user_session_payload(live_product_state.user))
     page = context.new_page()
     page.goto(live_product_state.app_base_url, wait_until="networkidle")
+    _wait_for_authenticated_shell(page)
     yield page
     context.close()
 
@@ -204,6 +234,54 @@ def test_live_product_workspace_upload_and_delete(authenticated_page: Page, tmp_
     file_input.set_input_files(str(upload_path))
     expect(authenticated_page.locator("#workspaceTable")).to_contain_text(file_name)
 
+    authenticated_page.locator(f"button.workspace-delete-button[data-path='{file_name}']").click()
+    expect(authenticated_page.locator("#workspaceTable")).not_to_contain_text(file_name)
+
+
+def test_live_product_workspace_supports_folder_moves_and_folder_delete(
+    authenticated_page: Page, tmp_path: Path
+) -> None:
+    parent_folder = f"e2e-parent-{int(time.time())}"
+    child_folder = f"e2e-child-{int(time.time())}"
+    file_name = "drag-target.txt"
+    upload_path = tmp_path / file_name
+    upload_path.write_text("drag me\n", encoding="utf-8")
+
+    authenticated_page.locator("#workspaceFolderButton").click()
+    authenticated_page.locator("#workspaceFolderName").fill(parent_folder)
+    authenticated_page.locator("#workspaceFolderForm").locator("button[type='submit']").click()
+    expect(authenticated_page.locator("#workspaceTable")).to_contain_text(parent_folder)
+
+    authenticated_page.locator("#workspaceFolderButton").click()
+    authenticated_page.locator("#workspaceFolderName").fill(child_folder)
+    authenticated_page.locator("#workspaceFolderForm").locator("button[type='submit']").click()
+    expect(authenticated_page.locator("#workspaceTable")).to_contain_text(child_folder)
+
+    authenticated_page.locator("#workspaceFileInput").set_input_files(str(upload_path))
+    expect(authenticated_page.locator("#workspaceTable")).to_contain_text(file_name)
+
+    _drag_and_drop(
+        authenticated_page,
+        f".workspace-entry[data-path='{file_name}']",
+        f".workspace-entry[data-path='{parent_folder}'] .workspace-folder-drop-target",
+    )
+    expect(authenticated_page.locator("#workspaceMessage")).to_contain_text("Moved.")
+    expect(authenticated_page.locator("#workspacePathLabel")).to_contain_text(f"/{parent_folder}")
+    expect(authenticated_page.locator("#workspaceTable")).to_contain_text(file_name)
+
+    _drag_and_drop(
+        authenticated_page,
+        f".workspace-entry[data-path='{parent_folder}/{file_name}']",
+        "#workspaceUpButton",
+    )
+    expect(authenticated_page.locator("#workspaceMessage")).to_contain_text("Moved.")
+    expect(authenticated_page.locator("#workspacePathLabel")).to_have_text("Home")
+    expect(authenticated_page.locator("#workspaceTable")).to_contain_text(file_name)
+
+    authenticated_page.locator(f"button.workspace-delete-button[data-path='{child_folder}']").click()
+    expect(authenticated_page.locator("#workspaceTable")).not_to_contain_text(child_folder)
+    authenticated_page.locator(f"button.workspace-delete-button[data-path='{parent_folder}']").click()
+    expect(authenticated_page.locator("#workspaceTable")).not_to_contain_text(parent_folder)
     authenticated_page.locator(f"button.workspace-delete-button[data-path='{file_name}']").click()
     expect(authenticated_page.locator("#workspaceTable")).not_to_contain_text(file_name)
 
@@ -286,17 +364,16 @@ def test_live_product_session_persists_across_reload_and_new_tab(
 
     page = context.new_page()
     page.goto(live_product_state.app_base_url, wait_until="networkidle")
-    expect(page.locator("#chatCard")).to_be_visible()
+    _wait_for_authenticated_shell(page)
     expect(page.locator("#sessionChip")).to_contain_text("Admin")
 
     page.reload(wait_until="networkidle")
-    expect(page.locator("#chatCard")).to_be_visible()
-    expect(page.locator("#workspaceCard")).to_be_visible()
+    _wait_for_authenticated_shell(page)
 
     second_tab = context.new_page()
     second_tab.goto(live_product_state.app_base_url, wait_until="networkidle")
-    expect(second_tab.locator("#chatCard")).to_be_visible()
-    expect(second_tab.locator("#adminCard")).to_be_visible()
+    _wait_for_authenticated_shell(second_tab)
+    expect(second_tab.locator("#adminCard")).to_be_visible(timeout=15000)
     second_tab.close()
     context.close()
 

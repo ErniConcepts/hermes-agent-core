@@ -6,6 +6,7 @@ from hermes_cli.product_workspace import (
     delete_workspace_path,
     get_workspace_state,
     humanize_bytes,
+    move_workspace_path,
     store_workspace_file,
 )
 from hermes_cli.product_runtime import _workspace_root
@@ -162,3 +163,44 @@ def test_workspace_hides_runtime_tmp_directory_from_entries(tmp_path, monkeypatc
     state = get_workspace_state(_user())
 
     assert [entry.name for entry in state.entries] == ["visible.txt"]
+
+
+def test_workspace_can_move_file_into_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    create_workspace_folder(_user(), parent_path="", folder_name="reports")
+    store_workspace_file(_user(), parent_path="", filename="budget.txt", content=b"budget")
+
+    state = move_workspace_path(_user(), source_path="budget.txt", destination_parent_path="reports")
+
+    assert state.current_path == "reports"
+    assert [entry.name for entry in state.entries] == ["budget.txt"]
+
+
+def test_workspace_can_move_file_to_parent_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    create_workspace_folder(_user(), parent_path="", folder_name="reports")
+    store_workspace_file(_user(), parent_path="reports", filename="budget.txt", content=b"budget")
+
+    state = move_workspace_path(_user(), source_path="reports/budget.txt", destination_parent_path="")
+
+    assert state.current_path == ""
+    assert [entry.name for entry in state.entries] == ["reports", "budget.txt"]
+
+
+def test_workspace_rejects_move_into_existing_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    create_workspace_folder(_user(), parent_path="", folder_name="reports")
+    store_workspace_file(_user(), parent_path="", filename="budget.txt", content=b"budget")
+    store_workspace_file(_user(), parent_path="reports", filename="budget.txt", content=b"existing")
+
+    with pytest.raises(ValueError, match="already exists"):
+        move_workspace_path(_user(), source_path="budget.txt", destination_parent_path="reports")
+
+
+def test_workspace_rejects_move_folder_into_itself(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    create_workspace_folder(_user(), parent_path="", folder_name="reports")
+    create_workspace_folder(_user(), parent_path="reports", folder_name="nested")
+
+    with pytest.raises(ValueError, match="into itself"):
+        move_workspace_path(_user(), source_path="reports", destination_parent_path="reports/nested")

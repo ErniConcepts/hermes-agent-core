@@ -75,3 +75,18 @@ def register_workspace_routes(app: FastAPI, services: WorkspaceRouteServices) ->
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return services.workspace_response_payload(state)
+
+    @app.post("/api/workspace/move", response_model=services.product_workspace_response_model)
+    def workspace_move(request: Request, payload: dict[str, object] = Body(...)) -> object:
+        user = services.require_product_user(request)
+        services.require_csrf(request)
+        validated = services.product_move_workspace_path_request_model.model_validate(payload)
+        try:
+            state = services.move_workspace_path(
+                user,
+                source_path=validated.source_path,
+                destination_parent_path=validated.destination_parent_path,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return services.workspace_response_payload(state)
