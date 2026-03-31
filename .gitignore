@@ -60,7 +60,6 @@ scripts/capture_darkmode_fixed_icon.py
 scripts/capture_product_screenshots.py
 scripts/click_test_product.py
 scripts/run_product_e2e.py
-tests/e2e_product/
 
 # CLI config (may contain sensitive SSH paths)
 cli-config.yaml
