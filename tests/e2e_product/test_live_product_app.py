@@ -95,9 +95,13 @@ def _healthcheck(base_url: str) -> None:
         pytest.skip(f"Live product app is not healthy at {base_url}: {exc}")
 
 
-def _build_session_cookie(state: LiveProductState) -> str:
-    user = state.user
-    payload = {
+def _sign_session_payload(session_secret: str, payload: dict[str, object]) -> str:
+    encoded = base64.b64encode(json.dumps(payload).encode("utf-8"))
+    return TimestampSigner(session_secret).sign(encoded).decode("utf-8")
+
+
+def _build_user_session_payload(user: dict[str, object]) -> dict[str, object]:
+    return {
         "user": {
             "id": str(user["id"]),
             "sub": str(user["id"]),
@@ -110,8 +114,29 @@ def _build_session_cookie(state: LiveProductState) -> str:
         "user_refreshed_at": int(time.time()),
         "csrf_token": secrets.token_urlsafe(24),
     }
-    encoded = base64.b64encode(json.dumps(payload).encode("utf-8"))
-    return TimestampSigner(state.session_secret).sign(encoded).decode("utf-8")
+
+
+def _cookie_targets(state: LiveProductState) -> list[str]:
+    targets = [state.app_base_url]
+    if state.local_app_base_url:
+        targets.append(state.local_app_base_url)
+    return targets
+
+
+def _add_signed_session_cookie(context, state: LiveProductState, payload: dict[str, object]) -> None:
+    cookie_value = _sign_session_payload(state.session_secret, payload)
+    context.add_cookies(
+        [
+            {
+                "name": "hermes_product_session",
+                "value": cookie_value,
+                "url": target,
+                "httpOnly": True,
+                "sameSite": "Lax",
+            }
+            for target in _cookie_targets(state)
+        ]
+    )
 
 
 @pytest.fixture(scope="session")
@@ -124,22 +149,7 @@ def live_product_state() -> LiveProductState:
 @pytest.fixture()
 def authenticated_page(browser, live_product_state: LiveProductState) -> Page:
     context = browser.new_context(ignore_https_errors=True)
-    cookie_value = _build_session_cookie(live_product_state)
-    cookie_targets = [live_product_state.app_base_url]
-    if live_product_state.local_app_base_url:
-        cookie_targets.append(live_product_state.local_app_base_url)
-    context.add_cookies(
-        [
-            {
-                "name": "hermes_product_session",
-                "value": cookie_value,
-                "url": target,
-                "httpOnly": True,
-                "sameSite": "Lax",
-            }
-            for target in cookie_targets
-        ]
-    )
+    _add_signed_session_cookie(context, live_product_state, _build_user_session_payload(live_product_state.user))
     page = context.new_page()
     page.goto(live_product_state.app_base_url, wait_until="networkidle")
     yield page
@@ -199,3 +209,52 @@ def test_live_product_admin_can_create_invite_link(authenticated_page: Page) -> 
     expect(authenticated_page.locator("#adminSignupTokenUrl")).to_contain_text("/invite/")
     expect(authenticated_page.locator("#adminUsersTable")).to_contain_text(display_name)
     expect(authenticated_page.locator("#adminUsersTable")).to_contain_text("Pending invite")
+
+
+def test_live_product_invite_can_be_claimed_in_second_context(
+    browser, authenticated_page: Page, live_product_state: LiveProductState
+) -> None:
+    display_name = f"E2E Claim {int(time.time())}"
+    claimed_login = f"e2e-claim-{int(time.time())}@github.idp.cheetah-vernier.ts.net"
+    claimed_subject = f"userid:e2e-claim-{int(time.time())}"
+
+    authenticated_page.locator("#adminDisplayNameInput").fill(display_name)
+    authenticated_page.locator("#adminCreateUserButton").click()
+    expect(authenticated_page.locator("#adminSignupTokenCard")).to_be_visible()
+    signup_url = authenticated_page.locator("#adminSignupTokenUrl").text_content() or ""
+    invite_token = signup_url.rstrip("/").rsplit("/", 1)[-1]
+    assert invite_token
+
+    pending_payload = {
+        "csrf_token": secrets.token_urlsafe(24),
+        "pending_invite_token": invite_token,
+        "pending_invite_identity": {
+            "sub": claimed_subject,
+            "login": claimed_login,
+            "name": display_name,
+        },
+        "auth_notice": "Confirm this Tailscale account to claim the invite.",
+        "detected_tailscale_login": claimed_login,
+    }
+    context = browser.new_context(ignore_https_errors=True)
+    _add_signed_session_cookie(context, live_product_state, pending_payload)
+    page = context.new_page()
+    page.goto(live_product_state.app_base_url, wait_until="networkidle")
+
+    expect(page.locator("#authCard")).to_be_visible()
+    expect(page.locator("#claimInviteButton")).to_be_visible()
+    page.locator("#claimInviteButton").click()
+
+    expect(page.locator("#chatCard")).to_be_visible()
+    expect(page.locator("#workspaceCard")).to_be_visible()
+    expect(page.locator("#adminCard")).to_be_hidden()
+    session = page.evaluate(
+        """async () => {
+            const response = await fetch('/api/auth/session', {credentials: 'same-origin'});
+            return await response.json();
+        }"""
+    )
+    assert session["authenticated"] is True
+    assert session["user"]["is_admin"] is False
+    assert session["user"]["tailscale_login"] == claimed_login
+    context.close()
