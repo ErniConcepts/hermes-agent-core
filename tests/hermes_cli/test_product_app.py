@@ -1,7 +1,7 @@
 from starlette.testclient import TestClient
 
 from hermes_cli.product_oidc import ProductOIDCClientSettings, ProductOIDCProviderMetadata
-from hermes_cli.product_users import create_product_user_with_signup
+from hermes_cli.product_users import create_product_user_with_signup, deactivate_product_user
 from hermes_cli.product_runtime import _workspace_root
 
 
@@ -67,6 +67,7 @@ def _configure_app(monkeypatch, tmp_path, claims):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_SECRET", "session-secret")
     monkeypatch.setenv("HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET", "oidc-secret")
+    monkeypatch.setattr("hermes_cli.product_app._AUTH_RATE_LIMITS", {})
     monkeypatch.setattr("hermes_cli.product_app.load_product_config", _product_config)
     monkeypatch.setattr("hermes_cli.product_app.resolve_product_urls", lambda config=None: _urls())
     monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: _oidc_settings())
@@ -300,6 +301,51 @@ def test_product_app_admin_creates_generic_invite_link(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["signup"]["signup_url"].startswith("https://device.tail5fd7a5.ts.net/invite/")
+
+
+def test_product_app_invalidates_disabled_session_without_waiting_for_refresh_ttl(tmp_path, monkeypatch):
+    claims = {
+        "sub": "ts-admin-sub",
+        "email": "admin@example.com",
+        "preferred_username": "admin@example.com",
+        "name": "Admin Example",
+    }
+    _configure_app(monkeypatch, tmp_path, claims)
+    monkeypatch.setattr("hermes_cli.product_users.resolve_product_urls", lambda config=None: _urls())
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    client.get("/bootstrap/bootstrap-token-123", follow_redirects=False)
+    client.get("/api/auth/login", follow_redirects=False)
+    client.get("/api/auth/oidc/callback?code=ok&state=state-123", follow_redirects=False)
+    client.post(
+        "/api/auth/logout",
+        headers={"Origin": "https://device.tail5fd7a5.ts.net", "X-Hermes-CSRF-Token": client.get("/api/auth/session").json()["csrf_token"]},
+    )
+    invite = create_product_user_with_signup(display_name="Bob Example").signup
+    invited_claims = {
+        "sub": "ts-user-sub",
+        "email": "bob@example.com",
+        "preferred_username": "bob@example.com",
+        "name": "Bob Example",
+    }
+    monkeypatch.setattr("hermes_cli.product_app.validate_product_oidc_id_token", lambda *args, **kwargs: invited_claims)
+    monkeypatch.setattr("hermes_cli.product_app.fetch_product_oidc_userinfo", lambda *args, **kwargs: invited_claims)
+
+    start = client.get(f"/invite/{invite.token}", follow_redirects=False)
+    client.get(start.headers["location"], follow_redirects=False)
+    client.get("/api/auth/oidc/callback?code=ok&state=state-123", follow_redirects=False)
+    session = client.get("/api/auth/session").json()
+    claimed = client.post(
+        "/api/auth/invite/claim",
+        headers={"Origin": "https://device.tail5fd7a5.ts.net", "X-Hermes-CSRF-Token": session["csrf_token"]},
+    )
+    claimed_user_id = claimed.json()["user"]["id"]
+
+    deactivate_product_user(claimed_user_id)
+    post_disable = client.get("/api/auth/session").json()
+
+    assert post_disable["authenticated"] is False
 
 
 def test_product_app_stop_route_proxies_runtime_interrupt(tmp_path, monkeypatch):

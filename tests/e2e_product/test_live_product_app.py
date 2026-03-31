@@ -349,6 +349,16 @@ def test_live_product_admin_can_deactivate_claimed_user(
 
     user_row = authenticated_page.locator("#adminUsersTable tr").filter(has_text=display_name).first
     expect(user_row).to_contain_text("Disabled")
+    page.reload(wait_until="networkidle")
+    page.wait_for_function(
+        """async () => {
+            const response = await fetch('/api/auth/session', {credentials: 'same-origin'});
+            const payload = await response.json();
+            return payload && payload.authenticated === false;
+        }""",
+        timeout=15000,
+    )
+    expect(page.locator("#authCard")).to_be_visible(timeout=15000)
     context.close()
 
 

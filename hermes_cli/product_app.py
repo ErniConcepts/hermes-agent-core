@@ -293,13 +293,13 @@ def _resolve_session_user(request: Request) -> dict[str, Any]:
     user = request.session.get("user")
     if not isinstance(user, dict):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    if not _session_refresh_due(request):
-        return user
     refreshed = _refresh_session_user(user)
     if refreshed is None:
         request.session.clear()
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return _store_session_user(request, refreshed)
+    if _session_refresh_due(request) or refreshed != user:
+        return _store_session_user(request, refreshed)
+    return user
 
 
 def _require_product_user(request: Request) -> dict[str, Any]:
