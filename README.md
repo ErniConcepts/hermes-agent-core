@@ -37,6 +37,7 @@ The deployment layer lives primarily in `hermes_cli/product_*` and includes:
 Hermes-native configuration stays on the upstream CLI:
 
 - `hermes setup model`
+- `hermes setup tools` (optional when you want more than the default runtime toolset)
 - `hermes setup agent`
 
 The authenticated web surface is intentionally narrow:
@@ -230,6 +231,31 @@ hermes-core uninstall --yes
 
 The normal `hermes-core setup` flow already includes the bootstrap/start step at the end.
 `hermes-core setup bootstrap` remains available as a manual recovery command.
+
+## Runtime Identity
+
+By default, the web product runtime uses a product-specific generated `SOUL.md`.
+
+That bundled runtime identity tells the agent that:
+
+- it is running in a per-user product runtime
+- persistent user-visible work belongs in `/workspace`
+- `/workspace/.tmp` is available for scratch/intermediate work but is not part of the normal user-facing workspace
+- actual capabilities come only from the enabled runtime toolsets
+
+Operators can still override that bundled runtime identity during `hermes-core setup` by providing a custom runtime SOUL template path.
+
+This is separate from the normal CLI `~/.hermes/SOUL.md`, which still controls standalone `hermes` sessions.
+
+## Live E2E Cleanup
+
+The live WSL/browser E2E suite creates temporary invites and users. To remove those records from the current product state, run:
+
+```bash
+scripts/cleanup-product-e2e-state.sh
+```
+
+By default the script targets `~/.hermes/product/bootstrap`. You can override the target home with `HERMES_HOME=/path/to/home`.
 
 ## Rerunning Setup
 

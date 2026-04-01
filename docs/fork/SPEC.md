@@ -28,7 +28,6 @@ Hermes-native configuration remains on the upstream CLI surface:
 
 - `hermes setup model`
 - `hermes setup tools`
-- `hermes setup gateway`
 - `hermes setup agent`
 
 ## Configuration Model
@@ -37,6 +36,7 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Generic Hermes config remains separate (`~/.hermes/config.yaml`).
 - Product config controls:
   - Tailscale/tailnet settings
+  - product web branding/title
   - `tsidp` integration
   - bootstrap/invite auth state
   - workspace quota
@@ -53,6 +53,7 @@ Hermes-native configuration remains on the upstream CLI surface:
 
 - Per-user runtime containers.
 - Per-user runtimes resolve model/provider/tool behavior from the main Hermes config.
+- Default runtime toolsets in this fork are `file`, `terminal`, `memory` unless the operator broadens them with normal Hermes tool configuration.
 - Runtime reuse is config-aware:
   - if staged runtime env differs from the running container env, the runtime container is recreated automatically
 - Product runtime API surface remains narrow:
@@ -63,6 +64,7 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Product HTTP/install/setup/runtime entry files should remain thin orchestration layers over smaller fork-side helpers.
 - Runtime workspace is user-scoped and live-mounted for user uploads.
 - Runtime-local `SOUL.md` and generated runtime `config.yaml` are mounted read-only inside the container.
+- The bundled runtime `SOUL.md` is product-specific and can be overridden by an operator-provided runtime SOUL template path in product setup.
 
 ## Auth and Access Contract
 

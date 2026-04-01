@@ -24,7 +24,6 @@ The fork adds a product layer around upstream Hermes:
 - Hermes-native operator CLI:
   - `hermes setup model`
   - `hermes setup tools`
-  - `hermes setup gateway`
   - `hermes setup agent`
 - Auth:
   - `tsidp` (bundled, Docker-managed)
@@ -91,13 +90,13 @@ Current security boundary:
   - required Tailscale verification
   - bundled `tsidp` startup and OIDC client wiring
   - first-admin bootstrap link creation
+  - product title / branding shown in the web UI
   - SOUL template selection
   - per-user workspace quota
   - product service startup
 - `hermes setup ...` owns:
   - model/provider configuration
   - tool policy
-  - gateway/messaging setup
   - agent defaults
 
 Product runtimes are considered ready when the Hermes config resolves to a runnable model/provider configuration. Readiness is determined from config state, not from whether a user happened to run every setup command.
@@ -119,6 +118,12 @@ For installer/runtime changes, also smoke-test:
 2. first-admin signup flow
 3. `hermes setup model`
 4. one real runtime turn through `/runtime/turn` or the web chat UI
+
+Useful cleanup for repeated live E2E runs:
+
+```bash
+scripts/cleanup-product-e2e-state.sh
+```
 
 ## Security Defaults to Preserve
 
