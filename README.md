@@ -38,7 +38,6 @@ Hermes-native configuration stays on the upstream CLI:
 
 - `hermes setup model`
 - `hermes setup tools`
-- `hermes setup gateway`
 - `hermes setup agent`
 
 The authenticated web surface is intentionally narrow:
@@ -47,6 +46,13 @@ The authenticated web surface is intentionally narrow:
 - chat
 - user workspace
 - small admin user-management surface
+
+The product runtime used by the web app is intentionally narrower than the full
+Hermes CLI runtime. By default it exposes only:
+
+- `file`
+- `terminal`
+- `memory`
 
 ## Status
 
@@ -118,7 +124,6 @@ Typical install flow:
 10. configure Hermes itself with the upstream CLI:
    - `hermes setup model`
    - `hermes setup tools`
-   - optional: `hermes setup gateway`
    - optional: `hermes setup agent`
 11. sign into the Tailnet app URL and start using personalized agent sessions
 
@@ -155,7 +160,7 @@ Current first-admin flow:
 6. Sign in with Tailscale through `tsidp`.
 7. The first successful login through that bootstrap link becomes the first admin account.
 
-If setup is rerun after the first admin already exists, it keeps the current first admin and refreshes the active `tsidp` client configuration instead of creating a new bootstrap link.
+If setup is rerun after the first admin already exists, it now lets the operator choose whether to keep the current admin state or generate a new one-time bootstrap link.
 
 Properties of this flow:
 
@@ -234,7 +239,10 @@ On reruns:
 - Tailscale detection is repeated from the current host/tailnet state
 - pressing Enter keeps the existing saved Tailscale auth key and API token
 - the `tsidp` client step can keep the existing client id and client secret by pressing Enter
-- if the first admin was already created earlier, setup reports that bootstrap is already completed and keeps that account in place
+- if the first admin already exists, setup offers:
+  - keep the current admin bootstrap state
+  - or generate a fresh bootstrap link
+- if bootstrap state is inconsistent, setup repairs it by generating a fresh bootstrap link
 
 ## Cleanup / Fresh Reinstall
 
