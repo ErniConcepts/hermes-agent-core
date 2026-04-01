@@ -4,6 +4,7 @@ import httpx
 
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_oidc import (
+    clear_product_oidc_provider_metadata_cache,
     create_oidc_login_request,
     create_pkce_challenge,
     discover_product_oidc_provider_metadata,
@@ -13,6 +14,7 @@ from hermes_cli.product_oidc import (
 
 
 def test_load_product_oidc_client_settings_reads_product_config_and_secret(monkeypatch):
+    clear_product_oidc_provider_metadata_cache()
     config = load_product_config()
     config["network"]["tailscale"]["enabled"] = True
     config["network"]["tailscale"]["tailnet_name"] = "corpnet"
@@ -33,6 +35,7 @@ def test_load_product_oidc_client_settings_reads_product_config_and_secret(monke
 
 
 def test_load_product_oidc_client_settings_uses_tailnet_callback_when_enabled(monkeypatch):
+    clear_product_oidc_provider_metadata_cache()
     config = load_product_config()
     config["network"]["tailscale"]["enabled"] = True
     config["network"]["tailscale"]["tailnet_name"] = "corpnet"
@@ -50,6 +53,7 @@ def test_load_product_oidc_client_settings_uses_tailnet_callback_when_enabled(mo
 
 
 def test_discover_product_oidc_provider_metadata_uses_well_known(monkeypatch):
+    clear_product_oidc_provider_metadata_cache()
     monkeypatch.setattr("hermes_cli.product_oidc.get_env_value", lambda key: "oidc-secret")
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -95,6 +99,7 @@ def test_discover_product_oidc_provider_metadata_uses_well_known(monkeypatch):
 
 
 def test_create_oidc_login_request_uses_pkce_and_standard_scopes(monkeypatch):
+    clear_product_oidc_provider_metadata_cache()
     monkeypatch.setattr("hermes_cli.product_oidc.secrets.token_urlsafe", lambda _n=0: "fixed-token")
     monkeypatch.setattr("hermes_cli.product_oidc.get_env_value", lambda key: "oidc-secret")
     settings = load_product_oidc_client_settings(
@@ -153,6 +158,7 @@ def test_create_oidc_login_request_uses_pkce_and_standard_scopes(monkeypatch):
 
 
 def test_exchange_product_oidc_code_posts_expected_token_request(monkeypatch):
+    clear_product_oidc_provider_metadata_cache()
     monkeypatch.setattr("hermes_cli.product_oidc.get_env_value", lambda key: "oidc-secret")
     seen = {}
 
@@ -214,3 +220,55 @@ def test_exchange_product_oidc_code_posts_expected_token_request(monkeypatch):
     assert "code_verifier=verifier-123" in seen["body"]
     assert "client_secret=oidc-secret" in seen["body"]
     assert tokens["access_token"] == "access"
+
+
+def test_discover_product_oidc_provider_metadata_caches_default_client(monkeypatch):
+    clear_product_oidc_provider_metadata_cache()
+    monkeypatch.setattr("hermes_cli.product_oidc.get_env_value", lambda key: "oidc-secret")
+    calls = {"count": 0}
+
+    class _FakeClient:
+        def __init__(self, timeout=10.0):
+            self.timeout = timeout
+
+        def get(self, url):
+            calls["count"] += 1
+            return httpx.Response(
+                200,
+                json={
+                    "issuer": "https://idp.corpnet.ts.net",
+                    "authorization_endpoint": "https://idp.corpnet.ts.net/authorize",
+                    "token_endpoint": "https://idp.corpnet.ts.net/token",
+                },
+                request=httpx.Request("GET", url),
+            )
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("hermes_cli.product_oidc.httpx.Client", _FakeClient)
+    settings = load_product_oidc_client_settings(
+        {
+            "auth": {
+                "issuer_url": "https://idp.corpnet.ts.net",
+                "client_id": "hermes-core",
+                "client_secret_ref": "HERMES_PRODUCT_OIDC_CLIENT_SECRET",
+            },
+            "network": {
+                "app_port": 8086,
+                "tailscale": {
+                    "enabled": True,
+                    "tailnet_name": "corpnet",
+                    "device_name": "hermes-box",
+                    "idp_hostname": "idp",
+                    "app_https_port": 443,
+                },
+            },
+        }
+    )
+
+    first = discover_product_oidc_provider_metadata(settings)
+    second = discover_product_oidc_provider_metadata(settings)
+
+    assert first.authorization_endpoint == second.authorization_endpoint
+    assert calls["count"] == 1

@@ -1,4 +1,5 @@
 import pytest
+import os
 
 from hermes_cli.product_workspace import (
     ProductWorkspaceQuotaError,
@@ -204,3 +205,29 @@ def test_workspace_rejects_move_folder_into_itself(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="into itself"):
         move_workspace_path(_user(), source_path="reports", destination_parent_path="reports/nested")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Symlink creation is not reliably available on Windows test hosts")
+def test_workspace_rejects_symlink_traversal_for_reads(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    workspace = _workspace_root({}, "user-1")
+    workspace.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    (workspace / "escape.txt").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="Symlinks are not permitted"):
+        get_workspace_state(_user(), path="escape.txt")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Symlink creation is not reliably available on Windows test hosts")
+def test_workspace_rejects_symlink_traversal_for_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    workspace = _workspace_root({}, "user-1")
+    workspace.mkdir(parents=True, exist_ok=True)
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    (workspace / "linked").symlink_to(outside_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="Symlinks are not permitted"):
+        store_workspace_file(_user(), parent_path="linked", filename="note.txt", content=b"hello")

@@ -67,7 +67,7 @@ def _configure_app(monkeypatch, tmp_path, claims):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_SECRET", "session-secret")
     monkeypatch.setenv("HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET", "oidc-secret")
-    monkeypatch.setattr("hermes_cli.product_app._AUTH_RATE_LIMITS", {})
+    monkeypatch.setattr("hermes_cli.product_app.enforce_product_auth_rate_limit", lambda *args, **kwargs: None)
     monkeypatch.setattr("hermes_cli.product_app.load_product_config", _product_config)
     monkeypatch.setattr("hermes_cli.product_app.resolve_product_urls", lambda config=None: _urls())
     monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: _oidc_settings())
@@ -457,3 +457,46 @@ def test_product_app_downloads_workspace_file_for_signed_in_user(tmp_path, monke
     assert response.status_code == 200
     assert response.content == b"tailnet download ok"
     assert "attachment; filename=\"notes.txt\"" in response.headers["content-disposition"]
+
+
+def test_product_app_healthz_minimizes_public_payload(tmp_path, monkeypatch):
+    _configure_app(
+        monkeypatch,
+        tmp_path,
+        {
+            "sub": "ts-sub",
+            "email": "admin@example.com",
+            "preferred_username": "admin@example.com",
+            "name": "Admin Example",
+        },
+    )
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_product_app_requires_dedicated_session_secret(tmp_path, monkeypatch):
+    _configure_app(
+        monkeypatch,
+        tmp_path,
+        {
+            "sub": "ts-sub",
+            "email": "admin@example.com",
+            "preferred_username": "admin@example.com",
+            "name": "Admin Example",
+        },
+    )
+    monkeypatch.delenv("HERMES_PRODUCT_SESSION_SECRET", raising=False)
+
+    from hermes_cli.product_app import _session_secret
+
+    try:
+        _session_secret()
+    except RuntimeError as exc:
+        assert "HERMES_PRODUCT_SESSION_SECRET" in str(exc)
+    else:
+        raise AssertionError("Expected product app session secret lookup to fail closed")

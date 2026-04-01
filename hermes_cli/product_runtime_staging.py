@@ -30,6 +30,8 @@ from hermes_cli.product_runtime_common import (
 from hermes_cli.runtime_config import build_runtime_cli_config
 from hermes_cli.runtime_provider import format_runtime_provider_error, resolve_runtime_provider
 
+_MAX_RUNTIME_ENV_VALUE_LENGTH = 8192
+
 
 def user_id(user: dict[str, object]) -> str:
     stable_id = str(user.get("sub") or user.get("id") or "").strip()
@@ -296,6 +298,7 @@ def runtime_environment(
         "OPENAI_BASE_URL": settings.base_url,
         "OPENAI_API_KEY": settings.api_key,
         "HERMES_PRODUCT_RUNTIME_MODE": "product",
+        "TIRITH_FAIL_OPEN": "false",
         "HERMES_RUNTIME_HOST": "0.0.0.0",
         "HERMES_RUNTIME_PORT": str(internal_port),
         "HERMES_PRODUCT_SESSION_ID": session_id,
@@ -312,6 +315,12 @@ def write_runtime_env_file(path: Path, env: dict[str, str]) -> None:
     if invalid_keys:
         joined = ", ".join(sorted(invalid_keys))
         raise RuntimeError(f"Runtime env contains unsupported newline or NUL characters: {joined}")
+    oversized_keys = [key for key, value in env.items() if len(value) > _MAX_RUNTIME_ENV_VALUE_LENGTH]
+    if oversized_keys:
+        joined = ", ".join(sorted(oversized_keys))
+        raise RuntimeError(
+            f"Runtime env contains values longer than {_MAX_RUNTIME_ENV_VALUE_LENGTH} characters: {joined}"
+        )
     path.write_text("".join(f"{key}={value}\n" for key, value in sorted(env.items())), encoding="utf-8")
     secure_runtime_file(path)
 

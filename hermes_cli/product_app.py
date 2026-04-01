@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 import logging
 import secrets
 import time
-from collections import deque
 from typing import Any
 from urllib.parse import urlparse
 
@@ -29,6 +27,10 @@ from hermes_cli.product_app_services import (
     WorkspaceRouteServices,
 )
 from hermes_cli.product_app_workspace_routes import register_workspace_routes
+from hermes_cli.product_auth_rate_limit import (
+    ProductAuthRateLimitExceeded,
+    enforce_product_auth_rate_limit,
+)
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_invites import list_pending_product_signup_invites
 from hermes_cli.product_oidc import (
@@ -73,7 +75,6 @@ logger = logging.getLogger(__name__)
 _SESSION_REFRESH_TTL_SECONDS = 30
 _AUTH_RATE_LIMIT_WINDOW_SECONDS = 300.0
 _AUTH_RATE_LIMIT_MAX_REQUESTS = 10
-_AUTH_RATE_LIMITS: dict[tuple[str, str], deque[float]] = {}
 
 
 @dataclass(frozen=True)
@@ -97,9 +98,6 @@ class ProductAppContext:
 
 class ProductHealthResponse(BaseModel):
     status: str = "ok"
-    auth_provider: str
-    issuer_url: str
-    app_base_url: str
 
 
 class ProductSessionResponse(BaseModel):
@@ -177,13 +175,12 @@ def _workspace_response_payload(payload: Any) -> ProductWorkspaceResponse:
 def _session_secret() -> str:
     product_config = load_product_config()
     secret_ref = str(product_config.get("auth", {}).get("session_secret_ref", "")).strip()
-    if secret_ref:
-        configured = str(get_env_value(secret_ref) or "").strip()
-        if configured:
-            return configured
-    settings = load_product_oidc_client_settings()
-    digest = hashlib.sha256(settings.client_secret.encode("utf-8")).hexdigest()
-    return f"hermes-product-session-{digest}"
+    if not secret_ref:
+        raise RuntimeError("product auth.session_secret_ref must be configured")
+    configured = str(get_env_value(secret_ref) or "").strip()
+    if configured:
+        return configured
+    raise RuntimeError(f"Product session secret env var {secret_ref} is missing or empty")
 
 
 def _csrf_token(request: Request) -> str:
@@ -325,14 +322,17 @@ def _mark_bootstrap_completed_if_admin(user: dict[str, Any]) -> None:
 
 
 def _enforce_auth_rate_limit(request: Request, route_key: str) -> None:
-    now = time.monotonic()
-    bucket = _AUTH_RATE_LIMITS.setdefault((_client_ip(request), route_key), deque())
-    cutoff = now - _AUTH_RATE_LIMIT_WINDOW_SECONDS
-    while bucket and bucket[0] < cutoff:
-        bucket.popleft()
-    if len(bucket) >= _AUTH_RATE_LIMIT_MAX_REQUESTS:
+    try:
+        enforce_product_auth_rate_limit(
+            _client_ip(request),
+            route_key,
+            max_requests=int(_AUTH_RATE_LIMIT_MAX_REQUESTS),
+            window_seconds=int(_AUTH_RATE_LIMIT_WINDOW_SECONDS),
+        )
+    except ProductAuthRateLimitExceeded as exc:
         raise HTTPException(status_code=429, detail="Too many authentication requests")
-    bucket.append(now)
+    except Exception as exc:
+        logger.warning("Product auth rate limiter unavailable: %s", exc)
 
 
 def _current_product_urls() -> dict[str, str]:

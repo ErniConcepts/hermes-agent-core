@@ -988,7 +988,7 @@ class TestHermesHomeIsolation:
         from tools.tirith_security import _failure_marker_path
         with patch.dict(os.environ, {"HERMES_HOME": "/custom/hermes"}):
             result = _failure_marker_path()
-        assert result == "/custom/hermes/.tirith-install-failed"
+        assert os.path.normpath(result) == os.path.normpath("/custom/hermes/.tirith-install-failed")
 
     def test_conftest_isolation_prevents_real_home_writes(self):
         """The conftest autouse fixture sets HERMES_HOME; verify it's active."""
@@ -1003,4 +1003,4 @@ class TestHermesHomeIsolation:
             # Remove HERMES_HOME entirely
             os.environ.pop("HERMES_HOME", None)
             result = _get_hermes_home()
-        assert result == os.path.join(os.path.expanduser("~"), ".hermes")
+        assert os.path.normpath(os.path.expanduser(result)) == os.path.normpath(os.path.join(os.path.expanduser("~"), ".hermes"))

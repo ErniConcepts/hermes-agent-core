@@ -288,6 +288,8 @@ def claim_product_user_from_invite(
             break
     if match is None or match.status != "pending":
         raise ValueError("Invite is invalid or expired")
+    if match.tailscale_login and _normalize_tailscale_login(match.tailscale_login) != normalized_login:
+        raise ValueError("Invite is not valid for this Tailscale identity")
     user = ProductUser(
         id=f"user-{secrets.token_hex(8)}",
         username=_username_from_tailscale_login(normalized_login),

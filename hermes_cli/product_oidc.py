@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.parse import urlencode
@@ -15,6 +16,9 @@ from jwt import PyJWKClient
 
 from hermes_cli.config import get_env_value
 from hermes_cli.product_config import load_product_config
+
+_OIDC_METADATA_CACHE_TTL_SECONDS = 600.0
+_OIDC_METADATA_CACHE: dict[str, tuple[float, "ProductOIDCProviderMetadata"]] = {}
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,14 @@ def discover_product_oidc_provider_metadata(
     *,
     client: httpx.Client | None = None,
 ) -> ProductOIDCProviderMetadata:
+    cache_key = settings.issuer_url.rstrip("/")
+    if client is None:
+        cached = _OIDC_METADATA_CACHE.get(cache_key)
+        if cached is not None:
+            expires_at, metadata = cached
+            if expires_at > time.monotonic():
+                return metadata
+            _OIDC_METADATA_CACHE.pop(cache_key, None)
     well_known_url = f"{settings.issuer_url}/.well-known/openid-configuration"
     owns_client = client is None
     http_client = client or httpx.Client(timeout=10.0)
@@ -103,7 +115,7 @@ def discover_product_oidc_provider_metadata(
         or None
     )
     jwks_uri = str(payload.get("jwks_uri", "")).strip() or None
-    return ProductOIDCProviderMetadata(
+    metadata = ProductOIDCProviderMetadata(
         issuer=issuer,
         authorization_endpoint=authorization_endpoint,
         token_endpoint=token_endpoint,
@@ -111,6 +123,13 @@ def discover_product_oidc_provider_metadata(
         end_session_endpoint=end_session_endpoint,
         jwks_uri=jwks_uri,
     )
+    if client is None:
+        _OIDC_METADATA_CACHE[cache_key] = (time.monotonic() + _OIDC_METADATA_CACHE_TTL_SECONDS, metadata)
+    return metadata
+
+
+def clear_product_oidc_provider_metadata_cache() -> None:
+    _OIDC_METADATA_CACHE.clear()
 
 
 def create_pkce_verifier() -> str:

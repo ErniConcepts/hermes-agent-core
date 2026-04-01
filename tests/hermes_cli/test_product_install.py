@@ -5,7 +5,9 @@ import pytest
 from hermes_cli.product_install import (
     DOCKER_GROUP_RELOGIN_EXIT_CODE,
     PRODUCT_APP_SERVICE_NAME,
+    RUNSC_RUNTIME_CONFIG,
     _render_product_app_service_unit,
+    ensure_product_runtime_networking,
     ensure_product_app_service_started,
     run_product_install,
 )
@@ -60,3 +62,19 @@ def test_run_product_install_requests_relogin_after_docker_group_change(tmp_path
         run_product_install(Namespace(skip_setup=True, non_interactive=True, section=None))
 
     assert excinfo.value.code == DOCKER_GROUP_RELOGIN_EXIT_CODE
+
+
+def test_runsc_runtime_config_does_not_use_host_network():
+    assert RUNSC_RUNTIME_CONFIG["runtimeArgs"] == []
+
+
+def test_ensure_product_runtime_networking_uses_bridge_network_and_firewall(monkeypatch):
+    seen = {}
+    monkeypatch.setattr("hermes_cli.product_install.ensure_runtime_docker_network", lambda run_fn: seen.setdefault("network", True))
+    monkeypatch.setattr("hermes_cli.product_install.ensure_runtime_host_firewall", lambda run_fn, model_port=None: seen.setdefault("firewall_port", model_port) == model_port)
+    monkeypatch.setattr("hermes_cli.product_install.local_host_model_port", lambda config=None: 8080)
+
+    result = ensure_product_runtime_networking()
+
+    assert result == {"created_network": True, "updated_firewall": True}
+    assert seen["firewall_port"] == 8080

@@ -110,8 +110,8 @@ def test_stage_product_runtime_uses_container_readable_permissions(tmp_path, mon
     env_path = Path(record.env_file)
 
     assert oct(runtime_root.stat().st_mode & 0o777) == "0o755"
-    assert oct(hermes_home.stat().st_mode & 0o777) == "0o777"
-    assert oct(workspace_root.stat().st_mode & 0o777) == "0o777"
+    assert oct(hermes_home.stat().st_mode & 0o777) == "0o700"
+    assert oct(workspace_root.stat().st_mode & 0o777) == "0o700"
     assert oct(soul_path.stat().st_mode & 0o777) == "0o644"
     assert oct(env_path.stat().st_mode & 0o777) == "0o600"
 
@@ -299,6 +299,7 @@ def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, mo
     assert f"TEMP={_RUNTIME_WORKSPACE_PATH}/.tmp" in env_text
     assert f"TMP={_RUNTIME_WORKSPACE_PATH}/.tmp" in env_text
     assert "HERMES_PRODUCT_PROVIDER=custom" in env_text
+    assert "TIRITH_FAIL_OPEN=false" in env_text
     assert "OPENAI_BASE_URL=http://host.docker.internal:8080/v1" in env_text
 
 
@@ -348,6 +349,8 @@ def test_docker_run_command_adds_host_gateway_mapping():
 
     command = _docker_run_command(record, config)
 
+    assert "--network" in command
+    assert "hermes-product-runtime" in command
     assert "--add-host" in command
     assert "--workdir" in command
     assert _RUNTIME_WORKSPACE_PATH in command
@@ -571,6 +574,7 @@ def test_running_container_matches_record_detects_stale_runtime_env(tmp_path):
                 "HERMES_PRODUCT_TOOLSETS=file,terminal,memory",
                 "HERMES_PRODUCT_API_MODE=chat_completions",
                 "HERMES_PRODUCT_RUNTIME_MODE=product",
+                "TIRITH_FAIL_OPEN=false",
             ]
         )
         + "\n",
@@ -602,6 +606,7 @@ def test_running_container_matches_record_detects_stale_runtime_env(tmp_path):
                 "HERMES_PRODUCT_TOOLSETS=file,terminal,memory",
                 "HERMES_PRODUCT_API_MODE=chat_completions",
                 "HERMES_PRODUCT_RUNTIME_MODE=product",
+                "TIRITH_FAIL_OPEN=true",
             ]
         }
     }
@@ -617,6 +622,19 @@ def test_write_runtime_env_file_rejects_newlines(tmp_path):
             env_path,
             {
                 "OPENAI_API_KEY": "line-one\nline-two",
+                "HERMES_PRODUCT_MODEL": "qwen3.5-9b-local",
+            },
+        )
+
+
+def test_write_runtime_env_file_rejects_oversized_values(tmp_path):
+    env_path = tmp_path / "runtime.env"
+
+    with pytest.raises(RuntimeError, match="longer than 8192"):
+        _write_runtime_env_file(
+            env_path,
+            {
+                "OPENAI_API_KEY": "x" * 8193,
                 "HERMES_PRODUCT_MODEL": "qwen3.5-9b-local",
             },
         )

@@ -38,7 +38,7 @@ def _clean_state():
     clear_session(key)
     approval_module._permanent_approved.clear()
     saved = {}
-    for k in ("HERMES_INTERACTIVE", "HERMES_GATEWAY_SESSION", "HERMES_EXEC_ASK", "HERMES_YOLO_MODE"):
+    for k in ("HERMES_INTERACTIVE", "HERMES_GATEWAY_SESSION", "HERMES_EXEC_ASK", "HERMES_YOLO_MODE", "HERMES_PRODUCT_RUNTIME_MODE"):
         if k in os.environ:
             saved[k] = os.environ.pop(k)
     yield
@@ -46,7 +46,7 @@ def _clean_state():
     approval_module._permanent_approved.clear()
     for k, v in saved.items():
         os.environ[k] = v
-    for k in ("HERMES_INTERACTIVE", "HERMES_GATEWAY_SESSION", "HERMES_EXEC_ASK", "HERMES_YOLO_MODE"):
+    for k in ("HERMES_INTERACTIVE", "HERMES_GATEWAY_SESSION", "HERMES_EXEC_ASK", "HERMES_YOLO_MODE", "HERMES_PRODUCT_RUNTIME_MODE"):
         os.environ.pop(k, None)
 
 
@@ -70,6 +70,13 @@ class TestContainerSkip:
     def test_daytona_skips_both(self):
         result = check_all_command_guards("rm -rf /", "daytona")
         assert result["approved"] is True
+
+    @patch(_TIRITH_PATCH, return_value=_tirith_result("allow"))
+    def test_product_runtime_docker_does_not_skip(self, mock_tirith):
+        os.environ["HERMES_PRODUCT_RUNTIME_MODE"] = "product"
+        result = check_all_command_guards("rm -rf /", "docker")
+        assert result["approved"] is False
+        assert "BLOCKED in product runtime" in result["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +183,16 @@ class TestTirithWarnSafe:
         # No HERMES_INTERACTIVE or HERMES_GATEWAY_SESSION set
         result = check_all_command_guards("curl https://bit.ly/abc", "local")
         assert result["approved"] is True
+
+    @patch(_TIRITH_PATCH,
+           return_value=_tirith_result("warn",
+                                       [{"rule_id": "shortened_url"}],
+                                       "shortened URL detected"))
+    def test_warn_product_runtime_fails_closed(self, mock_tirith):
+        os.environ["HERMES_PRODUCT_RUNTIME_MODE"] = "product"
+        result = check_all_command_guards("curl https://bit.ly/abc", "local")
+        assert result["approved"] is False
+        assert "BLOCKED in product runtime" in result["message"]
 
 
 # ---------------------------------------------------------------------------

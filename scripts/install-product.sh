@@ -12,12 +12,13 @@ BOLD='\033[1m'
 REPO_OWNER="ErniConcepts"
 REPO_NAME="hermes-agent-core"
 DEFAULT_BRANCH="main"
+PINNED_INSTALL_REF="bc55488d1c7564ae4c9b403c3e6b86c9e216164a"
 PYTHON_VERSION="3.11"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 INSTALL_DIR="${HERMES_INSTALL_DIR:-$HERMES_HOME/hermes-core}"
 VENV_DIR="$INSTALL_DIR/.venv"
 USER_BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
-BRANCH="$DEFAULT_BRANCH"
+BRANCH="${HERMES_CORE_INSTALL_REF:-$PINNED_INSTALL_REF}"
 RUN_SETUP=true
 SOURCE_DIR_OVERRIDE="${HERMES_CORE_SOURCE_DIR:-}"
 SOURCE_URL_OVERRIDE="${HERMES_CORE_SOURCE_URL:-}"
@@ -53,7 +54,7 @@ Usage:
   install-product.sh [OPTIONS]
 
 Options:
-  --branch NAME    Git branch to install (default: ${DEFAULT_BRANCH})
+  --branch NAME    Git branch or commit to install (default: ${BRANCH})
   --dir PATH       Installation directory (default: ${INSTALL_DIR})
   --skip-setup     Skip the interactive product setup wizard
   -h, --help       Show this help
@@ -258,7 +259,7 @@ print_post_install() {
     fi
     echo ""
     echo "Fresh install (run as your normal user; the installer prompts for sudo when needed):"
-    echo "  curl -fsSL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/scripts/install-product.sh | bash"
+    echo "  curl -fsSL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${PINNED_INSTALL_REF}/scripts/install-product.sh | bash"
     echo ""
     echo "Cleanup:"
     echo "  hermes-core uninstall --yes"

@@ -18,11 +18,7 @@ def register_root_routes(app: FastAPI, context: object, services: RootRouteServi
 
     @app.get("/healthz", response_model=services.product_health_response_model)
     def healthz() -> object:
-        return services.product_health_response_model(
-            auth_provider=context.auth_provider,
-            issuer_url=services.current_product_urls()["issuer_url"],
-            app_base_url=services.current_app_base_url(),
-        )
+        return services.product_health_response_model()
 
     @app.get("/invite/{token}")
     def invite_login(request: Request, token: str) -> RedirectResponse:

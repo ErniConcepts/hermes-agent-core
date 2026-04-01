@@ -44,6 +44,27 @@ def test_claim_product_user_from_invite_creates_bound_user(tmp_path, monkeypatch
     assert list_pending_product_signup_invites() == []
 
 
+def test_claim_product_user_from_invite_rejects_wrong_tailscale_login(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "hermes_cli.product_users.resolve_product_urls",
+        lambda config=None: {"app_base_url": "https://device.tail5fd7a5.ts.net"},
+    )
+    created = create_product_user_with_signup(display_name="Alice Example", email="alice@example.com")
+
+    try:
+        claim_product_user_from_invite(
+            token=created.signup.token,
+            tailscale_subject="ts-sub-1",
+            tailscale_login="mallory@example.com",
+            display_name="Mallory Example",
+        )
+    except ValueError as exc:
+        assert "not valid for this Tailscale identity" in str(exc)
+    else:
+        raise AssertionError("Expected invite claim to reject a mismatched Tailscale login")
+
+
 def test_bootstrap_first_admin_user_creates_single_admin(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 

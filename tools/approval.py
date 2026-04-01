@@ -354,7 +354,9 @@ def check_dangerous_command(command: str, env_type: str,
     Returns:
         {"approved": True/False, "message": str or None, ...}
     """
-    if env_type in ("docker", "singularity", "modal", "daytona"):
+    is_product_runtime = os.getenv("HERMES_PRODUCT_RUNTIME_MODE") == "product"
+
+    if env_type in ("docker", "singularity", "modal", "daytona") and not is_product_runtime:
         return {"approved": True, "message": None}
 
     # --yolo: bypass all approval prompts
@@ -373,6 +375,16 @@ def check_dangerous_command(command: str, env_type: str,
     is_gateway = os.getenv("HERMES_GATEWAY_SESSION")
 
     if not is_cli and not is_gateway:
+        if is_product_runtime:
+            return {
+                "approved": False,
+                "message": (
+                    f"BLOCKED: Potentially dangerous command rejected in product runtime "
+                    f"(matched '{description}' pattern)."
+                ),
+                "pattern_key": pattern_key,
+                "description": description,
+            }
         return {"approved": True, "message": None}
 
     if is_gateway or os.getenv("HERMES_EXEC_ASK"):
@@ -428,7 +440,9 @@ def check_all_command_guards(command: str, env_type: str,
     other was shown to the user.
     """
     # Skip containers for both checks
-    if env_type in ("docker", "singularity", "modal", "daytona"):
+    is_product_runtime = os.getenv("HERMES_PRODUCT_RUNTIME_MODE") == "product"
+
+    if env_type in ("docker", "singularity", "modal", "daytona") and not is_product_runtime:
         return {"approved": True, "message": None}
 
     # --yolo or approvals.mode=off: bypass all approval prompts
@@ -442,7 +456,7 @@ def check_all_command_guards(command: str, env_type: str,
 
     # Preserve the existing non-interactive behavior: outside CLI/gateway/ask
     # flows, we do not block on approvals and we skip external guard work.
-    if not is_cli and not is_gateway and not is_ask:
+    if not is_cli and not is_gateway and not is_ask and not is_product_runtime:
         return {"approved": True, "message": None}
 
     # --- Phase 1: Gather findings from both checks ---
@@ -490,6 +504,16 @@ def check_all_command_guards(command: str, env_type: str,
     if not warnings:
         return {"approved": True, "message": None}
 
+    combined_desc = "; ".join(desc for _, desc, _ in warnings)
+
+    if is_product_runtime:
+        return {
+            "approved": False,
+            "message": f"BLOCKED in product runtime: {combined_desc}. Do NOT retry.",
+            "pattern_key": warnings[0][0],
+            "description": combined_desc,
+        }
+
     # --- Phase 2.5: Smart approval (auxiliary LLM risk assessment) ---
     # When approvals.mode=smart, ask the aux LLM before prompting the user.
     # Inspired by OpenAI Codex's Smart Approvals guardian subagent
@@ -518,7 +542,6 @@ def check_all_command_guards(command: str, env_type: str,
     # --- Phase 3: Approval ---
 
     # Combine descriptions for a single approval prompt
-    combined_desc = "; ".join(desc for _, desc, _ in warnings)
     primary_key = warnings[0][0]
     all_keys = [key for key, _, _ in warnings]
     has_tirith = any(is_t for _, _, is_t in warnings)

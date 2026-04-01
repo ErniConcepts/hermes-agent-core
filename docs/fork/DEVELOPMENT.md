@@ -51,6 +51,7 @@ Current internal structure:
   - host prerequisite checks
   - service unit rendering
   - installer cleanup/build orchestration
+  - runtime bridge network and firewall setup for host-local inference access
 
 Current security boundary:
 
@@ -64,10 +65,12 @@ Current security boundary:
   - invite reconciliation should stay authoritative on the server
 - `product_runtime.py` and `product_runtime_service.py` treat runtime secrets/config as a narrow launch contract:
   - runtime env files must reject unsafe values such as newline-delimited secrets
+  - runtime env files should also reject pathologically long values
   - runtime auth must stay constant-time and token-scoped
   - generated runtime config inputs remain read-only mounts
   - runtime session rollover should follow Hermes-native `session_reset` behavior rather than fork-only transcript heuristics
   - reasoning-tag stripping and mixed reasoning/answer stream splitting should stay in shared Hermes helpers, not product-only code
+  - dangerous runtime terminal commands should fail closed unless a real product approval flow exists
 
 ## Current Auth and Admin Behavior
 
@@ -140,6 +143,7 @@ scripts/cleanup-product-e2e-state.sh
 - Keep runtime launch derived from the main Hermes config rather than adding a second hidden product-side source of truth.
 - Keep shared session-reset policy handling, reasoning normalization, and staged runtime config derivation in shared Hermes helpers when possible.
 - Do not reintroduce product-only history compaction or summary handoff logic when Hermes-native session-reset behavior is sufficient.
+- Do not reintroduce host-networked runtimes; local-model reachability must go through the dedicated runtime bridge plus host firewall policy.
 
 ## Related Docs
 

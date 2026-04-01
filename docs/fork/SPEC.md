@@ -92,13 +92,18 @@ Hermes-native configuration remains on the upstream CLI surface:
 ## Security/Isolation Contract
 
 - Runtime access remains user-scoped.
+- Per-user runtimes use a dedicated Docker bridge network, not host networking.
+- Installer-managed host firewall rules should allow runtime access only to the configured host-local inference port when the model endpoint is local.
 - No LAN exposure for internal runtime control ports.
 - Browser-side mutations require both same-origin validation and CSRF validation.
+- Read-only admin `GET` routes may omit CSRF when the response stays same-origin protected and no mutation occurs.
 - `tsidp` tokens and invite/bootstrap token material must stay server-side where possible; admin placeholder IDs must not expose raw tokens.
 - Product-side adaptation is preferred over upstream Hermes patching.
 - Keep browser admin scope narrow (users/invites/deactivate), not full platform config.
 - Current control plane is still host-installed and should be treated as an interim architecture.
 - Product setup must not silently override Hermes-native model or tool configuration.
+- Product sessions must use a dedicated session secret; they must never derive signing keys from OIDC client secrets.
+- Public `/healthz` should stay a minimal liveness probe without issuer or topology details.
 
 ## Future Direction: Contained Control Plane
 

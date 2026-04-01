@@ -88,7 +88,13 @@ def _normalize_relative_path(relative_path: str | None) -> str:
 
 def _resolve_workspace_path(root: Path, relative_path: str | None) -> tuple[Path, str]:
     normalized = _normalize_relative_path(relative_path)
-    target = (root / Path(normalized)).resolve()
+    candidate = root / Path(normalized)
+    current = root
+    for part in Path(normalized).parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Symlinks are not permitted in workspace paths")
+    target = candidate.resolve()
     if target != root and root not in target.parents:
         raise ValueError("Workspace path must stay inside the user workspace")
     return target, normalized
@@ -117,6 +123,8 @@ def _workspace_usage_bytes(root: Path) -> int:
     if not root.exists():
         return 0
     for path in root.rglob("*"):
+        if path.is_symlink():
+            continue
         if path.is_file():
             total += path.stat().st_size
     return total
@@ -139,6 +147,8 @@ def get_workspace_state(
     entries: list[ProductWorkspaceEntry] = []
     for child in sorted(target.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
         if child.name in _HIDDEN_WORKSPACE_NAMES:
+            continue
+        if child.is_symlink():
             continue
         relative = child.relative_to(root).as_posix()
         entries.append(

@@ -568,7 +568,7 @@ def test_product_runtime_turn_reports_model_not_available(monkeypatch, tmp_path)
 
     assert response.status_code == 503
     assert "Model not available" in response.json()["detail"]
-    assert "host.docker.internal:8080/v1" in response.json()["detail"]
+    assert "host.docker.internal:8080/v1" not in response.json()["detail"]
 
 
 def test_product_runtime_stream_reports_model_not_available(monkeypatch, tmp_path):
@@ -613,3 +613,4 @@ def test_product_runtime_stream_reports_model_not_available(monkeypatch, tmp_pat
     assert response.status_code == 200
     assert "event: error" in body
     assert "Model not available" in body
+    assert "host.docker.internal:8080/v1" not in body

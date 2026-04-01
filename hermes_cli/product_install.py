@@ -62,13 +62,20 @@ from hermes_cli.product_install_service import (
     service_bind_host_and_home as _service_bind_host_and_home_impl,
     write_product_app_service_unit as _write_product_app_service_unit_impl,
 )
+from hermes_cli.product_runtime_network import (
+    ensure_runtime_docker_network,
+    ensure_runtime_host_firewall,
+    local_host_model_port,
+    remove_runtime_docker_network,
+    remove_runtime_host_firewall,
+)
 from hermes_cli.product_stack import get_product_services_root, get_tsidp_compose_path
 
 
 DEFAULT_INSTALL_DIR_NAME = "hermes-core"
 DOCKER_DAEMON_CONFIG_PATH = Path("/etc/docker/daemon.json")
 RUNSC_RUNTIME_NAME = "runsc"
-RUNSC_RUNTIME_CONFIG = {"path": "runsc", "runtimeArgs": ["--network=host"]}
+RUNSC_RUNTIME_CONFIG = {"path": "runsc", "runtimeArgs": []}
 PRODUCT_SECRET_KEYS = [
     "HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET",
     "HERMES_PRODUCT_SESSION_SECRET",
@@ -384,8 +391,14 @@ def build_product_runtime_image() -> None:
     )
 
 
+def ensure_product_runtime_networking() -> dict[str, bool]:
+    network_created = ensure_runtime_docker_network(_run)
+    firewall_changed = ensure_runtime_host_firewall(_run, model_port=local_host_model_port())
+    return {"created_network": network_created, "updated_firewall": firewall_changed}
+
+
 def perform_product_cleanup() -> dict[str, bool]:
-    return _perform_product_cleanup_impl(
+    result = _perform_product_cleanup_impl(
         docker_available_fn=_docker_available,
         remove_tsidp_stack_fn=_remove_tsidp_stack,
         remove_runtime_containers_fn=_remove_runtime_containers,
@@ -400,6 +413,9 @@ def perform_product_cleanup() -> dict[str, bool]:
         remove_install_tree_and_launchers_fn=_remove_install_tree_and_launchers,
         product_secret_keys=PRODUCT_SECRET_KEYS,
     )
+    result["removed_runtime_network"] = remove_runtime_docker_network(_run)
+    result["removed_runtime_firewall"] = remove_runtime_host_firewall(_run, model_port=local_host_model_port())
+    return result
 
 
 def run_product_install(args: Any) -> None:
@@ -428,6 +444,9 @@ def run_product_install(args: Any) -> None:
         raise SystemExit(docker_message)
     state = _product_install_state()
     state["managed_runsc_registration"] = bool(changed or state.get("managed_runsc_registration"))
+    networking = ensure_product_runtime_networking()
+    state["managed_runtime_network"] = bool(networking["created_network"] or state.get("managed_runtime_network"))
+    state["managed_runtime_firewall"] = bool(networking["updated_firewall"] or state.get("managed_runtime_firewall"))
     save_product_install_state(state)
     build_product_runtime_image()
     if getattr(args, "skip_setup", False):
@@ -435,6 +454,11 @@ def run_product_install(args: Any) -> None:
     validate_product_host_prereqs()
     setattr(args, "from_install", True)
     run_product_setup_wizard(args)
+    networking = ensure_product_runtime_networking()
+    state = _product_install_state()
+    state["managed_runtime_network"] = bool(networking["created_network"] or state.get("managed_runtime_network"))
+    state["managed_runtime_firewall"] = bool(networking["updated_firewall"] or state.get("managed_runtime_firewall"))
+    save_product_install_state(state)
 
 
 def run_product_uninstall(args: Any) -> None:

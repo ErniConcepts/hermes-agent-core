@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import secrets
@@ -26,6 +27,7 @@ from session_reset import SessionResetPolicy, session_reset_reason
 _ACTIVE_AGENT_LOCK = threading.Lock()
 _ACTIVE_AGENTS: dict[str, Any] = {}
 _ACTIVE_SESSION_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def _required_env(name: str) -> str:
@@ -194,9 +196,10 @@ def _classify_runtime_error(exc: Exception) -> tuple[int, str]:
     ):
         endpoint = _required_env("OPENAI_BASE_URL")
         model = _required_env("HERMES_PRODUCT_MODEL")
+        logger.warning("Product runtime model unavailable", extra={"model": model, "base_url": endpoint, "error": detail})
         return (
             503,
-            f"Model not available. Check that '{model}' is reachable at {endpoint}.",
+            "Model not available. Check the server configuration.",
         )
     return (500, "Runtime request failed")
 

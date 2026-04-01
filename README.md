@@ -81,7 +81,7 @@ Current deployment assumptions:
 Run this as your normal user:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/main/scripts/install-product.sh -o install-product.sh
+curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/bc55488d1c7564ae4c9b403c3e6b86c9e216164a/scripts/install-product.sh -o install-product.sh
 bash install-product.sh
 ```
 
@@ -93,6 +93,8 @@ The installer is designed to:
 - run the product install flow
 - prompt for `sudo` only when host-level changes are required
 - stop early if Docker is installed but the current shell still cannot use it
+- register a dedicated Docker bridge for product runtimes
+- install host firewall rules so product runtimes can reach the configured local inference port without inheriting broad host-network access
 
 Do not run the installer itself with `sudo`.
 
@@ -175,6 +177,7 @@ Properties of this flow:
 - there is no localhost or LAN fallback login
 - the bootstrap link is one-time and server-tracked
 - the admin account is created only after a successful `tsidp` login on the Tailnet URL
+- the product app uses a dedicated session secret, not the OIDC client secret
 
 ## Invite Flow
 
@@ -220,6 +223,8 @@ sudo tailscale set --operator="$USER"
 ```
 
 The first admin can be created before model configuration exists. In that state, auth works but chat runtimes will not answer until `hermes setup model` has been completed.
+
+The product app keeps `/healthz` intentionally minimal for unauthenticated liveness checks and does not expose internal issuer/app URLs there.
 
 Useful commands:
 

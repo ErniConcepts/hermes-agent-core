@@ -22,6 +22,7 @@ from hermes_cli.product_runtime_common import (
     _RUNTIME_HEALTH_TTL_SECONDS,
     _RUNTIME_WORKSPACE_PATH,
 )
+from hermes_cli.product_runtime_network import ensure_runtime_docker_network, runtime_network_name
 from hermes_cli.product_runtime_staging import runtime_image, runtime_internal_port
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,8 @@ def docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) -> 
         record.runtime,
         "--name",
         record.container_name,
+        "--network",
+        runtime_network_name(),
         "--publish",
         f"127.0.0.1:{record.runtime_port}:{internal_port}",
         "--read-only",
@@ -201,6 +204,7 @@ def wait_for_runtime_health(
 
 def ensure_runtime_container(record: ProductRuntimeRecord, config: dict[str, Any]) -> ProductRuntimeRecord:
     started = time.perf_counter()
+    ensure_runtime_docker_network(lambda command, **kwargs: subprocess.run(command, capture_output=True, text=True, **kwargs))
     container_state = docker_inspect_state(record.container_name)
     if container_state and bool(container_state.get("State", {}).get("Running")):
         if not running_container_matches_record(record, container_state):

@@ -16,6 +16,7 @@ _RUNTIME_ENV_MATCH_KEYS = {
     "HERMES_PRODUCT_TOOLSETS",
     "HERMES_PRODUCT_API_MODE",
     "HERMES_PRODUCT_RUNTIME_MODE",
+    "TIRITH_FAIL_OPEN",
 }
 
 
@@ -71,7 +72,7 @@ def secure_runtime_dir(path) -> None:
 
 def secure_runtime_writable_dir(path) -> None:
     try:
-        path.chmod(0o777)
+        path.chmod(0o700)
     except (OSError, NotImplementedError):
         pass
 
