@@ -13,9 +13,9 @@ from .config import GatewayConfig, PlatformConfig, HomeChannel, load_gateway_con
 from .session import (
     SessionContext,
     SessionStore,
-    SessionResetPolicy,
     build_session_context_prompt,
 )
+from session_reset import SessionResetPolicy
 from .delivery import DeliveryRouter, DeliveryTarget
 
 __all__ = [

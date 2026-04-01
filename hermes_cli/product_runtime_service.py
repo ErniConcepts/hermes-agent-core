@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,7 @@ import uvicorn
 
 from hermes_state import SessionDB
 from hermes_cli.product_runtime import _RUNTIME_WORKSPACE_PATH
+from session_reset import SessionResetPolicy, session_reset_reason
 
 _ACTIVE_AGENT_LOCK = threading.Lock()
 _ACTIVE_AGENTS: dict[str, Any] = {}
@@ -103,27 +104,11 @@ def _active_session_id_path() -> Path:
     return Path(_required_env("HERMES_HOME")) / ".product-runtime-session-id"
 
 
-def _load_runtime_reset_policy() -> dict[str, int | str]:
+def _load_runtime_reset_policy() -> SessionResetPolicy:
     from hermes_cli.config import load_config
 
     config = load_config()
-    policy = config.get("session_reset")
-    if not isinstance(policy, dict):
-        policy = {}
-    mode = str(policy.get("mode") or "none").strip().lower()
-    if mode not in {"none", "idle", "daily", "both"}:
-        mode = "none"
-    try:
-        idle_minutes = int(policy.get("idle_minutes", 1440))
-    except (TypeError, ValueError):
-        idle_minutes = 1440
-    try:
-        at_hour = int(policy.get("at_hour", 4))
-    except (TypeError, ValueError):
-        at_hour = 4
-    idle_minutes = idle_minutes if idle_minutes > 0 else 1440
-    at_hour = at_hour if 0 <= at_hour <= 23 else 4
-    return {"mode": mode, "idle_minutes": idle_minutes, "at_hour": at_hour}
+    return SessionResetPolicy.from_dict(config.get("session_reset") if isinstance(config, dict) else {})
 
 
 def _read_active_session_id() -> str:
@@ -153,28 +138,12 @@ def _last_runtime_activity_ts(db: SessionDB, session_id: str, session_row: dict[
 
 def _runtime_reset_reason(db: SessionDB, session_id: str) -> str | None:
     policy = _load_runtime_reset_policy()
-    if policy["mode"] == "none":
-        return None
     session_row = db.get_session(session_id)
     if not session_row or session_row.get("ended_at") is not None:
         return None
 
-    now = datetime.now()
     last_activity = datetime.fromtimestamp(_last_runtime_activity_ts(db, session_id, session_row))
-
-    if policy["mode"] in {"idle", "both"}:
-        idle_deadline = last_activity + timedelta(minutes=int(policy["idle_minutes"]))
-        if now > idle_deadline:
-            return "idle"
-
-    if policy["mode"] in {"daily", "both"}:
-        today_reset = now.replace(hour=int(policy["at_hour"]), minute=0, second=0, microsecond=0)
-        if now.hour < int(policy["at_hour"]):
-            today_reset -= timedelta(days=1)
-        if last_activity < today_reset:
-            return "daily"
-
-    return None
+    return session_reset_reason(last_activity=last_activity, policy=policy)
 
 
 def _new_runtime_session_id(base_session_id: str) -> str:

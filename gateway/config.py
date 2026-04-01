@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Any
 from enum import Enum
 
 from hermes_cli.config import get_hermes_home
+from session_reset import SessionResetPolicy, normalize_session_reset_policy
 
 logger = logging.getLogger(__name__)
 
@@ -84,49 +85,6 @@ class HomeChannel:
             platform=Platform(data["platform"]),
             chat_id=str(data["chat_id"]),
             name=data.get("name", "Home"),
-        )
-
-
-@dataclass
-class SessionResetPolicy:
-    """
-    Controls when sessions reset (lose context).
-    
-    Modes:
-    - "daily": Reset at a specific hour each day
-    - "idle": Reset after N minutes of inactivity
-    - "both": Whichever triggers first (daily boundary OR idle timeout)
-    - "none": Never auto-reset (context managed only by compression)
-    """
-    mode: str = "both"  # "daily", "idle", "both", or "none"
-    at_hour: int = 4  # Hour for daily reset (0-23, local time)
-    idle_minutes: int = 1440  # Minutes of inactivity before reset (24 hours)
-    notify: bool = True  # Send a notification to the user when auto-reset occurs
-    notify_exclude_platforms: tuple = ("api_server", "webhook")  # Platforms that don't get reset notifications
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "mode": self.mode,
-            "at_hour": self.at_hour,
-            "idle_minutes": self.idle_minutes,
-            "notify": self.notify,
-            "notify_exclude_platforms": list(self.notify_exclude_platforms),
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SessionResetPolicy":
-        # Handle both missing keys and explicit null values (YAML null → None)
-        mode = data.get("mode")
-        at_hour = data.get("at_hour")
-        idle_minutes = data.get("idle_minutes")
-        notify = data.get("notify")
-        exclude = data.get("notify_exclude_platforms")
-        return cls(
-            mode=mode if mode is not None else "both",
-            at_hour=at_hour if at_hour is not None else 4,
-            idle_minutes=idle_minutes if idle_minutes is not None else 1440,
-            notify=notify if notify is not None else True,
-            notify_exclude_platforms=tuple(exclude) if exclude is not None else ("api_server", "webhook"),
         )
 
 
@@ -533,19 +491,20 @@ def load_gateway_config() -> GatewayConfig:
     
     # --- Validate loaded values ---
     policy = config.default_reset_policy
+    previous_hour = policy.at_hour
+    previous_idle = policy.idle_minutes
+    normalize_session_reset_policy(policy)
 
-    if not (0 <= policy.at_hour <= 23):
+    if previous_hour != policy.at_hour:
         logger.warning(
-            "Invalid at_hour=%s (must be 0-23). Using default 4.", policy.at_hour
+            "Invalid at_hour=%s (must be 0-23). Using default 4.", previous_hour
         )
-        policy.at_hour = 4
 
-    if policy.idle_minutes is None or policy.idle_minutes <= 0:
+    if previous_idle != policy.idle_minutes:
         logger.warning(
             "Invalid idle_minutes=%s (must be positive). Using default 1440.",
-            policy.idle_minutes,
+            previous_idle,
         )
-        policy.idle_minutes = 1440
 
     # Warn about empty bot tokens — platforms that loaded an empty string
     # won't connect and the cause can be confusing without a log line.

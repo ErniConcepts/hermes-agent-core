@@ -349,7 +349,7 @@ def test_live_product_invite_can_be_claimed_in_second_context(
     context = browser.new_context(ignore_https_errors=True)
     _add_signed_session_cookie(context, live_product_state, pending_payload)
     page = context.new_page()
-    page.goto(live_product_state.app_base_url, wait_until="networkidle")
+    page.goto(live_product_state.app_base_url, wait_until="domcontentloaded")
 
     expect(page.locator("#authCard")).to_be_visible()
     expect(page.locator("#claimInviteButton")).to_be_visible()
@@ -377,15 +377,15 @@ def test_live_product_session_persists_across_reload_and_new_tab(
     _add_signed_session_cookie(context, live_product_state, _build_user_session_payload(live_product_state.user))
 
     page = context.new_page()
-    page.goto(live_product_state.app_base_url, wait_until="networkidle")
+    page.goto(live_product_state.app_base_url, wait_until="domcontentloaded")
     _wait_for_authenticated_shell(page)
     expect(page.locator("#sessionChip")).to_contain_text("Admin")
 
-    page.reload(wait_until="networkidle")
+    page.reload(wait_until="domcontentloaded")
     _wait_for_authenticated_shell(page)
 
     second_tab = context.new_page()
-    second_tab.goto(live_product_state.app_base_url, wait_until="networkidle")
+    second_tab.goto(live_product_state.app_base_url, wait_until="domcontentloaded")
     _wait_for_authenticated_shell(second_tab)
     expect(second_tab.locator("#adminCard")).to_be_visible(timeout=15000)
     second_tab.close()

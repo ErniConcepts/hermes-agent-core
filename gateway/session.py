@@ -15,7 +15,7 @@ import json
 import re
 import uuid
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
@@ -59,9 +59,9 @@ def _looks_like_phone(value: str) -> bool:
 from .config import (
     Platform,
     GatewayConfig,
-    SessionResetPolicy,
     HomeChannel,
 )
+from session_reset import is_session_expired, session_reset_reason
 
 
 @dataclass
@@ -553,27 +553,7 @@ class SessionStore:
             session_type=entry.chat_type,
         )
 
-        if policy.mode == "none":
-            return False
-
-        now = datetime.now()
-
-        if policy.mode in ("idle", "both"):
-            idle_deadline = entry.updated_at + timedelta(minutes=policy.idle_minutes)
-            if now > idle_deadline:
-                return True
-
-        if policy.mode in ("daily", "both"):
-            today_reset = now.replace(
-                hour=policy.at_hour,
-                minute=0, second=0, microsecond=0,
-            )
-            if now.hour < policy.at_hour:
-                today_reset -= timedelta(days=1)
-            if entry.updated_at < today_reset:
-                return True
-
-        return False
+        return is_session_expired(last_activity=entry.updated_at, policy=policy)
 
     def _should_reset(self, entry: SessionEntry, source: SessionSource) -> Optional[str]:
         """
@@ -594,30 +574,7 @@ class SessionStore:
             session_type=source.chat_type
         )
         
-        if policy.mode == "none":
-            return None
-        
-        now = datetime.now()
-        
-        if policy.mode in ("idle", "both"):
-            idle_deadline = entry.updated_at + timedelta(minutes=policy.idle_minutes)
-            if now > idle_deadline:
-                return "idle"
-        
-        if policy.mode in ("daily", "both"):
-            today_reset = now.replace(
-                hour=policy.at_hour, 
-                minute=0, 
-                second=0, 
-                microsecond=0
-            )
-            if now.hour < policy.at_hour:
-                today_reset -= timedelta(days=1)
-            
-            if entry.updated_at < today_reset:
-                return "daily"
-        
-        return None
+        return session_reset_reason(last_activity=entry.updated_at, policy=policy)
     
     def has_any_sessions(self) -> bool:
         """Check if any sessions have ever been created (across all platforms).

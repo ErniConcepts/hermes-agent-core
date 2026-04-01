@@ -7,6 +7,7 @@ from hermes_cli.product_runtime_service import create_product_runtime_app
 from hermes_cli.product_runtime_service import build_runtime_agent
 from hermes_cli.product_runtime_service import _resolve_runtime_session_id
 from hermes_cli.product_runtime_service import _visible_messages
+from session_reset import SessionResetPolicy
 
 
 class DummyDB:
@@ -226,7 +227,10 @@ def test_resolve_runtime_session_id_rotates_when_session_reset_policy_triggers(m
     (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
-    monkeypatch.setattr("hermes_cli.product_runtime_service._load_runtime_reset_policy", lambda: {"mode": "both", "idle_minutes": 1, "at_hour": 4})
+    monkeypatch.setattr(
+        "hermes_cli.product_runtime_service._load_runtime_reset_policy",
+        lambda: SessionResetPolicy(mode="both", idle_minutes=1, at_hour=4),
+    )
     old_started_at = 0
 
     class ResetDB(DummyDB):
