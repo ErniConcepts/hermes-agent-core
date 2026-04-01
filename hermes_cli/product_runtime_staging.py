@@ -27,6 +27,7 @@ from hermes_cli.product_runtime_common import (
     secure_runtime_file,
     secure_runtime_writable_dir,
 )
+from hermes_cli.runtime_config import build_runtime_cli_config
 from hermes_cli.runtime_provider import format_runtime_provider_error, resolve_runtime_provider
 
 
@@ -200,23 +201,12 @@ def write_runtime_cli_config(config: dict[str, object], stable_user_id: str, *, 
     model_cfg = resolve_hermes_model_config()
     root_config = load_config()
     config_path = runtime_config_path(config, stable_user_id)
-    context_length = model_cfg.get("context_length")
-    try:
-        normalized_context_length = int(context_length) if context_length is not None else None
-    except (TypeError, ValueError):
-        normalized_context_length = None
-
-    runtime_config: dict[str, object] = {}
-    if normalized_context_length is not None and normalized_context_length > 0:
-        runtime_config["model"] = {
-            "default": model,
-            "base_url": base_url,
-            "provider": str(model_cfg.get("provider") or "").strip() or "custom",
-            "context_length": normalized_context_length,
-        }
-    session_reset = root_config.get("session_reset")
-    if isinstance(session_reset, dict) and session_reset:
-        runtime_config["session_reset"] = dict(session_reset)
+    runtime_config = build_runtime_cli_config(
+        base_url=base_url,
+        model=model,
+        model_cfg=model_cfg,
+        root_config=root_config,
+    )
     if not runtime_config:
         if config_path.exists():
             config_path.unlink()
