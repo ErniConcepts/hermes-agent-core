@@ -67,6 +67,7 @@ Current security boundary:
   - runtime auth must stay constant-time and token-scoped
   - generated runtime config inputs remain read-only mounts
   - runtime session rollover should follow Hermes-native `session_reset` behavior rather than fork-only transcript heuristics
+  - reasoning-tag stripping and mixed reasoning/answer stream splitting should stay in shared Hermes helpers, not product-only code
 
 ## Current Auth and Admin Behavior
 
@@ -137,6 +138,7 @@ scripts/cleanup-product-e2e-state.sh
 - Do not expose signup token material through admin placeholder identifiers or logs.
 - Keep admin UI narrow; avoid growing it into a full config console.
 - Keep runtime launch derived from the main Hermes config rather than adding a second hidden product-side source of truth.
+- Keep shared session-reset policy handling, reasoning normalization, and staged runtime config derivation in shared Hermes helpers when possible.
 - Do not reintroduce product-only history compaction or summary handoff logic when Hermes-native session-reset behavior is sufficient.
 
 ## Related Docs

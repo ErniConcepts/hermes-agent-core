@@ -58,3 +58,13 @@ Keep fork behavior when upstream changes would break one of these product guaran
   - `hermes setup ...` owns model/tools/gateway/agent behavior
 
 Document any retained divergence in commit messages and product-side tests.
+
+## Current Shared Alignments
+
+Recent fork-shrink work moved these areas out of product-only logic and into shared Hermes helpers:
+
+- session-reset policy parsing and reset-reason evaluation
+- reasoning-tag stripping and mixed reasoning/answer stream normalization
+- staged runtime `config.yaml` derivation for model/session-reset inputs
+
+When touching these paths, prefer extending the shared helper instead of reintroducing product-local copies.
