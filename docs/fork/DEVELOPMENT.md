@@ -146,3 +146,4 @@ scripts/cleanup-product-e2e-state.sh
 - `README.md` (public install/use guidance)
 - `docs/fork/SPEC.md` (current product contract)
 - `docs/fork/UPSTREAM-SYNC.md` (sync process with upstream Hermes)
+- `docs/fork/ROADMAP.md` (maintainer planning and next bets)
