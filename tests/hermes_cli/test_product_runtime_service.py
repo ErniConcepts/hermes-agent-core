@@ -5,6 +5,7 @@ from hermes_cli.product_runtime import _RUNTIME_WORKSPACE_PATH
 from hermes_cli.product_runtime_service import create_product_runtime_app
 from hermes_cli.product_runtime_service import build_runtime_agent
 from hermes_cli.product_runtime_service import _derive_runtime_conversation
+from hermes_cli.product_runtime_service import _visible_messages
 
 
 class DummyDB:
@@ -118,6 +119,26 @@ class HistorySensitiveAgent:
         history.append({"role": "user", "content": user_message})
         history.append({"role": "assistant", "content": "tool-task-complete"})
         return {"final_response": "tool-task-complete", "messages": history}
+
+
+def test_visible_messages_hides_intermediate_tool_call_assistant_messages():
+    visible = _visible_messages(
+        [
+            {"role": "user", "content": "create a file"},
+            {
+                "role": "assistant",
+                "content": "Planning the file creation",
+                "tool_calls": [{"id": "call_1", "function": {"name": "write_file", "arguments": "{}"}}],
+            },
+            {"role": "tool", "content": '{"success": true}', "tool_call_id": "call_1"},
+            {"role": "assistant", "content": "Done. file.txt created."},
+        ]
+    )
+
+    assert visible == [
+        {"role": "user", "content": "create a file"},
+        {"role": "assistant", "content": "Done. file.txt created."},
+    ]
 
 
 def test_product_runtime_session_and_turn(monkeypatch, tmp_path):

@@ -135,6 +135,8 @@ def _visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         role = str(message.get("role", "")).strip()
         if role not in {"user", "assistant", "system"}:
             continue
+        if role == "assistant" and isinstance(message.get("tool_calls"), list) and message.get("tool_calls"):
+            continue
         content = str(message.get("content") or "")
         if role != "user":
             content = _strip_reasoning_blocks(content)

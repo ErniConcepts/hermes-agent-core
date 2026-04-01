@@ -31,7 +31,6 @@ def _configure_hermes_runtime(model_base_url: str = "http://127.0.0.1:8080/v1") 
         "base_url": model_base_url,
         "default": "qwen3.5-9b-local",
     }
-    config["platform_toolsets"] = {"cli": ["memory", "session_search"]}
     save_config(config)
     save_env_value("OPENAI_BASE_URL", model_base_url)
     save_env_value("OPENAI_API_KEY", "")
@@ -39,6 +38,13 @@ def _configure_hermes_runtime(model_base_url: str = "http://127.0.0.1:8080/v1") 
 
 def _runtime_user() -> dict[str, str]:
     return {"sub": "user-1", "preferred_username": "admin", "name": "Admin User"}
+
+
+def _assert_runtime_soul_contract(soul_text: str) -> None:
+    assert "Your currently enabled Hermes toolsets are: file, terminal, memory." in soul_text
+    assert "The concrete tools currently available in this runtime are:" in soul_text
+    for tool_name in ("read_file", "write_file", "patch", "search_files", "terminal", "process", "memory"):
+        assert tool_name in soul_text
 
 
 def test_product_runtime_session_id_is_stable():
@@ -59,8 +65,7 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     assert soul_path.exists()
     soul_text = soul_path.read_text(encoding="utf-8")
     assert "You are Hermes" in soul_text
-    assert "Your currently enabled Hermes toolsets are: memory, session_search." in soul_text
-    assert "The concrete tools currently available in this runtime are: memory, session_search." in soul_text
+    _assert_runtime_soul_contract(soul_text)
     manifest = Path(record.manifest_file)
     assert manifest.exists()
     loaded = ProductRuntimeRecord.model_validate_json(manifest.read_text(encoding="utf-8"))
@@ -118,8 +123,7 @@ def test_stage_product_runtime_uses_custom_soul_template(tmp_path, monkeypatch):
     soul_path = Path(record.hermes_home) / "SOUL.md"
     soul_text = soul_path.read_text(encoding="utf-8")
     assert "Custom runtime identity" in soul_text
-    assert "Your currently enabled Hermes toolsets are: memory, session_search." in soul_text
-    assert "The concrete tools currently available in this runtime are: memory, session_search." in soul_text
+    _assert_runtime_soul_contract(soul_text)
 
 
 def test_get_product_runtime_session_proxies_runtime(monkeypatch):
@@ -152,7 +156,7 @@ def test_get_product_runtime_session_proxies_runtime(monkeypatch):
                 "session_id": "product_admin_123",
                 "messages": [{"role": "assistant", "content": "hello"}],
                 "runtime_mode": "product",
-                "runtime_toolsets": ["memory", "session_search"],
+                "runtime_toolsets": ["file", "terminal", "memory"],
             }
 
     def _fake_get(*args, **kwargs):
@@ -526,7 +530,7 @@ def test_running_container_matches_record_detects_stale_runtime_env(tmp_path):
                 "HERMES_PRODUCT_MODEL=qwen3.5-9b-local",
                 "OPENAI_BASE_URL=http://host.docker.internal:11437/v1",
                 "OPENAI_API_KEY=product-runtime",
-                "HERMES_PRODUCT_TOOLSETS=hermes-cli",
+                "HERMES_PRODUCT_TOOLSETS=file,terminal,memory",
                 "HERMES_PRODUCT_API_MODE=chat_completions",
                 "HERMES_PRODUCT_RUNTIME_MODE=product",
             ]
@@ -557,7 +561,7 @@ def test_running_container_matches_record_detects_stale_runtime_env(tmp_path):
                 "HERMES_PRODUCT_MODEL=anthropic/claude-opus-4.6",
                 "OPENAI_BASE_URL=https://openrouter.ai/api/v1",
                 "OPENAI_API_KEY=product-runtime",
-                "HERMES_PRODUCT_TOOLSETS=hermes-cli",
+                "HERMES_PRODUCT_TOOLSETS=file,terminal,memory",
                 "HERMES_PRODUCT_API_MODE=chat_completions",
                 "HERMES_PRODUCT_RUNTIME_MODE=product",
             ]
