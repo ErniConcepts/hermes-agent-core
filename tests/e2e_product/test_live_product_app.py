@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from itsdangerous import TimestampSigner
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, expect
 
 
 pytestmark = pytest.mark.e2e
@@ -134,6 +134,23 @@ def _wait_for_authenticated_shell(page: Page, *, timeout: int = 15000) -> None:
     expect(page.locator("#workspaceCard")).to_be_visible(timeout=timeout)
 
 
+def _open_authenticated_page(browser, live_product_state: LiveProductState, *, retries: int = 3) -> tuple[object, Page]:
+    last_error: Exception | None = None
+    for _ in range(retries):
+        context = browser.new_context(ignore_https_errors=True)
+        _add_signed_session_cookie(context, live_product_state, _build_user_session_payload(live_product_state.user))
+        page = context.new_page()
+        try:
+            page.goto(live_product_state.app_base_url, wait_until="domcontentloaded")
+            _wait_for_authenticated_shell(page, timeout=20000)
+            return context, page
+        except PlaywrightTimeoutError as exc:
+            last_error = exc
+            context.close()
+            continue
+    raise last_error or RuntimeError("Could not open authenticated live product page")
+
+
 def _drag_and_drop(page: Page, source_selector: str, target_selector: str) -> None:
     data_transfer = page.evaluate_handle("new DataTransfer()")
     page.locator(source_selector).dispatch_event("dragstart", {"dataTransfer": data_transfer})
@@ -195,10 +212,7 @@ def live_product_state() -> LiveProductState:
 
 @pytest.fixture()
 def authenticated_page(browser, live_product_state: LiveProductState) -> Page:
-    context = browser.new_context(ignore_https_errors=True)
-    _add_signed_session_cookie(context, live_product_state, _build_user_session_payload(live_product_state.user))
-    page = context.new_page()
-    page.goto(live_product_state.app_base_url, wait_until="networkidle")
+    context, page = _open_authenticated_page(browser, live_product_state)
     _wait_for_authenticated_shell(page)
     yield page
     context.close()
