@@ -10,7 +10,7 @@ from urllib.parse import urlparse, urlunparse
 
 import yaml
 
-from hermes_cli.config import ensure_hermes_home, get_env_value, get_hermes_home
+from hermes_cli.config import ensure_hermes_home, get_env_value, get_hermes_home, load_config
 from hermes_cli.product_config import (
     load_product_config,
     resolve_hermes_model_config,
@@ -198,6 +198,7 @@ def write_runtime_text_if_changed(path: Path, content: str) -> bool:
 def write_runtime_cli_config(config: dict[str, object], stable_user_id: str, *, base_url: str, model: str) -> None:
     _ = config
     model_cfg = resolve_hermes_model_config()
+    root_config = load_config()
     config_path = runtime_config_path(config, stable_user_id)
     context_length = model_cfg.get("context_length")
     try:
@@ -205,19 +206,21 @@ def write_runtime_cli_config(config: dict[str, object], stable_user_id: str, *, 
     except (TypeError, ValueError):
         normalized_context_length = None
 
-    if normalized_context_length is None or normalized_context_length <= 0:
-        if config_path.exists():
-            config_path.unlink()
-        return
-
-    runtime_config = {
-        "model": {
+    runtime_config: dict[str, object] = {}
+    if normalized_context_length is not None and normalized_context_length > 0:
+        runtime_config["model"] = {
             "default": model,
             "base_url": base_url,
             "provider": str(model_cfg.get("provider") or "").strip() or "custom",
             "context_length": normalized_context_length,
         }
-    }
+    session_reset = root_config.get("session_reset")
+    if isinstance(session_reset, dict) and session_reset:
+        runtime_config["session_reset"] = dict(session_reset)
+    if not runtime_config:
+        if config_path.exists():
+            config_path.unlink()
+        return
     write_runtime_text_if_changed(config_path, yaml.safe_dump(runtime_config, sort_keys=False))
     secure_container_readable_file(config_path)
 

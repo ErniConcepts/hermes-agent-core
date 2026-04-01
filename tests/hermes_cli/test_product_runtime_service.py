@@ -1,14 +1,39 @@
-from fastapi.testclient import TestClient
 import importlib
+
+from fastapi.testclient import TestClient
 
 from hermes_cli.product_runtime import _RUNTIME_WORKSPACE_PATH
 from hermes_cli.product_runtime_service import create_product_runtime_app
 from hermes_cli.product_runtime_service import build_runtime_agent
-from hermes_cli.product_runtime_service import _derive_runtime_conversation
+from hermes_cli.product_runtime_service import _resolve_runtime_session_id
 from hermes_cli.product_runtime_service import _visible_messages
 
 
 class DummyDB:
+    def __init__(self):
+        self.sessions = {"product_admin_123": {"id": "product_admin_123", "started_at": 0, "ended_at": None}}
+
+    def get_session(self, session_id):
+        return self.sessions.get(session_id)
+
+    def get_messages(self, session_id):
+        return []
+
+    def create_session(self, session_id, source, model=None, model_config=None, system_prompt=None, user_id=None, parent_session_id=None):
+        self.sessions[session_id] = {
+            "id": session_id,
+            "started_at": 0,
+            "ended_at": None,
+            "parent_session_id": parent_session_id,
+            "source": source,
+        }
+        return session_id
+
+    def end_session(self, session_id, end_reason):
+        if session_id in self.sessions:
+            self.sessions[session_id]["ended_at"] = 1
+            self.sessions[session_id]["end_reason"] = end_reason
+
     def close(self):
         return None
 
@@ -104,23 +129,6 @@ class CapturingAgent:
         return {"final_response": "done", "messages": history}
 
 
-class HistorySensitiveAgent:
-    def __init__(self):
-        self.session_id = "product_admin_123"
-        self.reasoning_callback = None
-
-    def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
-        serialized = " ".join(str(message.get("content") or "") for message in (conversation_history or []))
-        if "HUGE_HISTORY_MARKER" in serialized:
-            raise RuntimeError("history too large for local model")
-        if stream_callback is not None:
-            stream_callback("tool-task-complete")
-        history = list(conversation_history or [])
-        history.append({"role": "user", "content": user_message})
-        history.append({"role": "assistant", "content": "tool-task-complete"})
-        return {"final_response": "tool-task-complete", "messages": history}
-
-
 def test_visible_messages_hides_intermediate_tool_call_assistant_messages():
     visible = _visible_messages(
         [
@@ -155,6 +163,7 @@ def test_product_runtime_session_and_turn(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._resolve_runtime_session_id", lambda db: "product_admin_123")
     monkeypatch.setattr("hermes_cli.product_runtime_service.build_runtime_agent", lambda db, session_id, reasoning_callback=None: FakeAgent())
     monkeypatch.setattr(
         "hermes_cli.product_runtime_service._load_session_messages",
@@ -174,25 +183,7 @@ def test_product_runtime_session_and_turn(monkeypatch, tmp_path):
     assert turn.json()["final_response"] == "done"
 
 
-def test_derive_runtime_conversation_keeps_recent_turns_and_injects_summary():
-    messages = []
-    for idx in range(8):
-        messages.append({"role": "user", "content": f"user-{idx}"})
-        assistant_content = f"assistant-{idx}"
-        if idx == 0:
-            assistant_content = "HUGE_HISTORY_MARKER " + ("very long old output " * 200)
-        messages.append({"role": "assistant", "content": assistant_content})
-
-    reduced = _derive_runtime_conversation(messages)
-
-    assert reduced[0]["role"] == "assistant"
-    assert "[PRODUCT RUNTIME SUMMARY]" in reduced[0]["content"]
-    assert "HUGE_HISTORY_MARKER" not in " ".join(str(item.get("content") or "") for item in reduced[1:])
-    retained_user_turns = [item["content"] for item in reduced if item.get("role") == "user"]
-    assert retained_user_turns == [f"user-{idx}" for idx in range(2, 8)]
-
-
-def test_product_runtime_turn_uses_reduced_history_but_session_stays_full(monkeypatch, tmp_path):
+def test_product_runtime_turn_uses_full_history(monkeypatch, tmp_path):
     hermes_home = tmp_path / "hermes"
     hermes_home.mkdir(parents=True)
     (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
@@ -206,6 +197,7 @@ def test_product_runtime_turn_uses_reduced_history_but_session_stays_full(monkey
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._resolve_runtime_session_id", lambda db: "product_admin_123")
 
     stored_messages = []
     for idx in range(8):
@@ -225,54 +217,33 @@ def test_product_runtime_turn_uses_reduced_history_but_session_stays_full(monkey
     assert len(session.json()["messages"]) == len(stored_messages)
     assert turn.status_code == 200
     assert agent.history_seen is not None
-    retained_user_turns = [item["content"] for item in agent.history_seen if item.get("role") == "user"]
-    assert retained_user_turns == [f"user-{idx}" for idx in range(2, 8)]
-    assert agent.history_seen[0]["role"] == "assistant"
-    assert "[PRODUCT RUNTIME SUMMARY]" in agent.history_seen[0]["content"]
+    assert agent.history_seen == stored_messages
 
 
-def test_product_runtime_stream_reduces_huge_old_history_for_tool_follow_up(monkeypatch, tmp_path):
+def test_resolve_runtime_session_id_rotates_when_session_reset_policy_triggers(monkeypatch, tmp_path):
     hermes_home = tmp_path / "hermes"
     hermes_home.mkdir(parents=True)
     (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
-    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory,session_search")
-    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
-    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
-    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
-    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
-    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
-    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._load_runtime_reset_policy", lambda: {"mode": "both", "idle_minutes": 1, "at_hour": 4})
+    old_started_at = 0
 
-    stored_messages = [
-        {"role": "user", "content": "Show me a very long list"},
-        {"role": "assistant", "content": "HUGE_HISTORY_MARKER " + ("1 2 3 4 5 " * 1000)},
-        {"role": "user", "content": "Now create a folder and file"},
-        {"role": "assistant", "content": "ok"},
-    ]
-    monkeypatch.setattr(
-        "hermes_cli.product_runtime_service.build_runtime_agent",
-        lambda db, session_id, reasoning_callback=None: HistorySensitiveAgent(),
-    )
-    monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: stored_messages)
-    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
+    class ResetDB(DummyDB):
+        def __init__(self):
+            super().__init__()
+            self.sessions["product_admin_123"]["started_at"] = old_started_at
 
-    client = TestClient(create_product_runtime_app())
-    with client.stream(
-        "POST",
-        "/runtime/turn/stream",
-        json={"user_message": "Create a folder named demo with note.txt"},
-        headers={"X-Hermes-Product-Runtime-Token": "runtime-token"},
-    ) as response:
-        payload = "\n".join(response.iter_text())
+        def get_messages(self, session_id):
+            return [{"timestamp": old_started_at}]
 
-    assert response.status_code == 200
-    assert "event: answer" in payload
-    assert "\"delta\": \"tool-task-complete\"" in payload
-    assert "event: final" in payload
-    assert "\"final_response\": \"tool-task-complete\"" in payload
+    db = ResetDB()
+
+    rotated = _resolve_runtime_session_id(db)
+
+    assert rotated != "product_admin_123"
+    assert db.sessions["product_admin_123"]["end_reason"] == "session_reset"
+    assert db.sessions[rotated]["parent_session_id"] == "product_admin_123"
 
 
 def test_product_runtime_stream_emits_reasoning_and_final(monkeypatch, tmp_path):
@@ -289,6 +260,7 @@ def test_product_runtime_stream_emits_reasoning_and_final(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._resolve_runtime_session_id", lambda db: "product_admin_123")
     monkeypatch.setattr("hermes_cli.product_runtime_service.build_runtime_agent", lambda db, session_id, reasoning_callback=None: FakeAgent())
     monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: [])
     monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
@@ -319,6 +291,7 @@ def test_product_runtime_stream_routes_think_blocks_to_reasoning(monkeypatch, tm
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._resolve_runtime_session_id", lambda db: "product_admin_123")
     monkeypatch.setattr("hermes_cli.product_runtime_service.build_runtime_agent", lambda db, session_id, reasoning_callback=None: ThinkStreamingAgent())
     monkeypatch.setattr(
         "hermes_cli.product_runtime_service._load_session_messages",
@@ -352,6 +325,7 @@ def test_product_runtime_stream_preserves_answer_chunk_spaces(monkeypatch, tmp_p
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._resolve_runtime_session_id", lambda db: "product_admin_123")
     monkeypatch.setattr(
         "hermes_cli.product_runtime_service.build_runtime_agent",
         lambda db, session_id, reasoning_callback=None: SpacedStreamingAgent(),
@@ -389,6 +363,7 @@ def test_product_runtime_stream_preserves_whitespace_only_chunks(monkeypatch, tm
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._resolve_runtime_session_id", lambda db: "product_admin_123")
     monkeypatch.setattr(
         "hermes_cli.product_runtime_service.build_runtime_agent",
         lambda db, session_id, reasoning_callback=None: WhitespaceChunkAgent(),
@@ -426,6 +401,7 @@ def test_product_runtime_stop_interrupts_active_agent(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._resolve_runtime_session_id", lambda db: "product_admin_123")
     agent = InterruptibleAgent()
     monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
 
@@ -566,6 +542,7 @@ def test_product_runtime_turn_reports_model_not_available(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._resolve_runtime_session_id", lambda db: "product_admin_123")
 
     class FailingAgent:
         def run_conversation(self, *args, **kwargs):
@@ -604,6 +581,7 @@ def test_product_runtime_stream_reports_model_not_available(monkeypatch, tmp_pat
     monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
     monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._resolve_runtime_session_id", lambda db: "product_admin_123")
 
     class FailingAgent:
         def __init__(self):

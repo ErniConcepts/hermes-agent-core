@@ -82,6 +82,20 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     assert loaded.runtime == "runsc"
 
 
+def test_stage_product_runtime_carries_session_reset_policy_into_runtime_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
+
+    config = load_config()
+    config["session_reset"] = {"mode": "both", "idle_minutes": 30, "at_hour": 4}
+    save_config(config)
+
+    record = stage_product_runtime(_runtime_user())
+    runtime_config = yaml.safe_load((Path(record.hermes_home) / "config.yaml").read_text(encoding="utf-8"))
+
+    assert runtime_config["session_reset"] == {"mode": "both", "idle_minutes": 30, "at_hour": 4}
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are only meaningful on non-Windows hosts")
 def test_stage_product_runtime_uses_container_readable_permissions(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
