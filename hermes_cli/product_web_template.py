@@ -12,7 +12,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <body>
 <main>
 <div class="topbar">
-<div class="brand"><span class="brand-mark"></span><span id="brandName">__PRODUCT_NAME__</span></div>
+<div class="brand"><span id="brandName">__PRODUCT_NAME__</span></div>
 <div class="top-controls">
 <a class="mini-control logout-button session-chip" id="sessionChip" href="#" hidden></a>
 <button type="button" class="mini-control logout-button" id="logoutButton" hidden>Log out</button>

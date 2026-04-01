@@ -16,6 +16,7 @@ from hermes_cli.product_setup_bootstrap import (
     start_product_stack as _start_product_stack,
 )
 from hermes_cli.product_setup_sections import (
+    setup_product_branding,
     setup_product_bootstrap_identity,
     setup_product_identity,
     setup_product_storage,
@@ -37,6 +38,7 @@ from hermes_cli.setup import (
 PRODUCT_SETUP_SECTIONS = [
     ("tailscale", "Tailscale"),
     ("bootstrap", "Tailnet Auth & First Admin"),
+    ("branding", "Branding"),
     ("identity", "Agent Identity"),
     ("storage", "Workspace Storage"),
 ]
@@ -55,6 +57,8 @@ def run_product_setup_wizard(args: Any) -> None:
     if section:
         if section == "tailscale":
             setup_product_tailscale()
+        elif section == "branding":
+            setup_product_branding()
         elif section == "identity":
             setup_product_identity()
         elif section == "storage":
@@ -80,6 +84,7 @@ def run_product_setup_wizard(args: Any) -> None:
     setup_product_tailscale()
     force_new_bootstrap = setup_product_bootstrap_identity()
     _run_bootstrap_section(force_new_bootstrap=force_new_bootstrap)
+    setup_product_branding()
     setup_product_identity()
     setup_product_storage()
     _print_product_setup_summary()

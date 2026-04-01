@@ -28,6 +28,7 @@ def _sanitize_prompt_text(value: str) -> str:
 
 def configure_tsidp_client_credentials() -> None:
     product_config = load_product_config()
+    product_name = str(product_config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip() or "Hermes Core"
     auth = product_config.setdefault("auth", {})
     urls = resolve_product_urls(product_config)
     current_client_id = str(auth.get("client_id", "")).strip() or "hermes-core"
@@ -36,10 +37,10 @@ def configure_tsidp_client_credentials() -> None:
     print()
     print_header("tsidp Client")
     print_info("The bundled tsidp service is running.")
-    print_info("Open the tsidp URL below and create or update the Hermes Core OIDC client.")
+    print_info(f"Open the tsidp URL below and create or update the {product_name} OIDC client.")
     print_info(f"  tsidp URL:      {urls['issuer_url']}")
     print_info(f"  Redirect URI:   {urls['oidc_callback_url']}")
-    print_info("  Suggested name: Hermes Core")
+    print_info(f"  Suggested name: {product_name}")
     print_info("  Scopes:         openid profile email")
     print_info("Paste the client id and client secret here after saving the client in tsidp.")
     if current_client_id:
@@ -88,6 +89,7 @@ def complete_first_admin_bootstrap(state: dict[str, object]) -> dict[str, object
 
 def print_product_setup_summary() -> None:
     product_config = load_product_config()
+    product_name = str(product_config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip() or "Hermes Core"
     hermes_home = get_hermes_home()
     urls = resolve_product_urls(product_config)
     enrollment_state = load_first_admin_enrollment_state() or {}
@@ -102,6 +104,7 @@ def print_product_setup_summary() -> None:
     print_info(f"Product config: {hermes_home / 'product.yaml'}")
     print_info(f"Data folder:    {hermes_home}")
     print_info(f"Install dir:    {product_install_root()}")
+    print_info(f"Product title:          {product_name}")
     print_info(f"Tailnet app URL:         {urls['app_base_url']}")
     print_info(f"Tailnet OIDC issuer:     {urls['issuer_url']}")
     print_info(f"Tailnet policy:          {policy_status}")
@@ -124,16 +127,16 @@ def print_product_setup_summary() -> None:
     print_info("  Agent defaults:        hermes setup agent")
     print()
     print_header("Next Steps")
-    print_info("Hermes Core is now installed and reachable on your tailnet.")
+    print_info(f"{product_name} is now installed and reachable on your tailnet.")
     print_info("To finish the full Hermes setup, prepare these items first:")
     print_info("  a model endpoint and model name")
     print_info("  any API keys your chosen model provider needs")
-    print_info("  any optional tool provider keys you want to use")
+    print_info("  any optional tool provider keys you want to use if you later broaden the default toolset")
     print_info("Then continue with these commands:")
     print_info("  hermes setup model")
     print_info("    Configure the model/provider Hermes will use for chats and agents.")
     print_info("  hermes setup tools")
-    print_info("    Enable optional tools like web, browser, code execution, or image features.")
+    print_info("    Optional: broaden the default file/terminal/memory toolset with extra providers or capabilities.")
     print_info("  hermes setup agent")
     print_info("    Adjust default agent behavior and other runtime preferences.")
     print_info("After that, open the Tailnet app URL above and sign in with Tailscale.")

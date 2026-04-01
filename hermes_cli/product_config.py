@@ -64,7 +64,6 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         "host_port_end": 18150,
         "host_access_host": "host.docker.internal",
         "pids_limit": 256,
-        "toolsets": ["file", "terminal", "memory"],
     },
     "storage": {
         "root": "product",
@@ -177,18 +176,20 @@ def initialize_product_config_file() -> Dict[str, Any]:
 
 
 def resolve_hermes_runtime_toolsets() -> list[str]:
-    product_config = load_product_config()
-    runtime_cfg = product_config.get("runtime", {})
-    configured = runtime_cfg.get("toolsets") if isinstance(runtime_cfg, dict) else None
+    config = load_config()
+    platform_toolsets = config.get("platform_toolsets", {})
+    configured = platform_toolsets.get("cli") if isinstance(platform_toolsets, dict) else None
     if not isinstance(configured, list):
-        raise ValueError("product runtime.toolsets must be a list of valid toolsets")
+        configured = config.get("toolsets", [])
+    if not isinstance(configured, list):
+        raise ValueError("Hermes CLI toolsets are invalid. Run 'hermes setup tools'.")
     normalized = [
         str(item).strip()
         for item in configured
         if str(item).strip() and validate_toolset(str(item).strip())
     ]
     if not normalized:
-        raise ValueError("product runtime.toolsets must contain at least one valid toolset")
+        raise ValueError("Hermes CLI toolsets must contain at least one valid toolset. Run 'hermes setup tools'.")
     return normalized
 
 

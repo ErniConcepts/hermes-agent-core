@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument(
         "section",
         nargs="?",
-        choices=["tailscale", "identity", "storage", "bootstrap"],
+        choices=["tailscale", "identity", "storage", "bootstrap", "branding"],
         default=None,
         help="Run a specific product setup section instead of the full product wizard",
     )

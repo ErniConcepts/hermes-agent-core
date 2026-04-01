@@ -17,6 +17,19 @@ def _sanitize_prompt_text(value: str) -> str:
     return cleaned.strip()
 
 
+def setup_product_branding() -> None:
+    product_config = load_product_config()
+    current_name = str(product_config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip() or "Hermes Core"
+    print_header("Branding")
+    print_info("Choose the product name shown in the web UI.")
+    print_info("Typography and colors stay the same; only the lettering changes.")
+    raw_value = _sanitize_prompt_text(prompt("Product title", current_name) or current_name)
+    product_name = raw_value or "Hermes Core"
+    product_config.setdefault("product", {}).setdefault("brand", {})["name"] = product_name
+    save_product_config(product_config)
+    print_info(f"  Product title: {product_name}")
+
+
 def setup_product_identity() -> None:
     product_config = load_product_config()
     current_path = str(product_config.get("product", {}).get("agent", {}).get("soul_template_path", "")).strip()

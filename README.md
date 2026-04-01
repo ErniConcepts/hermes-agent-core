@@ -37,7 +37,6 @@ The deployment layer lives primarily in `hermes_cli/product_*` and includes:
 Hermes-native configuration stays on the upstream CLI:
 
 - `hermes setup model`
-- `hermes setup tools`
 - `hermes setup agent`
 
 The authenticated web surface is intentionally narrow:
@@ -48,7 +47,7 @@ The authenticated web surface is intentionally narrow:
 - small admin user-management surface
 
 The product runtime used by the web app is intentionally narrower than the full
-Hermes CLI runtime. By default it exposes only:
+Hermes CLI runtime. By default this fork enables only:
 
 - `file`
 - `terminal`
@@ -117,13 +116,14 @@ Typical install flow:
 5. open the `tsidp` URL shown by setup and create a Hermes Core OIDC client
 6. paste the `tsidp` client id/secret back into setup
 7. finish the remaining product questions:
+   - product title shown in the web UI
    - optional SOUL template path
    - per-user workspace limit
 8. open the one-time first-admin bootstrap URL from the setup summary
 9. sign in with Tailscale to create the first admin account
 10. configure Hermes itself with the upstream CLI:
    - `hermes setup model`
-   - `hermes setup tools`
+   - optional: `hermes setup tools`
    - optional: `hermes setup agent`
 11. sign into the Tailnet app URL and start using personalized agent sessions
 
@@ -138,6 +138,7 @@ Typical install flow:
   - `tsidp` OIDC client id
   - `tsidp` OIDC client secret
 - prompted by setup:
+  - product title shown in the web UI
   - optional SOUL template path
   - per-user workspace limit
 
@@ -223,7 +224,7 @@ hermes-core setup tailscale
 hermes-core setup identity
 hermes-core setup bootstrap
 hermes setup model
-hermes setup tools
+hermes setup tools   # optional if you want more than file/terminal/memory
 hermes-core uninstall --yes
 ```
 

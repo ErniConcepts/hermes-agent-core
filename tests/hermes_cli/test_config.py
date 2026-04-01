@@ -73,6 +73,7 @@ class TestLoadConfigDefaults:
         with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
             config = load_config()
             assert config["model"] == DEFAULT_CONFIG["model"]
+            assert config["toolsets"] == ["file", "terminal", "memory"]
             assert config["agent"]["max_turns"] == DEFAULT_CONFIG["agent"]["max_turns"]
             assert "max_turns" not in config
             assert "terminal" in config
@@ -387,3 +388,39 @@ class TestAnthropicTokenMigration:
         }):
             migrate_config(interactive=False, quiet=True)
             assert load_env().get("ANTHROPIC_TOKEN") == "current-token"
+
+
+class TestToolsetMigration:
+    def test_migrates_legacy_default_toolsets(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "_config_version": 10,
+                    "toolsets": ["hermes-cli"],
+                    "platform_toolsets": {"cli": ["hermes-cli"]},
+                }
+            )
+        )
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            migrate_config(interactive=False, quiet=True)
+            config = load_config()
+            assert config["toolsets"] == ["file", "terminal", "memory"]
+            assert config["platform_toolsets"]["cli"] == ["file", "terminal", "memory"]
+
+    def test_preserves_non_default_toolsets(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "_config_version": 10,
+                    "toolsets": ["web", "memory"],
+                    "platform_toolsets": {"cli": ["browser", "web"]},
+                }
+            )
+        )
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            migrate_config(interactive=False, quiet=True)
+            config = load_config()
+            assert config["toolsets"] == ["web", "memory"]
+            assert config["platform_toolsets"]["cli"] == ["browser", "web"]

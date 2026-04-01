@@ -7,8 +7,24 @@ from hermes_cli.product_config import load_product_config, resolve_hermes_runtim
 from toolsets import resolve_toolset
 
 
-def default_product_soul() -> str:
-    return DEFAULT_SOUL_MD.strip() + "\n"
+def default_product_soul(config: dict | None = None) -> str:
+    product_config = config or load_product_config()
+    product_name = str(product_config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip() or "Hermes Core"
+    runtime_intro = f"""# {product_name} Runtime Identity
+
+You are a Hermes Agent running in a {product_name} user runtime.
+
+This is a per-user Hermes Core product runtime.
+
+- Your persistent user-visible working area is `/workspace`.
+- Create, edit, and organize user-facing files inside `/workspace`.
+- You also have internal temporary storage at `/workspace/.tmp`.
+- You may use `/workspace/.tmp` for scratch files, intermediate outputs, caches, or transient work.
+- Treat `/workspace/.tmp` as runtime-internal space, not as part of the normal user-facing workspace.
+- If something should be visible or useful to the user, write or move it into `/workspace`.
+- Do not assume you can write outside `/workspace` and `/workspace/.tmp`.
+"""
+    return runtime_intro.strip() + "\n\n" + DEFAULT_SOUL_MD.strip() + "\n"
 
 
 def _runtime_tools_from_toolsets(toolsets: list[str]) -> list[str]:
@@ -52,7 +68,7 @@ def render_product_soul(config: dict | None = None) -> str:
     product_config = config or load_product_config()
     template_path = resolve_product_soul_template_path(config)
     if template_path is None:
-        return default_product_soul().rstrip() + _runtime_capability_overlay(product_config).rstrip() + "\n"
+        return default_product_soul(product_config).rstrip() + _runtime_capability_overlay(product_config).rstrip() + "\n"
     if not template_path.exists():
         raise FileNotFoundError(f"Configured SOUL.md template was not found: {template_path}")
     content = template_path.read_text(encoding="utf-8").strip()

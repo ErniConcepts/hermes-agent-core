@@ -107,7 +107,7 @@ def ensure_hermes_home():
 
 DEFAULT_CONFIG = {
     "model": "anthropic/claude-opus-4.6",
-    "toolsets": ["hermes-cli"],
+    "toolsets": ["file", "terminal", "memory"],
     "agent": {
         "max_turns": 90,
     },
@@ -370,7 +370,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 10,
+    "_config_version": 11,
 }
 
 # =============================================================================
@@ -1039,6 +1039,28 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
                     print("  ✓ Cleared ANTHROPIC_TOKEN from .env (no longer used)")
         except Exception:
             pass
+
+    # ── Version 10 → 11: narrow default CLI toolsets ──
+    if current_ver < 11:
+        config = load_config()
+        changed = False
+
+        if config.get("toolsets") == ["hermes-cli"]:
+            config["toolsets"] = ["file", "terminal", "memory"]
+            results["config_added"].append("toolsets=file,terminal,memory (replaces legacy hermes-cli default)")
+            changed = True
+
+        platform_toolsets = config.get("platform_toolsets", {})
+        if isinstance(platform_toolsets, dict) and platform_toolsets.get("cli") == ["hermes-cli"]:
+            platform_toolsets["cli"] = ["file", "terminal", "memory"]
+            config["platform_toolsets"] = platform_toolsets
+            results["config_added"].append("platform_toolsets.cli=file,terminal,memory (replaces legacy hermes-cli default)")
+            changed = True
+
+        if changed:
+            save_config(config)
+            if not quiet:
+                print("  ✓ Narrowed default CLI toolsets to file, terminal, memory")
 
     if current_ver < latest_ver and not quiet:
         print(f"Config version: {current_ver} → {latest_ver}")

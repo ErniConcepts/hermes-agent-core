@@ -40,7 +40,14 @@ def _runtime_user() -> dict[str, str]:
     return {"sub": "user-1", "preferred_username": "admin", "name": "Admin User"}
 
 
-def _assert_runtime_soul_contract(soul_text: str) -> None:
+def _assert_default_runtime_soul_intro(soul_text: str, product_name: str = "Hermes Core") -> None:
+    assert f"You are a Hermes Agent running in a {product_name} user runtime." in soul_text
+    assert "Your persistent user-visible working area is `/workspace`." in soul_text
+    assert "You also have internal temporary storage at `/workspace/.tmp`." in soul_text
+    assert "not as part of the normal user-facing workspace" in soul_text
+
+
+def _assert_runtime_capability_overlay(soul_text: str) -> None:
     assert "Your currently enabled Hermes toolsets are: file, terminal, memory." in soul_text
     assert "The concrete tools currently available in this runtime are:" in soul_text
     for tool_name in ("read_file", "write_file", "patch", "search_files", "terminal", "process", "memory"):
@@ -64,8 +71,8 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     soul_path = Path(record.hermes_home) / "SOUL.md"
     assert soul_path.exists()
     soul_text = soul_path.read_text(encoding="utf-8")
-    assert "You are Hermes" in soul_text
-    _assert_runtime_soul_contract(soul_text)
+    _assert_default_runtime_soul_intro(soul_text)
+    _assert_runtime_capability_overlay(soul_text)
     manifest = Path(record.manifest_file)
     assert manifest.exists()
     loaded = ProductRuntimeRecord.model_validate_json(manifest.read_text(encoding="utf-8"))
@@ -123,7 +130,24 @@ def test_stage_product_runtime_uses_custom_soul_template(tmp_path, monkeypatch):
     soul_path = Path(record.hermes_home) / "SOUL.md"
     soul_text = soul_path.read_text(encoding="utf-8")
     assert "Custom runtime identity" in soul_text
-    _assert_runtime_soul_contract(soul_text)
+    _assert_runtime_capability_overlay(soul_text)
+
+
+def test_stage_product_runtime_includes_product_brand_in_default_soul(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
+
+    from hermes_cli.product_config import load_product_config, save_product_config
+
+    config = load_product_config()
+    config["product"]["brand"]["name"] = "Atlas Core"
+    save_product_config(config)
+
+    record = stage_product_runtime(_runtime_user())
+    soul_text = (Path(record.hermes_home) / "SOUL.md").read_text(encoding="utf-8")
+
+    _assert_default_runtime_soul_intro(soul_text, "Atlas Core")
+    assert "Atlas Core Runtime Identity" in soul_text
 
 
 def test_get_product_runtime_session_proxies_runtime(monkeypatch):

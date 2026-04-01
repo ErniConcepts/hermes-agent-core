@@ -7,10 +7,31 @@ from hermes_cli.product_setup_tailscale import detect_tailscale_identity
 from hermes_cli.product_setup import (
     _configure_tsidp_client_credentials,
     complete_first_admin_bootstrap,
+    setup_product_branding,
     setup_product_bootstrap_identity,
     setup_product_tailscale,
 )
 from hermes_cli.product_stack import first_admin_bootstrap_completed
+
+
+def test_setup_product_branding_saves_custom_product_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.product_setup_sections.prompt", lambda *args, **kwargs: "Atlas Core")
+
+    setup_product_branding()
+
+    config = load_product_config()
+    assert config["product"]["brand"]["name"] == "Atlas Core"
+
+
+def test_setup_product_branding_uses_default_name_for_blank_input(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.product_setup_sections.prompt", lambda *args, **kwargs: "")
+
+    setup_product_branding()
+
+    config = load_product_config()
+    assert config["product"]["brand"]["name"] == "Hermes Core"
 
 
 def test_setup_product_bootstrap_identity_does_not_require_manual_login_value(tmp_path, monkeypatch):
