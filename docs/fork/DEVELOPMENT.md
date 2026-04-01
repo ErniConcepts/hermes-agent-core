@@ -66,6 +66,7 @@ Current security boundary:
   - runtime env files must reject unsafe values such as newline-delimited secrets
   - runtime auth must stay constant-time and token-scoped
   - generated runtime config inputs remain read-only mounts
+  - runtime session rollover should follow Hermes-native `session_reset` behavior rather than fork-only transcript heuristics
 
 ## Current Auth and Admin Behavior
 
@@ -98,6 +99,7 @@ Current security boundary:
   - model/provider configuration
   - tool policy
   - agent defaults
+  - session-reset policy
 
 Product runtimes are considered ready when the Hermes config resolves to a runnable model/provider configuration. Readiness is determined from config state, not from whether a user happened to run every setup command.
 
@@ -135,6 +137,7 @@ scripts/cleanup-product-e2e-state.sh
 - Do not expose signup token material through admin placeholder identifiers or logs.
 - Keep admin UI narrow; avoid growing it into a full config console.
 - Keep runtime launch derived from the main Hermes config rather than adding a second hidden product-side source of truth.
+- Do not reintroduce product-only history compaction or summary handoff logic when Hermes-native session-reset behavior is sufficient.
 
 ## Related Docs
 

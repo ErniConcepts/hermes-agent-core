@@ -53,9 +53,14 @@ Hermes-native configuration remains on the upstream CLI surface:
 
 - Per-user runtime containers.
 - Per-user runtimes resolve model/provider/tool behavior from the main Hermes config.
+- Per-user runtimes also inherit Hermes `session_reset` policy from the main Hermes config.
 - Default runtime toolsets in this fork are `file`, `terminal`, `memory` unless the operator broadens them with normal Hermes tool configuration.
 - Runtime reuse is config-aware:
   - if staged runtime env differs from the running container env, the runtime container is recreated automatically
+- Runtime conversation handling follows Hermes-native session behavior:
+  - the full session transcript is used
+  - automatic rollover is controlled by `session_reset`
+  - there is no separate product-only bounded-history summary layer
 - Product runtime API surface remains narrow:
   - `GET /healthz`
   - `GET /runtime/session`

@@ -54,6 +54,12 @@ Hermes CLI runtime. By default this fork enables only:
 - `terminal`
 - `memory`
 
+The web runtime also follows Hermes-native session behavior more closely now:
+
+- it uses the normal Hermes session transcript rather than a product-only reduced-history layer
+- it honors the standard `session_reset` policy from `~/.hermes/config.yaml`
+- session rollover therefore follows the same config-driven model used by Hermes gateway sessions
+
 ## Status
 
 Current target:
@@ -246,6 +252,18 @@ That bundled runtime identity tells the agent that:
 Operators can still override that bundled runtime identity during `hermes-core setup` by providing a custom runtime SOUL template path.
 
 This is separate from the normal CLI `~/.hermes/SOUL.md`, which still controls standalone `hermes` sessions.
+
+## Runtime Sessions
+
+Per-user web runtimes now use the normal Hermes session transcript and standard Hermes session-reset policy.
+
+If you want automatic runtime rollover behavior, configure it through normal Hermes config in `~/.hermes/config.yaml`:
+
+- `session_reset.mode`
+- `session_reset.idle_minutes`
+- `session_reset.at_hour`
+
+Those settings are staged into per-user runtimes and applied there, instead of using a separate product-only history compaction layer.
 
 ## Live E2E Cleanup
 
