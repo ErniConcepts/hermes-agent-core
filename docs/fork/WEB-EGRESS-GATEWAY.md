@@ -57,13 +57,15 @@ None of these work today in the Tailscale-only network because container egress 
 
 ### Key facts about this topology
 
-1. **gVisor netstack**: gVisor implements TCP/IP in userspace. It does NOT block outbound connections — it passes them through the veth/bridge to the host. Network isolation at the host iptables level is what blocks them.
+1. **gVisor netstack**: gVisor implements TCP/IP in userspace (`netstack` mode — the default). It does NOT block outbound connections — it generates packets that traverse the host veth/bridge. The host kernel never sees `socket()` syscalls from inside the sandbox. Network isolation is enforced by iptables on the host, not by gVisor itself.
 
-2. **`host.docker.internal` is already wired**: `docker_run_command()` in `product_runtime_container.py:94` already adds `--add-host host.docker.internal:host-gateway`, so every container can reach the Docker bridge gateway (= host) by hostname.
+2. **`host.docker.internal` is already wired**: `docker_run_command()` in `product_runtime_container.py:94` already adds `--add-host host.docker.internal:host-gateway`, so every container can reach the Docker bridge gateway (= host) by hostname. No infrastructure change needed for agent→gateway communication.
 
 3. **Only the host process can use Tailscale egress**: The `tailscale0` interface is on the host network namespace. Container processes cannot route through it directly.
 
-4. **Tailscale exit nodes**: A Tailscale exit node is a peer on the tailnet that forwards internet-bound traffic. The host can be configured to use one, making all host-originated HTTP requests reach the internet via the tailnet.
+4. **Tailscale has a built-in SOCKS5 server**: Running `tailscaled` in userspace networking mode exposes `localhost:1055` as a SOCKS5 server that routes all connections through the tailnet/exit-node. Alternatively, the `tailsocks` project (`github.com/ItalyPaleAle/tailsocks`) wraps this into a standalone proxy. The gateway can chain outbound through either of these rather than relying on interface-level binding.
+
+5. **Tailscale exit nodes**: A Tailscale exit node is a peer on the tailnet that advertises `0.0.0.0/0`. The host can route via one, making all host-originated HTTP requests reach the internet via the tailnet. An alternative is to keep the GPU server off the internet entirely and have the gateway proxy through a dedicated tailnet peer that has internet access.
 
 ---
 
@@ -166,39 +168,38 @@ The server:
 
 ### 2. Outbound HTTP Client (`tools/web_gateway/gateway_client.py`)
 
-Uses `httpx.AsyncClient` with the Tailscale IP bound as the source address:
+Uses `httpx.AsyncClient` with a SOCKS5 proxy pointed at Tailscale's userspace networking server:
 
 ```python
 import httpx
-import socket
+
+# Tailscale userspace networking mode exposes SOCKS5 on localhost:1055
+# Start tailscaled with: tailscaled --tun=userspace-networking --socks5-server=localhost:1055
+# Or use tailsocks (github.com/ItalyPaleAle/tailsocks) which wraps this.
+_TAILSCALE_SOCKS5 = os.getenv("HERMES_GATEWAY_UPSTREAM_PROXY", "socks5://127.0.0.1:1055")
 
 def _make_tailscale_client() -> httpx.AsyncClient:
-    """httpx client whose connections originate from the tailscale0 interface."""
-    ts_ip = _get_tailscale_ip()          # reads from tailscale0 via netifaces
-    transport = httpx.AsyncHTTPTransport(
-        local_address=ts_ip,             # bind source IP to tailscale0
-        retries=2,
-    )
+    """httpx client that routes all connections through Tailscale."""
     return httpx.AsyncClient(
-        transport=transport,
+        proxies=_TAILSCALE_SOCKS5,
         follow_redirects=True,
         timeout=httpx.Timeout(30.0),
         headers={"User-Agent": "hermes-web-gateway/1.0"},
     )
 ```
 
-By binding the source IP to the Tailscale address, the OS routes all connections through `tailscale0`. Combined with iptables rules that block docker0→internet, this ensures:
-- Requests from the gateway use Tailscale
+This is simpler and more reliable than `SO_BINDTODEVICE` or interface IP binding — the SOCKS5 proxy handles routing without requiring raw socket privileges. Combined with iptables rules that block direct docker0→internet, this ensures:
+- All gateway outbound traffic routes through Tailscale
 - Containers cannot bypass the gateway
 
 ### 3. SOCKS5 Mini-Proxy for Chromium (`tools/web_gateway/socks_proxy.py`)
 
 A minimal async SOCKS5 server (RFC 1928) that:
-- Listens on `host.docker.internal:1080`
-- Forwards connections via the same Tailscale-bound `httpx` transport
+- Listens on `host.docker.internal:1080` (Docker bridge only)
+- Forwards connections via the same Tailscale-backed `httpx` transport
 - Applies the same URL policy before establishing TCP connections
 
-This handles `browser_tool` since Chromium supports `--proxy-server=socks5://host.docker.internal:1080`.
+This handles `browser_tool`. Note: **Chromium does not respect `HTTP_PROXY`/`HTTPS_PROXY` env vars**. The correct injection path is via `AGENT_BROWSER_PROXY` (see §5 below).
 
 ### 4. URL Policy (`tools/web_gateway/url_policy.py`)
 
@@ -225,24 +226,29 @@ def runtime_environment(...) -> dict[str, str]:
     if gateway_enabled(product_config):
         env["FIRECRAWL_API_URL"] = "http://host.docker.internal:8765"
         env["FIRECRAWL_API_KEY"] = gateway_token(product_config)
-        env["BROWSER_PROXY_URL"] = "socks5://host.docker.internal:1080"
-        # httpx/requests transparent proxy (belt-and-suspenders)
+        # agent-browser reads AGENT_BROWSER_PROXY (NOT HTTP_PROXY — Chromium ignores that)
+        # This is wired directly into Playwright's proxy option, covering all page fetches.
+        env["AGENT_BROWSER_PROXY"] = "socks5://host.docker.internal:1080"
+        env["AGENT_BROWSER_PROXY_BYPASS"] = "host.docker.internal,localhost,127.0.0.1"
+        # httpx and requests do respect HTTP_PROXY — belt-and-suspenders for any
+        # direct HTTP calls the agent makes outside of the Firecrawl SDK path
         env["HTTP_PROXY"] = "http://host.docker.internal:8765"
         env["HTTPS_PROXY"] = "http://host.docker.internal:8765"
     return env
 ```
 
-### 6. Browser Tool Proxy Injection (`tools/browser_tool.py`)
+### 6. Browser Tool Proxy: No Code Changes Needed
 
-When `BROWSER_PROXY_URL` is set, inject the proxy flag into the `agent-browser` command:
+`agent-browser` v0.13+ has a **first-class `AGENT_BROWSER_PROXY` env var** that maps directly to Playwright's `proxy.server` option. This covers all three launch paths (extensions context, persistent context, ephemeral context). Since `browser_env` in `_run_browser_command()` inherits from `os.environ`, injecting `AGENT_BROWSER_PROXY` into the runtime environment is sufficient — no changes to `browser_tool.py`.
 
-```python
-# In _run_browser_command():
-proxy_url = os.environ.get("BROWSER_PROXY_URL", "").strip()
-if proxy_url and not session_info.get("cdp_url"):
-    # Local Chromium mode — inject proxy-server flag
-    # agent-browser passes extra args after '--' to Chromium
-    cmd_parts += ["--", f"--proxy-server={proxy_url}"]
+> **Important**: Chromium does NOT respect `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`. Playwright's maintainers explicitly declined to add this (issue #20741). `AGENT_BROWSER_PROXY` (custom to `agent-browser`) is the correct path.
+
+For local mode (not Browserbase), the proxy is injected here in Playwright's `launch()` call via agent-browser's daemon:
+```js
+// agent-browser/dist/daemon.js (how it reads the env var):
+const proxyServer = process.env.AGENT_BROWSER_PROXY;
+const proxy = proxyServer ? { server: proxyServer } : undefined;
+// → passed to chromium.launch({ proxy })
 ```
 
 ---
@@ -271,25 +277,38 @@ These rules are idempotent and should be applied via the product install script 
 
 ---
 
-## Tailscale Exit Node
+## Tailscale Upstream Options
 
-For the gateway to reach the public internet, the host must route via a Tailscale exit node:
+The gateway needs to route outbound to the internet. Three options, in order of increasing isolation:
 
-```bash
-# On the GPU server: use a tailnet exit node for outbound internet
-tailscale up --exit-node=<exit-node-hostname> --exit-node-allow-lan-access=false
-```
-
-Or, if a dedicated search/browsing peer exists on the tailnet (preferred — keeps the GPU server isolated):
+### Option TS-1: System-wide Tailscale exit node
 
 ```bash
-# On the GPU server: do NOT use exit node
-# Instead, in gateway_client.py, proxy through a tailnet peer that runs
-# tinyproxy/squid and DOES have internet access
-GATEWAY_UPSTREAM_PROXY=http://100.x.y.z:3128
+sudo tailscale up --exit-node=<exit-node-hostname> --exit-node-allow-lan-access=false
 ```
 
-This keeps the GPU server off the internet entirely — even the gateway process itself doesn't have direct internet access, it proxies through a designated tailnet peer.
+Gateway uses `HERMES_GATEWAY_UPSTREAM_PROXY` unset — it makes outbound connections directly, and the OS routes them through the exit node. Simple but the GPU server appears to have internet access at the OS level.
+
+### Option TS-2: Tailscale userspace networking (SOCKS5 server)
+
+```bash
+# Run a second tailscaled in userspace mode, or use tailsocks
+tailscaled --tun=userspace-networking --socks5-server=localhost:1055
+```
+
+Set `HERMES_GATEWAY_UPSTREAM_PROXY=socks5://127.0.0.1:1055` in the gateway service. Only the gateway process's connections go through this SOCKS5 server and into Tailscale. The system-level routes are unaffected.
+
+### Option TS-3: Dedicated tailnet browsing peer (most isolated)
+
+```bash
+# On the GPU server: no exit node, no system-wide routing change
+# Gateway env:
+HERMES_GATEWAY_UPSTREAM_PROXY=socks5://100.x.y.z:1080  # tailnet peer running Dante
+```
+
+Deploy a small VPS on the tailnet with Dante SOCKS5. The GPU server never routes internet traffic — all web fetching is delegated to the browsing peer. Best for deployments where the GPU server must remain strictly air-gapped from the public internet.
+
+**Recommended: TS-2 or TS-3** depending on whether you have a separate tailnet peer available. TS-2 is self-contained, TS-3 provides the strongest isolation.
 
 ---
 
@@ -319,9 +338,9 @@ This keeps the GPU server off the internet entirely — even the gateway process
 - [ ] Config: `product.yaml` `web_gateway.enabled` flag
 
 ### Phase 2: Browser proxy (unblocks browser_tool)
-- [ ] `tools/web_gateway/socks_proxy.py` — SOCKS5 mini-proxy
-- [ ] `tools/browser_tool.py` — inject `--proxy-server` when `BROWSER_PROXY_URL` is set
-- [ ] `hermes_cli/product_runtime_staging.py` — inject `BROWSER_PROXY_URL`
+- [ ] `tools/web_gateway/socks_proxy.py` — SOCKS5 mini-proxy (chains to Tailscale SOCKS5)
+- [ ] `hermes_cli/product_runtime_staging.py` — inject `AGENT_BROWSER_PROXY` + `AGENT_BROWSER_PROXY_BYPASS`
+- [ ] No changes to `browser_tool.py` — `AGENT_BROWSER_PROXY` is already read by agent-browser v0.13
 
 ### Phase 3: Search backend on tailnet (no cloud API keys needed)
 - [ ] Deploy SearXNG or Brave Search proxy on a tailnet peer
@@ -334,9 +353,9 @@ This keeps the GPU server off the internet entirely — even the gateway process
 
 1. **Tailscale exit node vs dedicated tailnet peer**: The exit node approach is simpler to operate but puts the GPU server "on the internet" (with Tailscale routing). A dedicated browsing peer is more isolated. Decision depends on your tailnet topology.
 
-2. **agent-browser `--` passthrough**: We need to verify that `agent-browser >=0.13` forwards extra CLI args after `--` to Chromium. If not, the SOCKS5 proxy option may need to be injected via the `AGENT_BROWSER_EXTRA_ARGS` env var or a config file.
+2. **~~agent-browser `--` passthrough~~** (resolved): `agent-browser` v0.13 has a first-class `--proxy <url>` flag and `AGENT_BROWSER_PROXY` env var that map directly to Playwright's `proxy` option. No raw Chromium flag injection needed.
 
-3. **Firecrawl SDK proxy support**: The Firecrawl Python SDK uses `requests` under the hood. When `FIRECRAWL_API_URL` is set to the gateway, the SDK sends requests to the gateway (not to the internet), so `HTTP_PROXY` env vars are irrelevant for the SDK itself — this is cleaner.
+3. **Firecrawl SDK proxy support**: The Firecrawl Python SDK uses `requests` under the hood. When `FIRECRAWL_API_URL` is set to the gateway, the SDK sends requests to the gateway (not to the internet directly), so `HTTP_PROXY` env vars are irrelevant for the SDK — this is cleaner. The `HTTP_PROXY` env var covers any other `httpx`/`requests` calls in the agent.
 
 4. **gVisor netstack vs host network**: By default, gVisor containers use the netstack (userspace TCP/IP). If `--network=host` is ever used, gVisor's isolation weakens significantly. The product should never set `--network=host` for runtime containers (it doesn't currently).
 
