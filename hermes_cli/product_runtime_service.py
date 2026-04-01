@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 import uvicorn
 
+from agent.model_metadata import estimate_messages_tokens_rough
 from hermes_state import SessionDB
 from hermes_cli.product_runtime import _RUNTIME_WORKSPACE_PATH
 
@@ -23,6 +24,10 @@ _ACTIVE_AGENT_LOCK = threading.Lock()
 _ACTIVE_AGENTS: dict[str, Any] = {}
 _THINK_OPEN_TAGS = ("<REASONING_SCRATCHPAD>", "<think>", "<reasoning>", "<THINKING>", "<thinking>")
 _THINK_CLOSE_TAGS = ("</REASONING_SCRATCHPAD>", "</think>", "</reasoning>", "</THINKING>", "</thinking>")
+_PRODUCT_RUNTIME_KEEP_USER_TURNS = 6
+_PRODUCT_RUNTIME_MIN_USER_TURNS = 2
+_PRODUCT_RUNTIME_WORKING_CONTEXT_BUDGET = 2_500
+_PRODUCT_RUNTIME_SUMMARY_MAX_CHARS = 1_600
 
 
 def _required_env(name: str) -> str:
@@ -291,6 +296,125 @@ def _conversation_for_agent(messages: list[dict[str, Any]]) -> list[dict[str, An
     return conversation
 
 
+def _product_runtime_visible_text(message: dict[str, Any]) -> str:
+    role = str(message.get("role", "")).strip()
+    content = str(message.get("content") or "")
+    return content if role == "user" else _strip_reasoning_blocks(content, trim=True)
+
+
+def _truncate_runtime_summary_text(text: str, limit: int = _PRODUCT_RUNTIME_SUMMARY_MAX_CHARS) -> str:
+    compact = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(limit - 1, 0)].rstrip() + "…"
+
+
+def _runtime_summary_bullet(message: dict[str, Any], *, limit: int = 220) -> str:
+    text = _product_runtime_visible_text(message)
+    if not text:
+        return ""
+    role = str(message.get("role", "")).strip()
+    compact = re.sub(r"\s+", " ", text).strip()
+    if role == "assistant" and len(compact) > 400:
+        return "Assistant completed a large output; rely on the current workspace and recent turns instead of replaying it verbatim."
+    return _truncate_runtime_summary_text(compact, limit)
+
+
+def _extract_runtime_paths(messages: list[dict[str, Any]], *, limit: int = 4) -> list[str]:
+    seen: list[str] = []
+    for message in messages:
+        text = _product_runtime_visible_text(message)
+        for match in re.findall(r"(?:^|[\s`'\"])(/?(?:[\w.\-]+/)*[\w.\-]+\.[\w.\-]+|/?(?:[\w.\-]+/)+[\w.\-]+)", text):
+            candidate = match.strip("`'\" ")
+            if not candidate or candidate in seen:
+                continue
+            seen.append(candidate)
+            if len(seen) >= limit:
+                return seen
+    return seen
+
+
+def _build_runtime_history_summary(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    visible = [message for message in messages if message.get("role") in {"user", "assistant"}]
+    if not visible:
+        return None
+
+    user_lines = [
+        _runtime_summary_bullet(message, limit=220)
+        for message in visible
+        if message.get("role") == "user" and _runtime_summary_bullet(message, limit=220)
+    ][-3:]
+    assistant_lines = [
+        _runtime_summary_bullet(message, limit=220)
+        for message in visible
+        if message.get("role") == "assistant" and _runtime_summary_bullet(message, limit=220)
+    ][-2:]
+    mentioned_paths = _extract_runtime_paths(messages)
+
+    lines = [
+        "[PRODUCT RUNTIME SUMMARY]",
+        "Earlier runtime turns were compacted to keep local-model tool execution reliable.",
+    ]
+    if user_lines:
+        lines.append("Recent user requests:")
+        lines.extend(f"- {line}" for line in user_lines)
+    if assistant_lines:
+        lines.append("Recent completed work:")
+        lines.extend(f"- {line}" for line in assistant_lines)
+    if mentioned_paths:
+        lines.append("Relevant files or folders:")
+        lines.extend(f"- {path}" for path in mentioned_paths)
+    lines.append("Continue from the current workspace state and avoid repeating finished work.")
+
+    summary = "\n".join(lines).strip()
+    if not summary:
+        return None
+    return {"role": "assistant", "content": summary}
+
+
+def _runtime_working_context_budget() -> int:
+    return _PRODUCT_RUNTIME_WORKING_CONTEXT_BUDGET
+
+
+def _derive_runtime_conversation(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    conversation = _conversation_for_agent(messages)
+    if not conversation:
+        return []
+
+    user_indexes = [index for index, message in enumerate(conversation) if message.get("role") == "user"]
+    if len(user_indexes) <= _PRODUCT_RUNTIME_KEEP_USER_TURNS:
+        candidate = list(conversation)
+        if estimate_messages_tokens_rough(candidate) <= _runtime_working_context_budget():
+            return candidate
+
+    keep_user_turns = min(len(user_indexes), _PRODUCT_RUNTIME_KEEP_USER_TURNS)
+    min_keep_turns = min(len(user_indexes), _PRODUCT_RUNTIME_MIN_USER_TURNS)
+    omitted: list[dict[str, Any]] = []
+
+    while True:
+        if keep_user_turns <= 0:
+            recent = list(conversation)
+        else:
+            start_index = user_indexes[-keep_user_turns]
+            omitted = conversation[:start_index]
+            recent = conversation[start_index:]
+        summary = _build_runtime_history_summary(omitted)
+        candidate = ([summary] if summary is not None else []) + recent
+        if estimate_messages_tokens_rough(candidate) <= _runtime_working_context_budget():
+            return candidate
+        if keep_user_turns <= min_keep_turns:
+            if len(recent) > 2:
+                last_user_indexes = [index for index, message in enumerate(recent) if message.get("role") == "user"]
+                if len(last_user_indexes) >= 1:
+                    preserve_from = last_user_indexes[-1]
+                    omitted = omitted + recent[:preserve_from]
+                    recent = recent[preserve_from:]
+                    summary = _build_runtime_history_summary(omitted)
+                    return ([summary] if summary is not None else []) + recent
+            return candidate
+        keep_user_turns -= 1
+
+
 def _load_session_messages(db: SessionDB, session_id: str) -> list[dict[str, Any]]:
     session = db.get_session(session_id)
     if not session:
@@ -376,9 +500,10 @@ def create_product_runtime_app() -> FastAPI:
             agent = build_runtime_agent(db, session_id)
             _register_active_agent(session_id, agent)
             history = _load_session_messages(db, session_id)
+            working_history = _derive_runtime_conversation(history)
             result = agent.run_conversation(
                 request.user_message,
-                conversation_history=_conversation_for_agent(history),
+                conversation_history=working_history,
                 sync_honcho=False,
             )
             updated_messages = _load_session_messages(db, session_id)
@@ -431,9 +556,10 @@ def create_product_runtime_app() -> FastAPI:
                     reasoning_emitter,
                 )
                 history = _load_session_messages(db, session_id)
+                working_history = _derive_runtime_conversation(history)
                 result = agent.run_conversation(
                     request.user_message,
-                    conversation_history=_conversation_for_agent(history),
+                    conversation_history=working_history,
                     stream_callback=mux.feed,
                     sync_honcho=False,
                 )
