@@ -12,7 +12,7 @@ BOLD='\033[1m'
 REPO_OWNER="ErniConcepts"
 REPO_NAME="hermes-agent-core"
 DEFAULT_BRANCH="main"
-PINNED_INSTALL_REF="e2922ca2c565e08de9e591d4ed91f99cba4e5cf0"
+PINNED_INSTALL_REF="94bdf6528c8ce07df45a836235fc4b8f8a7a9f39"
 PYTHON_VERSION="3.11"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 INSTALL_DIR="${HERMES_INSTALL_DIR:-$HERMES_HOME/hermes-core}"
@@ -158,7 +158,7 @@ download_source() {
     local tmp_dir
     tmp_dir="$(mktemp -d)"
     local tarball="$tmp_dir/source.tar.gz"
-    local url="${SOURCE_URL_OVERRIDE:-https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/refs/heads/${BRANCH}}"
+    local url="${SOURCE_URL_OVERRIDE:-https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/${BRANCH}}"
 
     if [[ -n "$SOURCE_URL_OVERRIDE" ]]; then
         log_info "Downloading installer source from override URL..."
