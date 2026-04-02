@@ -290,6 +290,7 @@ def runtime_environment(
 ) -> dict[str, str]:
     return {
         "HERMES_HOME": "/srv/hermes",
+        "PYTHONPATH": "/app",
         "HERMES_WRITE_SAFE_ROOT": _RUNTIME_WORKSPACE_PATH,
         "TERMINAL_CWD": _RUNTIME_WORKSPACE_PATH,
         "TMPDIR": f"{_RUNTIME_WORKSPACE_PATH}/.tmp",
