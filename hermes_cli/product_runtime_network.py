@@ -35,20 +35,22 @@ def ensure_runtime_docker_network(run_fn: Any) -> bool:
     spec = runtime_network_spec()
     if docker_network_exists(run_fn, spec["name"]):
         return False
-    run_fn(
-        [
-            "docker",
-            "network",
-            "create",
-            "--driver",
-            "bridge",
-            "--subnet",
-            spec["subnet"],
-            "--gateway",
-            spec["gateway"],
-            spec["name"],
-        ]
-    )
+    command = [
+        "docker",
+        "network",
+        "create",
+        "--driver",
+        "bridge",
+        "--subnet",
+        spec["subnet"],
+        "--gateway",
+        spec["gateway"],
+    ]
+    mtu = host_default_route_mtu()
+    if mtu is not None:
+        command.extend(["--opt", f"com.docker.network.driver.mtu={mtu}"])
+    command.append(spec["name"])
+    run_fn(command)
     return True
 
 
@@ -80,6 +82,42 @@ def local_host_model_port(config: dict[str, Any] | None = None) -> int | None:
 
 def _iptables_available() -> bool:
     return shutil.which("iptables") is not None
+
+
+def host_default_route_mtu() -> int | None:
+    ip = shutil.which("ip")
+    if not ip:
+        return None
+    try:
+        route_result = subprocess.run(
+            [ip, "route", "show", "default"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        route_line = next((line.strip() for line in route_result.stdout.splitlines() if line.strip()), "")
+        if not route_line:
+            return None
+        parts = route_line.split()
+        if "dev" not in parts:
+            return None
+        interface = parts[parts.index("dev") + 1]
+        link_result = subprocess.run(
+            [ip, "link", "show", "dev", interface],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        link_tokens = link_result.stdout.replace("\n", " ").split()
+        for token_index, token in enumerate(link_tokens):
+            if token == "mtu" and token_index + 1 < len(link_tokens):
+                try:
+                    return int(link_tokens[token_index + 1])
+                except ValueError:
+                    return None
+    except Exception:
+        return None
+    return None
 
 
 def _ensure_docker_user_rule(run_fn: Any, args: list[str]) -> bool:
