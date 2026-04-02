@@ -75,6 +75,42 @@ def build_tsidp_env_file(config: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def host_default_route_mtu() -> int | None:
+    try:
+        route_result = subprocess.run(
+            ["ip", "route", "show", "default"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+    interface_name = ""
+    parts = (route_result.stdout or "").strip().split()
+    for index, part in enumerate(parts):
+        if part == "dev" and index + 1 < len(parts):
+            interface_name = parts[index + 1].strip()
+            break
+    if not interface_name:
+        return None
+    try:
+        link_result = subprocess.run(
+            ["ip", "link", "show", "dev", interface_name],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+    for token_index, token in enumerate((link_result.stdout or "").strip().split()):
+        if token == "mtu" and token_index + 1 < len((link_result.stdout or "").strip().split()):
+            try:
+                return int((link_result.stdout or "").strip().split()[token_index + 1])
+            except ValueError:
+                return None
+    return None
+
+
 def build_tsidp_compose_spec(config: dict[str, Any]) -> dict[str, Any]:
     services_cfg = tsidp_service_config(config)
     data_root_path = get_tsidp_data_root()
@@ -94,7 +130,11 @@ def build_tsidp_compose_spec(config: dict[str, Any]) -> dict[str, Any]:
             "start_period": "10s",
         },
     }
-    return {"services": {"tsidp": service}}
+    compose_spec: dict[str, Any] = {"services": {"tsidp": service}}
+    mtu = host_default_route_mtu()
+    if mtu and mtu > 0:
+        compose_spec["networks"] = {"default": {"driver_opts": {"com.docker.network.driver.mtu": str(mtu)}}}
+    return compose_spec
 
 
 def ensure_product_tsidp_started(config: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str] | None:

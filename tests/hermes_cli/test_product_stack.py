@@ -71,6 +71,7 @@ def test_initialize_product_stack_writes_tsidp_env_and_compose(tmp_path, monkeyp
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_SECRET", "session-secret")
     monkeypatch.setenv("HERMES_PRODUCT_TAILSCALE_AUTH_KEY", "tskey-auth-kv")
+    monkeypatch.setattr("hermes_cli.product_stack_bootstrap.host_default_route_mtu", lambda: 1280)
 
     config = initialize_product_stack(_config())
 
@@ -79,6 +80,7 @@ def test_initialize_product_stack_writes_tsidp_env_and_compose(tmp_path, monkeyp
     assert "TS_AUTHKEY=tskey-auth-kv" in env_text
     compose = yaml.safe_load(get_tsidp_compose_path().read_text(encoding="utf-8"))
     assert compose["services"]["tsidp"]["container_name"] == "hermes-tsidp"
+    assert compose["networks"]["default"]["driver_opts"]["com.docker.network.driver.mtu"] == "1280"
 
 
 def test_build_tsidp_env_file_uses_current_contract(tmp_path, monkeypatch):
@@ -90,6 +92,16 @@ def test_build_tsidp_env_file_uses_current_contract(tmp_path, monkeypatch):
     assert "TAILSCALE_USE_WIP_CODE=1" in rendered
     assert "TSIDP_LOCAL_PORT=8080" in rendered
     assert "TS_AUTHKEY=tskey-auth-kv" in rendered
+
+
+def test_build_tsidp_compose_spec_inherits_host_route_mtu(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.product_stack_bootstrap.host_default_route_mtu", lambda: 1280)
+    initialize_product_stack(_config())
+
+    compose = _build_tsidp_compose_spec(_config())
+
+    assert compose["networks"]["default"]["driver_opts"]["com.docker.network.driver.mtu"] == "1280"
 
 def test_bootstrap_first_admin_enrollment_creates_one_time_link(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
