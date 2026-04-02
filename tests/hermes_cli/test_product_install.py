@@ -11,6 +11,7 @@ from hermes_cli.product_install import (
     ensure_product_app_service_started,
     run_product_install,
 )
+from hermes_cli.product_install_host import runsc_runtime_matches
 
 
 def test_render_product_app_service_unit_targets_only_product_app(tmp_path, monkeypatch):
@@ -66,6 +67,10 @@ def test_run_product_install_requests_relogin_after_docker_group_change(tmp_path
 
 def test_runsc_runtime_config_does_not_use_host_network():
     assert RUNSC_RUNTIME_CONFIG["runtimeArgs"] == []
+
+
+def test_runsc_runtime_matches_accepts_missing_empty_runtime_args():
+    assert runsc_runtime_matches("runsc", RUNSC_RUNTIME_CONFIG, {"path": "runsc"}) is True
 
 
 def test_ensure_product_runtime_networking_uses_bridge_network_and_firewall(monkeypatch):

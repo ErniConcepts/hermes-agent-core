@@ -113,6 +113,8 @@ def runsc_runtime_matches(runtime_name: str, runtime_config: dict[str, Any], con
         return False
     path_value = str(config.get("path", "")).strip()
     runtime_args = config.get("runtimeArgs")
+    if runtime_args is None:
+        runtime_args = []
     if not path_value or PurePosixPath(path_value).name != runtime_name:
         return False
     return runtime_args == runtime_config["runtimeArgs"]
