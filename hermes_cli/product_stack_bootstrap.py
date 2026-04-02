@@ -32,6 +32,7 @@ from utils import atomic_json_write, atomic_yaml_write
 
 TSIDP_IMAGE = "ghcr.io/tailscale/tsidp:latest"
 READY_TIMEOUT_SECONDS = 45.0
+TSIDP_WELL_KNOWN_PATH = "/.well-known/openid-configuration"
 
 
 def tsidp_service_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -112,6 +113,46 @@ def ensure_product_tsidp_started(config: dict[str, Any] | None = None) -> subpro
         raise RuntimeError(message) from exc
 
 
+def running_tsidp_issuer_url(config: dict[str, Any]) -> str:
+    container_name = str(tsidp_service_config(config).get("container_name", "")).strip()
+    if not container_name:
+        raise RuntimeError("services.tsidp.container_name must be configured")
+    command = [
+        "docker",
+        "exec",
+        container_name,
+        "wget",
+        "-qO-",
+        f"http://127.0.0.1:8080{TSIDP_WELL_KNOWN_PATH}",
+    ]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        message = f"Failed to read tsidp issuer from running container {container_name}"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
+    try:
+        payload = json.loads((result.stdout or "").strip() or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Running tsidp returned invalid well-known metadata from {container_name}") from exc
+    issuer = str(payload.get("issuer", "")).strip()
+    if not issuer:
+        raise RuntimeError(f"Running tsidp did not report an issuer URL in {container_name}")
+    return issuer.rstrip("/")
+
+
+def sync_running_tsidp_issuer_url(config: dict[str, Any]) -> dict[str, Any]:
+    issuer_url = running_tsidp_issuer_url(config)
+    current = str(config.get("auth", {}).get("issuer_url", "")).strip().rstrip("/")
+    if issuer_url == current:
+        return config
+    config.setdefault("auth", {})["issuer_url"] = issuer_url
+    save_product_config(config)
+    return config
+
+
 def required_secret(env_key: str) -> str:
     current = (get_env_value(env_key) or "").strip()
     if current:
@@ -168,6 +209,7 @@ def initialize_product_stack(config: dict[str, Any] | None = None) -> dict[str, 
 def ensure_product_stack_started(config: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     product_config = config or initialize_product_stack()
     result = ensure_product_tsidp_started(product_config)
+    product_config = sync_running_tsidp_issuer_url(product_config)
     ensure_product_tailnet_started(product_config, include_app=True)
     return result if result is not None else subprocess.CompletedProcess([], 0, "", "")
 

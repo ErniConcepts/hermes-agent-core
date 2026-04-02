@@ -35,6 +35,7 @@ from hermes_cli.product_stack_bootstrap import (
     load_product_tailscale_oidc_client_settings,
     mark_first_admin_bootstrap_completed,
     required_secret as _required_secret,
+    sync_running_tsidp_issuer_url,
     tailscale_oidc_registration_payload as _tailscale_oidc_registration_payload,
     tsidp_auth_key as _tsidp_auth_key,
     tsidp_service_config as _tsidp_service_config,

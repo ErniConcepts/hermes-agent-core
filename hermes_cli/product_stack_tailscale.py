@@ -65,6 +65,15 @@ def tsidp_issuer_url(config: dict[str, object]) -> str:
     return f"https://{tsidp_host(config)}"
 
 
+def configured_tsidp_issuer_url(config: dict[str, object]) -> str:
+    auth = config.get("auth", {})
+    if isinstance(auth, dict):
+        configured = str(auth.get("issuer_url", "")).strip()
+        if configured:
+            return configured.rstrip("/")
+    return tsidp_issuer_url(config)
+
+
 def format_https_url(host: str, port: int) -> str:
     if port == 443:
         return f"https://{host}"
@@ -128,7 +137,7 @@ def resolve_product_urls(config: dict[str, object] | None = None) -> dict[str, s
     tailnet_host = tailscale_host(product_config)
     app_https_port = tailscale_https_port(product_config, "app_https_port", 443)
     tailnet_app_base_url = format_https_url(tailnet_host, app_https_port)
-    tailnet_issuer_url = tsidp_issuer_url(product_config)
+    tailnet_issuer_url = configured_tsidp_issuer_url(product_config)
     return {
         "url_scheme": "https",
         "app_base_url": tailnet_app_base_url,
@@ -173,7 +182,7 @@ def ensure_product_tailnet_started(
 
 
 def wait_for_tsidp_ready(config: dict[str, object], timeout_seconds: float) -> None:
-    health_url = tsidp_issuer_url(config).rstrip("/") + "/.well-known/openid-configuration"
+    health_url = configured_tsidp_issuer_url(config).rstrip("/") + "/.well-known/openid-configuration"
     deadline = time.time() + timeout_seconds
     last_error: Exception | None = None
     while time.time() < deadline:

@@ -11,6 +11,7 @@ from hermes_cli.product_stack import (
     get_tsidp_env_path,
     initialize_product_stack,
     resolve_product_urls,
+    sync_running_tsidp_issuer_url,
 )
 
 
@@ -33,6 +34,37 @@ def test_resolve_product_urls_returns_tailnet_only_values(tmp_path, monkeypatch)
 
     assert urls["app_base_url"] == "https://device.tail5fd7a5.ts.net"
     assert urls["issuer_url"] == "https://idp.tail5fd7a5.ts.net"
+
+
+def test_resolve_product_urls_prefers_configured_issuer_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = _config()
+    config["auth"]["issuer_url"] = "https://idp-1.tail5fd7a5.ts.net"
+
+    urls = resolve_product_urls(config)
+
+    assert urls["issuer_url"] == "https://idp-1.tail5fd7a5.ts.net"
+
+
+def test_sync_running_tsidp_issuer_url_updates_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("HERMES_PRODUCT_TAILSCALE_AUTH_KEY", "tskey-auth-kv")
+    saved: list[str] = []
+    monkeypatch.setattr(
+        "hermes_cli.product_stack_bootstrap.running_tsidp_issuer_url",
+        lambda config: "https://idp-1.tail5fd7a5.ts.net",
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_stack_bootstrap.save_product_config",
+        lambda config: saved.append(config["auth"]["issuer_url"]),
+    )
+
+    config = initialize_product_stack(_config())
+    updated = sync_running_tsidp_issuer_url(config)
+
+    assert updated["auth"]["issuer_url"] == "https://idp-1.tail5fd7a5.ts.net"
+    assert saved[-1] == "https://idp-1.tail5fd7a5.ts.net"
 
 
 def test_initialize_product_stack_writes_tsidp_env_and_compose(tmp_path, monkeypatch):
