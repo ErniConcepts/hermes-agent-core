@@ -81,7 +81,7 @@ Current deployment assumptions:
 Run this as your normal user:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/main/scripts/install-product.sh -o install-product.sh
+curl -fsSL https://github.com/ErniConcepts/hermes-agent-core/raw/refs/heads/main/scripts/install-product.sh -o install-product.sh
 bash install-product.sh
 ```
 

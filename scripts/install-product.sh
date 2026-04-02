@@ -259,7 +259,7 @@ print_post_install() {
     fi
     echo ""
     echo "Fresh install (run as your normal user; the installer prompts for sudo when needed):"
-    echo "  curl -fsSL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${PINNED_INSTALL_REF}/scripts/install-product.sh | bash"
+    echo "  curl -fsSL https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/refs/heads/main/scripts/install-product.sh | bash"
     echo ""
     echo "Cleanup:"
     echo "  hermes-core uninstall --yes"
