@@ -51,7 +51,7 @@ PAGE_TEMPLATE = """<!doctype html>
 </div>
 </div>
 <div id="chatMessage" class="message"></div>
-<div class="shell">
+<div class="shell chat-shell">
 <div class="chat-log" id="chatLog"><div class="empty-state">No messages yet.</div></div>
 <form class="chat-form" id="chatForm">
 <label class="field full">
