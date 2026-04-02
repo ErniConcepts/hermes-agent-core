@@ -12,6 +12,7 @@ from hermes_cli.product_setup_bootstrap import (
     configure_tsidp_client_credentials as _configure_tsidp_client_credentials,
     print_install_handoff as _print_install_handoff,
     print_product_setup_summary as _print_product_setup_summary,
+    reload_product_app_service as _reload_product_app_service,
     run_bootstrap_section as _run_bootstrap_section,
     start_product_stack as _start_product_stack,
 )
@@ -44,6 +45,14 @@ PRODUCT_SETUP_SECTIONS = [
 ]
 
 
+def _reload_app_after_setup() -> None:
+    try:
+        _reload_product_app_service()
+    except RuntimeError:
+        # Setup still needs to succeed before the local service exists.
+        return
+
+
 def run_product_setup_wizard(args: Any) -> None:
     ensure_hermes_home()
     initialize_product_config_file()
@@ -68,6 +77,7 @@ def run_product_setup_wizard(args: Any) -> None:
             _run_bootstrap_section(force_new_bootstrap=force_new_bootstrap)
         else:
             raise SystemExit(f"Unknown product setup section: {section}")
+        _reload_app_after_setup()
         _print_product_setup_summary()
         return
     if getattr(args, "from_install", False):
@@ -87,6 +97,7 @@ def run_product_setup_wizard(args: Any) -> None:
     setup_product_branding()
     setup_product_identity()
     setup_product_storage()
+    _reload_app_after_setup()
     _print_product_setup_summary()
     print()
     print_success("Product setup complete!")

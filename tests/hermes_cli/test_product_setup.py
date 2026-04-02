@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+from argparse import Namespace
 import pytest
 
 from hermes_cli.product_config import load_product_config
@@ -32,6 +33,56 @@ def test_setup_product_branding_uses_default_name_for_blank_input(tmp_path, monk
 
     config = load_product_config()
     assert config["product"]["brand"]["name"] == "Hermes Core"
+
+
+def test_run_product_setup_branding_section_restarts_app_service(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    calls: list[str] = []
+
+    monkeypatch.setattr("hermes_cli.product_setup.is_interactive_stdin", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_setup.setup_product_branding", lambda: calls.append("branding"))
+    monkeypatch.setattr("hermes_cli.product_setup._reload_product_app_service", lambda: calls.append("reload"))
+    monkeypatch.setattr("hermes_cli.product_setup._print_product_setup_summary", lambda: calls.append("summary"))
+
+    run_args = Namespace(section="branding", non_interactive=False, from_install=False)
+    from hermes_cli.product_setup import run_product_setup_wizard
+
+    run_product_setup_wizard(run_args)
+
+    assert calls == ["branding", "reload", "summary"]
+
+
+def test_run_product_setup_full_wizard_restarts_app_service_after_branding(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    calls: list[str] = []
+
+    monkeypatch.setattr("hermes_cli.product_setup.is_interactive_stdin", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_setup.setup_product_tailscale", lambda: calls.append("tailscale"))
+    monkeypatch.setattr("hermes_cli.product_setup.setup_product_bootstrap_identity", lambda: False)
+    monkeypatch.setattr(
+        "hermes_cli.product_setup._run_bootstrap_section",
+        lambda force_new_bootstrap=False: calls.append(f"bootstrap:{force_new_bootstrap}"),
+    )
+    monkeypatch.setattr("hermes_cli.product_setup.setup_product_branding", lambda: calls.append("branding"))
+    monkeypatch.setattr("hermes_cli.product_setup.setup_product_identity", lambda: calls.append("identity"))
+    monkeypatch.setattr("hermes_cli.product_setup.setup_product_storage", lambda: calls.append("storage"))
+    monkeypatch.setattr("hermes_cli.product_setup._reload_product_app_service", lambda: calls.append("reload"))
+    monkeypatch.setattr("hermes_cli.product_setup._print_product_setup_summary", lambda: calls.append("summary"))
+
+    run_args = Namespace(section=None, non_interactive=False, from_install=False)
+    from hermes_cli.product_setup import run_product_setup_wizard
+
+    run_product_setup_wizard(run_args)
+
+    assert calls == [
+        "tailscale",
+        "bootstrap:False",
+        "branding",
+        "identity",
+        "storage",
+        "reload",
+        "summary",
+    ]
 
 
 def test_setup_product_bootstrap_identity_does_not_require_manual_login_value(tmp_path, monkeypatch):

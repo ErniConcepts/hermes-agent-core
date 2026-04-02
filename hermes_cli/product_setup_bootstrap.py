@@ -156,6 +156,10 @@ def print_install_handoff() -> None:
     print()
 
 
+def reload_product_app_service() -> None:
+    ensure_product_app_service_started(load_product_config())
+
+
 def start_product_stack(force_new_bootstrap: bool = False) -> None:
     ensure_product_stack_started()
     configure_tsidp_client_credentials()
