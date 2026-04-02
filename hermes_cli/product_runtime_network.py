@@ -62,7 +62,8 @@ def remove_runtime_docker_network(run_fn: Any) -> bool:
 
 def local_host_model_port(config: dict[str, Any] | None = None) -> int | None:
     root_config = config or load_config()
-    model = root_config.get("model", {}) if isinstance(root_config, dict) else {}
+    model_value = root_config.get("model") if isinstance(root_config, dict) else None
+    model = model_value if isinstance(model_value, dict) else {}
     base_url = str(model.get("base_url") or "").strip()
     if not base_url:
         return None

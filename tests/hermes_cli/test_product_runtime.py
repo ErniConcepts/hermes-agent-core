@@ -298,6 +298,7 @@ def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, mo
     assert f"TMPDIR={_RUNTIME_WORKSPACE_PATH}/.tmp" in env_text
     assert f"TEMP={_RUNTIME_WORKSPACE_PATH}/.tmp" in env_text
     assert f"TMP={_RUNTIME_WORKSPACE_PATH}/.tmp" in env_text
+    assert "PYTHONPATH=/app" in env_text
     assert "HERMES_PRODUCT_PROVIDER=custom" in env_text
     assert "TIRITH_FAIL_OPEN=false" in env_text
     assert "OPENAI_BASE_URL=http://host.docker.internal:8080/v1" in env_text

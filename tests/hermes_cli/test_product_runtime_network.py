@@ -24,6 +24,10 @@ def test_local_host_model_port_ignores_remote_model():
     assert local_host_model_port({"model": {"base_url": "https://api.openai.com/v1"}}) is None
 
 
+def test_local_host_model_port_ignores_legacy_non_mapping_model_config():
+    assert local_host_model_port({"model": "qwen3.5-9b-local"}) is None
+
+
 def test_ensure_runtime_docker_network_creates_missing_network():
     calls = []
 
@@ -48,4 +52,3 @@ def test_ensure_runtime_docker_network_creates_missing_network():
         PRODUCT_RUNTIME_NETWORK_GATEWAY,
         PRODUCT_RUNTIME_NETWORK_NAME,
     ]
-
