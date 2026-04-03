@@ -1,219 +1,42 @@
 from __future__ import annotations
 
-import base64
-import json
-import os
 import secrets
-import shutil
-import subprocess
 import time
-from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
-from itsdangerous import TimestampSigner
-from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, expect
+from playwright.sync_api import Page, expect
+
+from tests.e2e_product.live_product_support import (
+    LiveProductState,
+    add_signed_session_cookie,
+    build_user_session_payload,
+    capture_artifact_screenshot,
+    delete_runtime_for_user,
+    drag_and_drop,
+    healthcheck,
+    load_live_product_state,
+    open_authenticated_page,
+    redact_page_text,
+    send_chat_and_expect_reply,
+    wait_for_authenticated_shell,
+)
 
 
 pytestmark = pytest.mark.e2e
 
 
-@dataclass(frozen=True)
-class LiveProductState:
-    app_base_url: str
-    local_app_base_url: str | None
-    session_secret: str
-    user: dict[str, object]
-
-
-def _wsl_available() -> bool:
-    return shutil.which("wsl.exe") is not None or shutil.which("wsl") is not None
-
-
-def _wsl_exe() -> str:
-    for candidate in ("wsl.exe", "wsl"):
-        resolved = shutil.which(candidate)
-        if resolved:
-            return resolved
-    raise FileNotFoundError("wsl.exe not found")
-
-
-def _run_wsl_bash(command: str) -> str:
-    distro = os.getenv("HERMES_E2E_WSL_DISTRO", "Ubuntu")
-    user = os.getenv("HERMES_E2E_WSL_USER", "hermestest")
-    result = subprocess.run(
-        [_wsl_exe(), "-d", distro, "-u", user, "bash", "-lc", command],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "WSL command failed")
-    return result.stdout.strip()
-
-
-def _load_live_product_state() -> LiveProductState:
-    if not _wsl_available():
-        pytest.skip("WSL is not available on this machine")
-
-    script = r"""
-source ~/.hermes/hermes-core/.venv/bin/activate
-python - <<'PY'
-import json
-from pathlib import Path
-from hermes_cli.product_app import _session_secret
-from hermes_cli.product_config import load_product_config
-from hermes_cli.product_stack import resolve_product_urls
-
-users_path = Path.home() / '.hermes' / 'product' / 'bootstrap' / 'users.json'
-users = json.loads(users_path.read_text())
-admin = next(user for user in users if user.get('is_admin') and not user.get('disabled'))
-cfg = load_product_config()
-urls = resolve_product_urls(cfg)
-print(json.dumps({
-    'session_secret': _session_secret(),
-    'app_base_url': urls['app_base_url'],
-    'local_app_base_url': urls.get('local_app_base_url'),
-    'user': admin,
-}))
-PY
-"""
-    payload = json.loads(_run_wsl_bash(script))
-    return LiveProductState(
-        app_base_url=os.getenv("HERMES_E2E_BASE_URL", str(payload["app_base_url"])),
-        local_app_base_url=str(payload["local_app_base_url"]) if payload.get("local_app_base_url") else None,
-        session_secret=str(payload["session_secret"]),
-        user=dict(payload["user"]),
-    )
-
-
-def _healthcheck(base_url: str) -> None:
-    script = f"curl -fsS {base_url.rstrip('/')}/healthz"
-    try:
-        _run_wsl_bash(script)
-    except RuntimeError as exc:
-        pytest.skip(f"Live product app is not healthy at {base_url}: {exc}")
-
-
-def _delete_runtime_for_user(user_id: str) -> None:
-    script = f"""
-source ~/.hermes/hermes-core/.venv/bin/activate
-python - <<'PY'
-from hermes_cli.product_runtime import delete_product_runtime
-delete_product_runtime({user_id!r})
-print('ok')
-PY
-"""
-    _run_wsl_bash(script)
-
-
-def _send_chat_and_expect_reply(page: Page, prompt: str, expected_text: str, *, timeout: int = 30000) -> None:
-    page.locator("#chatInput").fill(prompt)
-    page.locator("#chatSubmit").click()
-    expect(page.locator("#chatLog")).to_contain_text(expected_text, timeout=timeout)
-
-
-def _wait_for_authenticated_shell(page: Page, *, timeout: int = 15000) -> None:
-    page.wait_for_function(
-        """async () => {
-            const response = await fetch('/api/auth/session', {credentials: 'same-origin'});
-            const payload = await response.json();
-            return payload && payload.authenticated === true;
-        }""",
-        timeout=timeout,
-    )
-    page.wait_for_function(
-        """() => {
-            const chatCard = document.getElementById('chatCard');
-            const workspaceCard = document.getElementById('workspaceCard');
-            return Boolean(chatCard && workspaceCard && !chatCard.hidden && !workspaceCard.hidden);
-        }""",
-        timeout=timeout,
-    )
-    expect(page.locator("#chatCard")).to_be_visible(timeout=timeout)
-    expect(page.locator("#workspaceCard")).to_be_visible(timeout=timeout)
-
-
-def _open_authenticated_page(browser, live_product_state: LiveProductState, *, retries: int = 3) -> tuple[object, Page]:
-    last_error: Exception | None = None
-    for _ in range(retries):
-        context = browser.new_context(ignore_https_errors=True)
-        _add_signed_session_cookie(context, live_product_state, _build_user_session_payload(live_product_state.user))
-        page = context.new_page()
-        try:
-            page.goto(live_product_state.app_base_url, wait_until="domcontentloaded")
-            _wait_for_authenticated_shell(page, timeout=20000)
-            return context, page
-        except PlaywrightTimeoutError as exc:
-            last_error = exc
-            context.close()
-            continue
-    raise last_error or RuntimeError("Could not open authenticated live product page")
-
-
-def _drag_and_drop(page: Page, source_selector: str, target_selector: str) -> None:
-    data_transfer = page.evaluate_handle("new DataTransfer()")
-    page.locator(source_selector).dispatch_event("dragstart", {"dataTransfer": data_transfer})
-    page.locator(target_selector).dispatch_event("dragover", {"dataTransfer": data_transfer})
-    page.locator(target_selector).dispatch_event("drop", {"dataTransfer": data_transfer})
-    page.locator(source_selector).dispatch_event("dragend", {"dataTransfer": data_transfer})
-
-
-def _sign_session_payload(session_secret: str, payload: dict[str, object]) -> str:
-    encoded = base64.b64encode(json.dumps(payload).encode("utf-8"))
-    return TimestampSigner(session_secret).sign(encoded).decode("utf-8")
-
-
-def _build_user_session_payload(user: dict[str, object]) -> dict[str, object]:
-    return {
-        "user": {
-            "id": str(user["id"]),
-            "sub": str(user["id"]),
-            "email": str(user.get("email") or ""),
-            "name": str(user.get("display_name") or user.get("username") or user["id"]),
-            "preferred_username": str(user.get("username") or ""),
-            "is_admin": bool(user.get("is_admin")),
-            "tailscale_login": str(user.get("tailscale_login") or ""),
-        },
-        "user_refreshed_at": int(time.time()),
-        "csrf_token": secrets.token_urlsafe(24),
-    }
-
-
-def _cookie_targets(state: LiveProductState) -> list[str]:
-    targets = [state.app_base_url]
-    if state.local_app_base_url:
-        targets.append(state.local_app_base_url)
-    return targets
-
-
-def _add_signed_session_cookie(context, state: LiveProductState, payload: dict[str, object]) -> None:
-    cookie_value = _sign_session_payload(state.session_secret, payload)
-    context.add_cookies(
-        [
-            {
-                "name": "hermes_product_session",
-                "value": cookie_value,
-                "url": target,
-                "httpOnly": True,
-                "sameSite": "Lax",
-            }
-            for target in _cookie_targets(state)
-        ]
-    )
-
-
 @pytest.fixture(scope="session")
-def live_product_state() -> LiveProductState:
-    state = _load_live_product_state()
-    _healthcheck(state.local_app_base_url or state.app_base_url)
+def live_product_state(live_product_install_state: dict[str, object]) -> LiveProductState:
+    del live_product_install_state
+    state = load_live_product_state()
+    healthcheck(state.local_app_base_url or state.app_base_url)
     return state
 
 
 @pytest.fixture()
 def authenticated_page(browser, live_product_state: LiveProductState) -> Page:
-    context, page = _open_authenticated_page(browser, live_product_state)
-    _wait_for_authenticated_shell(page)
+    context, page = open_authenticated_page(browser, live_product_state)
+    wait_for_authenticated_shell(page)
     yield page
     context.close()
 
@@ -231,9 +54,10 @@ def test_live_product_app_loads_authenticated_shell(authenticated_page: Page) ->
     expect(authenticated_page.locator("#workspaceCard")).to_be_visible()
     expect(authenticated_page.locator("#adminCard")).to_be_visible()
     expect(authenticated_page.locator("#sessionChip")).to_contain_text("Admin")
+    capture_artifact_screenshot(authenticated_page, "authenticated-shell")
 
 
-def test_live_product_workspace_upload_and_delete(authenticated_page: Page, tmp_path: Path) -> None:
+def test_live_product_workspace_upload_and_delete(authenticated_page: Page, tmp_path) -> None:
     folder_name = f"e2e-folder-{int(time.time())}"
     file_name = "e2e-upload.txt"
     upload_path = tmp_path / file_name
@@ -247,13 +71,14 @@ def test_live_product_workspace_upload_and_delete(authenticated_page: Page, tmp_
     file_input = authenticated_page.locator("#workspaceFileInput")
     file_input.set_input_files(str(upload_path))
     expect(authenticated_page.locator("#workspaceTable")).to_contain_text(file_name)
+    capture_artifact_screenshot(authenticated_page, "workspace-with-upload")
 
     authenticated_page.locator(f"button.workspace-delete-button[data-path='{file_name}']").click()
     expect(authenticated_page.locator("#workspaceTable")).not_to_contain_text(file_name)
 
 
 def test_live_product_workspace_supports_folder_moves_and_folder_delete(
-    authenticated_page: Page, tmp_path: Path
+    authenticated_page: Page, tmp_path
 ) -> None:
     parent_folder = f"e2e-parent-{int(time.time())}"
     child_folder = f"e2e-child-{int(time.time())}"
@@ -274,7 +99,7 @@ def test_live_product_workspace_supports_folder_moves_and_folder_delete(
     authenticated_page.locator("#workspaceFileInput").set_input_files(str(upload_path))
     expect(authenticated_page.locator("#workspaceTable")).to_contain_text(file_name)
 
-    _drag_and_drop(
+    drag_and_drop(
         authenticated_page,
         f".workspace-entry[data-path='{file_name}']",
         f".workspace-entry[data-path='{parent_folder}'] .workspace-folder-drop-target",
@@ -282,8 +107,9 @@ def test_live_product_workspace_supports_folder_moves_and_folder_delete(
     expect(authenticated_page.locator("#workspaceMessage")).to_contain_text("Moved.")
     expect(authenticated_page.locator("#workspacePathLabel")).to_contain_text(f"/{parent_folder}")
     expect(authenticated_page.locator("#workspaceTable")).to_contain_text(file_name)
+    capture_artifact_screenshot(authenticated_page, "workspace-drag-drop")
 
-    _drag_and_drop(
+    drag_and_drop(
         authenticated_page,
         f".workspace-entry[data-path='{parent_folder}/{file_name}']",
         "#workspaceUpButton",
@@ -302,11 +128,12 @@ def test_live_product_workspace_supports_folder_moves_and_folder_delete(
 
 def test_live_product_chat_turn_returns_response(authenticated_page: Page) -> None:
     token = f"e2e-chat-ok-{int(time.time())}"
-    _send_chat_and_expect_reply(
+    send_chat_and_expect_reply(
         authenticated_page,
         f"Reply with exactly: {token}",
         token,
     )
+    capture_artifact_screenshot(authenticated_page, "chat-response")
 
 
 def test_live_product_admin_can_create_invite_link(authenticated_page: Page) -> None:
@@ -319,6 +146,8 @@ def test_live_product_admin_can_create_invite_link(authenticated_page: Page) -> 
     expect(authenticated_page.locator("#adminSignupTokenUrl")).to_contain_text("/invite/")
     expect(authenticated_page.locator("#adminUsersTable")).to_contain_text(display_name)
     expect(authenticated_page.locator("#adminUsersTable")).to_contain_text("Pending invite")
+    redact_page_text(authenticated_page, ["#adminSignupTokenUrl"])
+    capture_artifact_screenshot(authenticated_page, "admin-invite-created")
 
 
 def test_live_product_invite_can_be_claimed_in_second_context(
@@ -336,7 +165,7 @@ def test_live_product_invite_can_be_claimed_in_second_context(
     assert invite_token
 
     pending_payload = {
-        "csrf_token": secrets.token_urlsafe(24),
+        "csrf_token": "e2e-pending-invite",
         "pending_invite_token": invite_token,
         "pending_invite_identity": {
             "sub": claimed_subject,
@@ -346,13 +175,15 @@ def test_live_product_invite_can_be_claimed_in_second_context(
         "auth_notice": "Confirm this Tailscale account to claim the invite.",
         "detected_tailscale_login": claimed_login,
     }
-    context = browser.new_context(ignore_https_errors=True)
-    _add_signed_session_cookie(context, live_product_state, pending_payload)
+    context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 1100})
+    add_signed_session_cookie(context, live_product_state, pending_payload)
     page = context.new_page()
     page.goto(live_product_state.app_base_url, wait_until="domcontentloaded")
 
     expect(page.locator("#authCard")).to_be_visible()
     expect(page.locator("#claimInviteButton")).to_be_visible()
+    redact_page_text(page, ["#adminSignupTokenUrl"])
+    capture_artifact_screenshot(page, "invite-claim-pending")
     page.locator("#claimInviteButton").click()
 
     expect(page.locator("#chatCard")).to_be_visible()
@@ -367,26 +198,27 @@ def test_live_product_invite_can_be_claimed_in_second_context(
     assert session["authenticated"] is True
     assert session["user"]["is_admin"] is False
     assert session["user"]["tailscale_login"] == claimed_login
+    capture_artifact_screenshot(page, "invite-claim-complete")
     context.close()
 
 
 def test_live_product_session_persists_across_reload_and_new_tab(
     browser, live_product_state: LiveProductState
 ) -> None:
-    context = browser.new_context(ignore_https_errors=True)
-    _add_signed_session_cookie(context, live_product_state, _build_user_session_payload(live_product_state.user))
+    context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 1100})
+    add_signed_session_cookie(context, live_product_state, build_user_session_payload(live_product_state.user))
 
     page = context.new_page()
     page.goto(live_product_state.app_base_url, wait_until="domcontentloaded")
-    _wait_for_authenticated_shell(page)
+    wait_for_authenticated_shell(page)
     expect(page.locator("#sessionChip")).to_contain_text("Admin")
 
     page.reload(wait_until="domcontentloaded")
-    _wait_for_authenticated_shell(page)
+    wait_for_authenticated_shell(page)
 
     second_tab = context.new_page()
     second_tab.goto(live_product_state.app_base_url, wait_until="domcontentloaded")
-    _wait_for_authenticated_shell(second_tab)
+    wait_for_authenticated_shell(second_tab)
     expect(second_tab.locator("#adminCard")).to_be_visible(timeout=15000)
     second_tab.close()
     context.close()
@@ -417,8 +249,8 @@ def test_live_product_admin_can_deactivate_claimed_user(
         "auth_notice": "Confirm this Tailscale account to claim the invite.",
         "detected_tailscale_login": claimed_login,
     }
-    context = browser.new_context(ignore_https_errors=True)
-    _add_signed_session_cookie(context, live_product_state, pending_payload)
+    context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 1100})
+    add_signed_session_cookie(context, live_product_state, pending_payload)
     page = context.new_page()
     page.goto(live_product_state.app_base_url, wait_until="networkidle")
     page.locator("#claimInviteButton").click()
@@ -440,6 +272,7 @@ def test_live_product_admin_can_deactivate_claimed_user(
 
     user_row = authenticated_page.locator("#adminUsersTable tr").filter(has_text=display_name).first
     expect(user_row).to_contain_text("Disabled")
+    capture_artifact_screenshot(authenticated_page, "admin-user-disabled")
     page.reload(wait_until="networkidle")
     page.wait_for_function(
         """async () => {
@@ -456,13 +289,14 @@ def test_live_product_admin_can_deactivate_claimed_user(
 def test_live_product_chat_recreates_runtime_after_wsl_delete(
     authenticated_page: Page, live_product_state: LiveProductState
 ) -> None:
-    _delete_runtime_for_user(str(live_product_state.user["id"]))
+    delete_runtime_for_user(str(live_product_state.user["id"]))
     token = f"e2e-runtime-recreated-{int(time.time())}"
-    _send_chat_and_expect_reply(
+    send_chat_and_expect_reply(
         authenticated_page,
         f"Reply with exactly: {token}",
         token,
     )
+    capture_artifact_screenshot(authenticated_page, "chat-runtime-recreated")
 
 
 def test_live_product_chat_stop_button_cancels_long_turn(authenticated_page: Page) -> None:
@@ -471,5 +305,17 @@ def test_live_product_chat_stop_button_cancels_long_turn(authenticated_page: Pag
     authenticated_page.locator("#chatSubmit").click()
 
     expect(authenticated_page.locator("#chatStop")).to_have_attribute("aria-disabled", "false")
+    capture_artifact_screenshot(authenticated_page, "chat-streaming")
     authenticated_page.locator("#chatStop").click()
     expect(authenticated_page.locator("#chatMessage")).to_contain_text("Response stopped.", timeout=10000)
+    capture_artifact_screenshot(authenticated_page, "chat-stopped")
+
+
+def test_live_product_signed_out_shell_visual(browser, live_product_state: LiveProductState) -> None:
+    context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 1100})
+    page = context.new_page()
+    page.goto(live_product_state.app_base_url, wait_until="domcontentloaded")
+
+    expect(page.locator("#authCard")).to_be_visible(timeout=15000)
+    capture_artifact_screenshot(page, "signed-out-shell")
+    context.close()

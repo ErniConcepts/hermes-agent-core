@@ -29,7 +29,8 @@ The fork adds a product layer around upstream Hermes:
   - `tsidp` (bundled, Docker-managed)
   - Product app uses OIDC client flow
 - Runtime:
-  - Per-user runtime containers
+  - Per-user Hermes installs inside runtime containers
+  - Operator-managed runtime template seeded into each user install
   - gVisor (`runsc`) target path on Linux
 - Web app:
   - Tailscale sign-in
@@ -44,8 +45,9 @@ Current internal structure:
   - explicit route-service wiring
   - route registration grouped by concern (`root`, `auth`, `chat`, `workspace`, `admin`)
 - `product_runtime.py` acts as the runtime composition layer:
-  - runtime launch setting resolution
-  - runtime file/env staging
+  - runtime template resolution
+  - per-user Hermes install staging
+  - runtime env staging
   - container lifecycle and health checks
 - `product_install.py` acts as the install composition layer:
   - host prerequisite checks
@@ -67,7 +69,7 @@ Current security boundary:
   - runtime env files must reject unsafe values such as newline-delimited secrets
   - runtime env files should also reject pathologically long values
   - runtime auth must stay constant-time and token-scoped
-  - generated runtime config inputs remain read-only mounts
+  - operator-seeded runtime config and SOUL inputs remain read-only mounts
   - runtime session rollover should follow Hermes-native `session_reset` behavior rather than fork-only transcript heuristics
   - reasoning-tag stripping and mixed reasoning/answer stream splitting should stay in shared Hermes helpers, not product-only code
   - dangerous runtime terminal commands should fail closed unless a real product approval flow exists
@@ -107,6 +109,8 @@ Current security boundary:
 
 Product runtimes are considered ready when the Hermes config resolves to a runnable model/provider configuration. Readiness is determined from config state, not from whether a user happened to run every setup command.
 
+The current fork now stages runtime behavior through a server-owned runtime template and then materializes a full per-user Hermes home for each product user. The product app still exposes the same web/API surface, but the runtime is no longer treated as a small product-only overlay.
+
 ## Maintainer Workflow
 
 For any change:
@@ -131,6 +135,42 @@ Useful cleanup for repeated live E2E runs:
 scripts/cleanup-product-e2e-state.sh
 ```
 
+The live product E2E lane now runs against an isolated WSL install by default:
+
+- `HERMES_HOME=~/.hermes-e2e-product`
+- install dir `~/.hermes-e2e-product/hermes-core`
+- bin dir `~/.hermes-e2e-product/bin`
+- screenshot/artifacts under `artifacts/e2e_product/`
+
+Local run:
+
+```bash
+source venv/bin/activate
+python -m pytest -o addopts="" tests/e2e_product -q --tb=short
+```
+
+Expected environment:
+
+- WSL distro/user configured through `HERMES_E2E_WSL_DISTRO` and `HERMES_E2E_WSL_USER` when defaults do not match
+- Docker and Tailscale working inside that WSL environment
+- product secrets available in the current shell
+
+Security defaults for the live E2E lane:
+
+- do not silently import secrets from the default WSL `~/.hermes/.env`
+- do not copy the default install's admin identity into the isolated E2E install
+- redact invite-token UI fields before saving screenshot artifacts
+
+Local-only compatibility fallbacks are opt-in:
+
+- `HERMES_E2E_ALLOW_DEFAULT_SECRET_FALLBACK=1`
+- `HERMES_E2E_ALLOW_DEFAULT_ADMIN_FALLBACK=1`
+
+CI split:
+
+- `.github/workflows/tests.yml` keeps the fast non-live suite
+- `.github/workflows/product-live-e2e.yml` is the heavy WSL/browser lane on `main`
+
 ## Security Defaults to Preserve
 
 - No broad runtime filesystem access outside user workspace.
@@ -141,6 +181,7 @@ scripts/cleanup-product-e2e-state.sh
 - Do not expose signup token material through admin placeholder identifiers or logs.
 - Keep admin UI narrow; avoid growing it into a full config console.
 - Keep runtime launch derived from the main Hermes config rather than adding a second hidden product-side source of truth.
+- Keep runtime template ownership operator-side; do not let user installs become the source of truth for product runtime policy.
 - Keep shared session-reset policy handling, reasoning normalization, and staged runtime config derivation in shared Hermes helpers when possible.
 - Do not reintroduce product-only history compaction or summary handoff logic when Hermes-native session-reset behavior is sufficient.
 - Do not reintroduce host-networked runtimes; local-model reachability must go through the dedicated runtime bridge plus host firewall policy.

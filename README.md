@@ -280,6 +280,62 @@ scripts/cleanup-product-e2e-state.sh
 
 By default the script targets `~/.hermes/product/bootstrap`. You can override the target home with `HERMES_HOME=/path/to/home`.
 
+## Live Product E2E
+
+The product live E2E suite now covers:
+
+- clean install into an isolated WSL home
+- bootstrap/setup preparation using current product secrets when available
+- click-driven browser coverage of chat, workspace, admin, invite, disable, and runtime recreation flows
+- screenshot capture for the major UI states
+- uninstall plus curl-based reinstall recovery
+
+The suite is intentionally isolated from your normal product install. By default it uses:
+
+- `HERMES_HOME=~/.hermes-e2e-product`
+- install dir `~/.hermes-e2e-product/hermes-core`
+- bin dir `~/.hermes-e2e-product/bin`
+- screenshot/artifact dir `artifacts/e2e_product/`
+
+Required local inputs:
+
+- a reachable WSL distro and user
+- Docker/Tailscale prerequisites inside that WSL environment
+- product secrets in the current shell:
+  - `HERMES_PRODUCT_TAILSCALE_AUTH_KEY`
+  - `HERMES_PRODUCT_TAILSCALE_API_TOKEN`
+  - `HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET`
+
+Safer default behavior:
+
+- the suite does not silently copy secrets from the default WSL `~/.hermes/.env`
+- the suite does not clone the default install's admin identity into the isolated E2E home
+- screenshot artifacts redact invite-token UI fields before writing PNGs
+
+Optional compatibility fallbacks for local operator machines:
+
+- `HERMES_E2E_ALLOW_DEFAULT_SECRET_FALLBACK=1`
+- `HERMES_E2E_ALLOW_DEFAULT_ADMIN_FALLBACK=1`
+
+Optional overrides:
+
+- `HERMES_E2E_WSL_DISTRO`
+- `HERMES_E2E_WSL_USER`
+- `HERMES_E2E_BASE_URL`
+- `HERMES_E2E_HOME`
+- `HERMES_E2E_INSTALL_DIR`
+- `HERMES_E2E_BIN_HOME`
+- `HERMES_E2E_ARTIFACTS_DIR`
+
+Run it locally with:
+
+```bash
+source venv/bin/activate
+python -m pytest -o addopts="" tests/e2e_product -q --tb=short
+```
+
+The fast suite stays in `.github/workflows/tests.yml`. The heavy live WSL/browser lane runs from `.github/workflows/product-live-e2e.yml` on pushes to `main`.
+
 ## Rerunning Setup
 
 Rerunning `hermes-core setup` is safe and is the normal way to refresh product configuration.

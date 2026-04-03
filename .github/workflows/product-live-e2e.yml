@@ -1,0 +1,63 @@
+name: Product Live E2E
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: product-live-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  product-live-e2e:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      HERMES_E2E_WSL_DISTRO: ${{ vars.HERMES_E2E_WSL_DISTRO || 'Ubuntu' }}
+      HERMES_E2E_WSL_USER: ${{ vars.HERMES_E2E_WSL_USER || 'hermestest' }}
+      HERMES_E2E_BASE_URL: ${{ vars.HERMES_E2E_BASE_URL }}
+      HERMES_PRODUCT_TAILSCALE_AUTH_KEY: ${{ secrets.HERMES_PRODUCT_TAILSCALE_AUTH_KEY }}
+      HERMES_PRODUCT_TAILSCALE_API_TOKEN: ${{ secrets.HERMES_PRODUCT_TAILSCALE_API_TOKEN }}
+      HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET: ${{ secrets.HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET }}
+      HERMES_PRODUCT_SESSION_SECRET: ${{ secrets.HERMES_PRODUCT_SESSION_SECRET }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        shell: bash
+        run: |
+          python -m venv .venv
+          source .venv/Scripts/activate
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,e2e]"
+
+      - name: Install Playwright browsers
+        shell: bash
+        run: |
+          source .venv/Scripts/activate
+          python -m playwright install chromium
+
+      - name: Run product live E2E suite
+        shell: bash
+        run: |
+          source .venv/Scripts/activate
+          python -m pytest -o addopts="" tests/e2e_product -q --tb=short
+
+      - name: Upload product E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-live-e2e-artifacts
+          path: |
+            artifacts/e2e_product
+          if-no-files-found: warn
