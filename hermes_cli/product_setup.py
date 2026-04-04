@@ -83,9 +83,7 @@ def run_product_setup_wizard(args: Any) -> None:
     if getattr(args, "from_install", False):
         _print_install_handoff()
     print()
-    print(color("â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”", Colors.MAGENTA))
-    print(color("â”‚        Hermes Core Tailnet-only Setup Wizard           â”‚", Colors.MAGENTA))
-    print(color("â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜", Colors.MAGENTA))
+    print(color("Hermes Core Setup", Colors.MAGENTA))
     print()
     print_info("This configures the supplier-curated Tailnet-only Hermes Core product distribution.")
     print_info("All product access is authenticated through tsidp on your tailnet.")
