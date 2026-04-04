@@ -101,7 +101,7 @@ def _session_id() -> str:
 
 
 def _active_session_id_path() -> Path:
-    return Path(_required_env("HERMES_HOME")) / ".product-runtime-session-id"
+    return Path(_required_env("HERMES_HOME")) / "sessions" / ".product-runtime-session-id"
 
 
 def _load_runtime_reset_policy() -> SessionResetPolicy:
@@ -121,7 +121,17 @@ def _read_active_session_id() -> str:
 
 
 def _write_active_session_id(session_id: str) -> None:
-    _active_session_id_path().write_text(f"{session_id}\n", encoding="utf-8")
+    path = _active_session_id_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{session_id}\n", encoding="utf-8")
+
+
+def _runtime_session_db() -> SessionDB:
+    db_path = Path(_required_env("HERMES_HOME")) / "sessions" / "state.db"
+    try:
+        return SessionDB(db_path=db_path)
+    except TypeError:
+        return SessionDB()
 
 
 def _last_runtime_activity_ts(db: SessionDB, session_id: str, session_row: dict[str, Any]) -> float:
@@ -309,7 +319,7 @@ def create_product_runtime_app() -> FastAPI:
 
     @app.get("/healthz", response_model=RuntimeHealthResponse)
     def healthz() -> RuntimeHealthResponse:
-        db = SessionDB()
+        db = _runtime_session_db()
         try:
             session_id = _resolve_runtime_session_id(db)
         finally:
@@ -325,7 +335,7 @@ def create_product_runtime_app() -> FastAPI:
     @app.get("/runtime/session", response_model=RuntimeSessionResponse)
     def runtime_session(x_hermes_product_runtime_token: str | None = Header(default=None)) -> RuntimeSessionResponse:
         _require_runtime_token(x_hermes_product_runtime_token, runtime_token)
-        db = SessionDB()
+        db = _runtime_session_db()
         try:
             session_id = _resolve_runtime_session_id(db)
             messages = _load_session_messages(db, session_id)
@@ -345,7 +355,7 @@ def create_product_runtime_app() -> FastAPI:
     ) -> RuntimeTurnResponse:
         _require_runtime_token(x_hermes_product_runtime_token, runtime_token)
         try:
-            db = SessionDB()
+            db = _runtime_session_db()
             session_id = _resolve_runtime_session_id(db)
             agent = build_runtime_agent(db, session_id)
             _register_active_agent(session_id, agent)
@@ -389,7 +399,7 @@ def create_product_runtime_app() -> FastAPI:
 
         def _run() -> None:
             try:
-                db = SessionDB()
+                db = _runtime_session_db()
                 reasoning_emitter = lambda text: event_queue.put(("reasoning", {"delta": str(text or "")}))
                 answer_emitter = lambda text: event_queue.put(("answer", {"delta": str(text or "")}))
                 mux = ReasoningStreamMux(on_answer=answer_emitter, on_reasoning=reasoning_emitter)

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import secrets
 import shutil
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -31,7 +34,17 @@ from hermes_cli.product_runtime_template import (
 )
 from hermes_cli.runtime_provider import format_runtime_provider_error, resolve_runtime_provider
 
+try:
+    import fcntl
+except Exception:
+    fcntl = None
+try:
+    import msvcrt
+except Exception:
+    msvcrt = None
+
 _MAX_RUNTIME_ENV_VALUE_LENGTH = 8192
+_RUNTIME_LOCK_TIMEOUT_SECONDS = 15.0
 
 
 def user_id(user: dict[str, object]) -> str:
@@ -73,6 +86,10 @@ def product_users_root(config: dict[str, object]) -> Path:
     return get_hermes_home() / str(config.get("storage", {}).get("users_root", "product/users"))
 
 
+def runtime_lock_path(config: dict[str, object]) -> Path:
+    return product_storage_root(config) / ".runtime-staging.lock"
+
+
 def runtime_root(config: dict[str, object], stable_user_id: str) -> Path:
     return product_users_root(config) / runtime_key(stable_user_id) / "runtime"
 
@@ -107,6 +124,39 @@ def env_path(config: dict[str, object], stable_user_id: str) -> Path:
 
 def runtime_config_path(config: dict[str, object], stable_user_id: str) -> Path:
     return hermes_home(config, stable_user_id) / "config.yaml"
+
+
+@contextmanager
+def runtime_staging_lock(config: dict[str, object]):
+    lock_path = runtime_lock_path(config)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if fcntl is None and msvcrt is None:
+        raise RuntimeError("Runtime staging lock is not available on this platform")
+    if msvcrt and (not lock_path.exists() or lock_path.stat().st_size == 0):
+        lock_path.write_text(" ", encoding="utf-8")
+
+    started = time.monotonic()
+    with lock_path.open("r+" if msvcrt else "a+") as lock_file:
+        while True:
+            try:
+                if fcntl:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                elif msvcrt:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                if time.monotonic() - started >= _RUNTIME_LOCK_TIMEOUT_SECONDS:
+                    raise RuntimeError("Timed out waiting for the runtime staging lock")
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            if fcntl:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            elif msvcrt:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def runtime_toolsets(config: dict[str, object]) -> list[str]:
@@ -437,44 +487,45 @@ def stage_product_runtime(user: dict[str, object], *, config: dict[str, object] 
     )
     ensure_runtime_install(product_config, stable_user_id, template_payload)
     session_id = existing.session_id if existing is not None else product_runtime_session_id(stable_user_id)
-    runtime_port = existing.runtime_port if existing is not None else resolve_runtime_port(product_config, stable_user_id)
-    stable_runtime_key = existing.runtime_key if existing is not None and existing.runtime_key else runtime_key(stable_user_id)
-    container_name = existing.container_name if existing is not None else f"hermes-product-runtime-{stable_runtime_key}"
-    auth_token = existing.auth_token if existing is not None and existing.auth_token else secrets.token_urlsafe(32)
+    with runtime_staging_lock(product_config):
+        runtime_port = existing.runtime_port if existing is not None else resolve_runtime_port(product_config, stable_user_id)
+        stable_runtime_key = existing.runtime_key if existing is not None and existing.runtime_key else runtime_key(stable_user_id)
+        container_name = existing.container_name if existing is not None else f"hermes-product-runtime-{stable_runtime_key}"
+        auth_token = existing.auth_token if existing is not None and existing.auth_token else secrets.token_urlsafe(32)
 
-    staged_env_path = env_path(product_config, stable_user_id)
-    write_runtime_env_file(
-        staged_env_path,
-        runtime_environment(
-            launch_settings,
+        staged_env_path = env_path(product_config, stable_user_id)
+        write_runtime_env_file(
+            staged_env_path,
+            runtime_environment(
+                launch_settings,
+                session_id=session_id,
+                auth_token=auth_token,
+                internal_port=runtime_internal_port(product_config),
+                profile_name=str(template_payload.get("profile_name") or runtime_profile_name()),
+                template_version=str(template_payload.get("template_version") or ""),
+            ),
+        )
+
+        record = ProductRuntimeRecord(
+            user_id=stable_user_id,
+            runtime_key=stable_runtime_key,
+            display_name=str(user.get("name") or user.get("preferred_username") or "").strip() or None,
             session_id=session_id,
-            auth_token=auth_token,
-            internal_port=runtime_internal_port(product_config),
             profile_name=str(template_payload.get("profile_name") or runtime_profile_name()),
+            template_root=str(runtime_template_root(product_config)),
             template_version=str(template_payload.get("template_version") or ""),
-        ),
-    )
-
-    record = ProductRuntimeRecord(
-        user_id=stable_user_id,
-        runtime_key=stable_runtime_key,
-        display_name=str(user.get("name") or user.get("preferred_username") or "").strip() or None,
-        session_id=session_id,
-        profile_name=str(template_payload.get("profile_name") or runtime_profile_name()),
-        template_root=str(runtime_template_root(product_config)),
-        template_version=str(template_payload.get("template_version") or ""),
-        install_root=str(staged_install_root),
-        container_name=container_name,
-        runtime=runtime_binary(product_config),
-        runtime_port=runtime_port,
-        runtime_root=str(staged_runtime_root),
-        hermes_home=str(staged_hermes_home),
-        workspace_root=str(staged_workspace_root),
-        env_file=str(staged_env_path),
-        manifest_file=str(manifest_path(product_config, stable_user_id)),
-        auth_token=auth_token,
-        status="staged",
-    )
-    write_runtime_record(record)
+            install_root=str(staged_install_root),
+            container_name=container_name,
+            runtime=runtime_binary(product_config),
+            runtime_port=runtime_port,
+            runtime_root=str(staged_runtime_root),
+            hermes_home=str(staged_hermes_home),
+            workspace_root=str(staged_workspace_root),
+            env_file=str(staged_env_path),
+            manifest_file=str(manifest_path(product_config, stable_user_id)),
+            auth_token=auth_token,
+            status="staged",
+        )
+        write_runtime_record(record)
     secure_runtime_dir(staged_runtime_root)
     return record

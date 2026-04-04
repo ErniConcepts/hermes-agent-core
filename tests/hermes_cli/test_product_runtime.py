@@ -370,8 +370,9 @@ def test_docker_run_command_adds_host_gateway_mapping():
     assert "--workdir" in command
     assert _RUNTIME_WORKSPACE_PATH in command
     assert "host.docker.internal:host-gateway" in command
-    assert "type=bind,src=/tmp/runtime/hermes,dst=/srv/hermes" in command
-    assert "type=bind,src=/tmp/runtime/hermes/SOUL.md,dst=/srv/hermes/SOUL.md,readonly" in command
+    assert "type=bind,src=/tmp/runtime/hermes,dst=/srv/hermes,readonly" in command
+    assert "type=bind,src=/tmp/runtime/hermes/sessions,dst=/srv/hermes/sessions" in command
+    assert "type=bind,src=/tmp/runtime/hermes/memories,dst=/srv/hermes/memories" in command
     assert f"type=bind,src=/tmp/workspace,dst={_RUNTIME_WORKSPACE_PATH}" in command
     assert "--read-only" in command
     assert "--cap-drop=ALL" in command
@@ -472,10 +473,9 @@ def test_docker_run_command_mounts_runtime_config_read_only_when_present(tmp_pat
 
     command = _docker_run_command(record, config)
 
-    assert (
-        f"type=bind,src={hermes_home.as_posix()}/config.yaml,dst=/srv/hermes/config.yaml,readonly"
-        in command
-    )
+    assert f"type=bind,src={hermes_home.as_posix()},dst=/srv/hermes,readonly" in command
+    assert f"type=bind,src={hermes_home.as_posix()}/sessions,dst=/srv/hermes/sessions" in command
+    assert f"type=bind,src={hermes_home.as_posix()}/memories,dst=/srv/hermes/memories" in command
 
 
 def test_stage_product_runtime_requires_ready_hermes_model_provider(tmp_path, monkeypatch):
@@ -673,3 +673,20 @@ def test_delete_product_runtime_removes_install_and_runtime_roots(tmp_path, monk
 
     assert not runtime_root.exists()
     assert not install_root.exists()
+
+
+def test_stage_product_runtime_parallel_staging_allocates_distinct_ports(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
+
+    users = [
+        {"sub": "user-1", "preferred_username": "admin", "name": "Admin User"},
+        {"sub": "user-2", "preferred_username": "bob", "name": "Bob User"},
+    ]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        records = list(executor.map(stage_product_runtime, users))
+
+    assert len({record.runtime_port for record in records}) == 2

@@ -424,7 +424,7 @@ def test_product_app_stop_route_proxies_runtime_interrupt(tmp_path, monkeypatch)
         },
     )
     monkeypatch.setattr("hermes_cli.product_app._require_csrf", lambda request: None)
-    monkeypatch.setattr("hermes_cli.product_app.stop_product_runtime_turn", lambda *args, **kwargs: True)
+    monkeypatch.setattr("hermes_cli.product_app.stop_product_chat_turn", lambda *args, **kwargs: True)
     from hermes_cli.product_app import create_product_app
 
     client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
@@ -432,6 +432,46 @@ def test_product_app_stop_route_proxies_runtime_interrupt(tmp_path, monkeypatch)
 
     assert response.status_code == 200
     assert response.json() == {"stopped": True}
+
+
+def test_product_app_chat_stream_uses_transport_layer(tmp_path, monkeypatch):
+    _configure_app(
+        monkeypatch,
+        tmp_path,
+        {
+            "sub": "ts-sub",
+            "email": "admin@example.com",
+            "preferred_username": "admin@example.com",
+            "name": "Admin Example",
+        },
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app._require_product_user",
+        lambda request: {
+            "id": "user-admin",
+            "sub": "user-admin",
+            "name": "Admin Example",
+            "preferred_username": "admin",
+            "email": "admin@example.com",
+            "is_admin": True,
+            "tailscale_login": "admin@example.com",
+        },
+    )
+    monkeypatch.setattr("hermes_cli.product_app._require_csrf", lambda request: None)
+    seen = {}
+
+    def _stream(_user, user_message, *, config=None):
+        seen["user_message"] = user_message
+        yield "event: final\ndata: {}\n\n"
+
+    monkeypatch.setattr("hermes_cli.product_app.stream_product_chat_turn", _stream)
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    response = client.post("/api/chat/turn/stream", json={"user_message": "hello"})
+
+    assert response.status_code == 200
+    assert seen["user_message"] == "hello"
 
 
 def test_product_app_rejects_first_admin_without_bootstrap_link(tmp_path, monkeypatch):

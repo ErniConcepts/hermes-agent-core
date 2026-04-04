@@ -46,11 +46,7 @@ from hermes_cli.product_oidc import (
     load_product_oidc_client_settings,
     validate_product_oidc_id_token,
 )
-from hermes_cli.product_runtime import (
-    delete_product_runtime,
-    stop_product_runtime_turn,
-    stream_product_runtime_turn,
-)
+from hermes_cli.product_runtime import delete_product_runtime
 from hermes_cli.product_stack import (
     load_first_admin_enrollment_state,
     mark_first_admin_bootstrap_completed,
@@ -683,7 +679,7 @@ def create_product_app() -> FastAPI:
             require_csrf=lambda *args, **kwargs: _require_csrf(*args, **kwargs),
             runtime_session_payload=lambda *args, **kwargs: _runtime_session_payload(*args, **kwargs),
             stream_product_runtime_turn=lambda *args, **kwargs: stream_product_chat_turn(*args, **kwargs),
-            stop_product_runtime_turn=lambda *args, **kwargs: stop_product_runtime_turn(*args, **kwargs),
+            stop_product_runtime_turn=lambda *args, **kwargs: stop_product_chat_turn(*args, **kwargs),
             product_chat_session_response_model=ProductChatSessionResponse,
             product_chat_turn_request_model=ProductChatTurnRequest,
         ),

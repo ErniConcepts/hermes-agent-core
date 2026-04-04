@@ -30,14 +30,14 @@ logger = logging.getLogger(__name__)
 
 def runtime_mounts(record: ProductRuntimeRecord) -> list[str]:
     hermes_home = Path(record.hermes_home)
+    sessions_dir = hermes_home / "sessions"
+    memories_dir = hermes_home / "memories"
     mounts = [
-        f"type=bind,src={hermes_home.as_posix()},dst=/srv/hermes",
-        f"type=bind,src={(hermes_home / 'SOUL.md').as_posix()},dst=/srv/hermes/SOUL.md,readonly",
+        f"type=bind,src={hermes_home.as_posix()},dst=/srv/hermes,readonly",
+        f"type=bind,src={sessions_dir.as_posix()},dst=/srv/hermes/sessions",
+        f"type=bind,src={memories_dir.as_posix()},dst=/srv/hermes/memories",
         f"type=bind,src={Path(record.workspace_root).as_posix()},dst={_RUNTIME_WORKSPACE_PATH}",
     ]
-    runtime_config = hermes_home / "config.yaml"
-    if runtime_config.exists():
-        mounts.insert(2, f"type=bind,src={runtime_config.as_posix()},dst=/srv/hermes/config.yaml,readonly")
     return mounts
 
 
