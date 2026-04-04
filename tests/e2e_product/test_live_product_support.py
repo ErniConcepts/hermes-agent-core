@@ -107,14 +107,17 @@ def test_run_wsl_bash_passes_e2e_env(monkeypatch) -> None:
         support.E2E_HOME,
         "/home/hermestest",
     )
+    assert captured["env"]["HERMES_E2E_TAILNET_NAME"] == ""
+    assert captured["env"]["HERMES_E2E_DEVICE_NAME"] == ""
     assert captured["env"]["EXTRA_FLAG"] == "1"
 
 
-def test_wsl_env_defaults_do_not_enable_sensitive_fallbacks() -> None:
+def test_wsl_env_defaults_leave_explicit_tailnet_settings_empty() -> None:
     env = support._wsl_env()
 
-    assert env["HERMES_E2E_ALLOW_DEFAULT_SECRET_FALLBACK"] == "0"
-    assert env["HERMES_E2E_ALLOW_DEFAULT_ADMIN_FALLBACK"] == "0"
+    assert env["HERMES_E2E_TAILNET_NAME"] == ""
+    assert env["HERMES_E2E_DEVICE_NAME"] == ""
+    assert env["HERMES_E2E_API_TAILNET_NAME"] == ""
 
 
 def test_run_wsl_bash_raises_on_failure(monkeypatch) -> None:

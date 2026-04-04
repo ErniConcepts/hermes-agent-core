@@ -154,17 +154,17 @@ Expected environment:
 - WSL distro/user configured through `HERMES_E2E_WSL_DISTRO` and `HERMES_E2E_WSL_USER` when defaults do not match
 - Docker and Tailscale working inside that WSL environment
 - product secrets available in the current shell
+- explicit tailnet routing metadata for the isolated install:
+  - `HERMES_E2E_DEVICE_NAME`
+  - `HERMES_E2E_TAILNET_NAME`
+  - optional: `HERMES_E2E_API_TAILNET_NAME`
 
 Security defaults for the live E2E lane:
 
 - do not silently import secrets from the default WSL `~/.hermes/.env`
 - do not copy the default install's admin identity into the isolated E2E install
+- do not infer tailnet routing from the operator's default product config
 - redact invite-token UI fields before saving screenshot artifacts
-
-Local-only compatibility fallbacks are opt-in:
-
-- `HERMES_E2E_ALLOW_DEFAULT_SECRET_FALLBACK=1`
-- `HERMES_E2E_ALLOW_DEFAULT_ADMIN_FALLBACK=1`
 
 CI split:
 

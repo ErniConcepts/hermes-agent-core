@@ -20,7 +20,6 @@ E2E_HOME = os.getenv("HERMES_E2E_HOME", "~/.hermes-e2e-product")
 E2E_INSTALL_DIR = os.getenv("HERMES_E2E_INSTALL_DIR", f"{E2E_HOME}/hermes-core")
 E2E_BIN_HOME = os.getenv("HERMES_E2E_BIN_HOME", f"{E2E_HOME}/bin")
 E2E_ARTIFACTS_DIR = os.getenv("HERMES_E2E_ARTIFACTS_DIR", "artifacts/e2e_product")
-DEFAULT_LIVE_HOME = "~/.hermes"
 PRODUCT_SECRET_KEYS = (
     "HERMES_PRODUCT_TAILSCALE_AUTH_KEY",
     "HERMES_PRODUCT_TAILSCALE_API_TOKEN",
@@ -67,9 +66,9 @@ def _wsl_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
             "HERMES_E2E_INSTALL_DIR": _normalize_wsl_path(E2E_INSTALL_DIR, default_home),
             "HERMES_E2E_BIN_HOME": _normalize_wsl_path(E2E_BIN_HOME, default_home),
             "HERMES_E2E_ARTIFACTS_DIR": E2E_ARTIFACTS_DIR,
-            "HERMES_E2E_DEFAULT_HOME": _normalize_wsl_path(DEFAULT_LIVE_HOME, default_home),
-            "HERMES_E2E_ALLOW_DEFAULT_SECRET_FALLBACK": os.getenv("HERMES_E2E_ALLOW_DEFAULT_SECRET_FALLBACK", "0"),
-            "HERMES_E2E_ALLOW_DEFAULT_ADMIN_FALLBACK": os.getenv("HERMES_E2E_ALLOW_DEFAULT_ADMIN_FALLBACK", "0"),
+            "HERMES_E2E_TAILNET_NAME": str(os.getenv("HERMES_E2E_TAILNET_NAME", "")).strip(),
+            "HERMES_E2E_DEVICE_NAME": str(os.getenv("HERMES_E2E_DEVICE_NAME", "")).strip(),
+            "HERMES_E2E_API_TAILNET_NAME": str(os.getenv("HERMES_E2E_API_TAILNET_NAME", "")).strip(),
         }
     )
     if extra_env:
@@ -149,7 +148,6 @@ def _seed_secrets_and_admin_script() -> str:
         python3 - <<'PY'
         import json
         import os
-        import yaml
         from pathlib import Path
 
         from hermes_cli.config import save_env_value_secure
@@ -157,33 +155,15 @@ def _seed_secrets_and_admin_script() -> str:
         from hermes_cli.product_install import ensure_product_app_service_started
         from hermes_cli.product_stack import bootstrap_first_admin_enrollment, ensure_product_stack_started, initialize_product_stack, resolve_product_urls
         from hermes_cli.product_users import bootstrap_first_admin_user, list_product_users
-        import subprocess
 
-        current_home = Path(os.path.expanduser(os.environ["HERMES_E2E_DEFAULT_HOME"]))
         target_home = Path(os.path.expanduser(os.environ["HERMES_HOME"]))
         target_home.mkdir(parents=True, exist_ok=True)
         secret_keys = [__SECRET_KEYS__]
         required_secret_keys = [__REQUIRED_SECRET_KEYS__]
-        allow_secret_fallback = os.environ.get("HERMES_E2E_ALLOW_DEFAULT_SECRET_FALLBACK") == "1"
-        allow_admin_fallback = os.environ.get("HERMES_E2E_ALLOW_DEFAULT_ADMIN_FALLBACK") == "1"
 
-        def _read_env_value(path: Path, key: str) -> str:
-            if not path.exists():
-                return ""
-            for raw in path.read_text(encoding="utf-8").splitlines():
-                if "=" not in raw:
-                    continue
-                left, right = raw.split("=", 1)
-                if left.strip() == key:
-                    return right.strip().strip('"').strip("'")
-            return ""
-
-        current_env = current_home / ".env"
         resolved_secrets = {}
         for key in secret_keys:
             value = str(os.environ.get(key, "")).strip()
-            if not value and allow_secret_fallback:
-                value = _read_env_value(current_env, key)
             if value:
                 save_env_value_secure(key, value)
                 resolved_secrets[key] = value
@@ -193,33 +173,25 @@ def _seed_secrets_and_admin_script() -> str:
             raise SystemExit(
                 "Missing required product E2E secrets: "
                 + ", ".join(missing_required)
-                + ". Set them explicitly or opt into default-home fallback."
+                + ". Set them explicitly in the environment."
             )
 
         config = load_product_config()
         config.setdefault("product", {}).setdefault("brand", {})["name"] = "Hermes Core E2E"
         config.setdefault("auth", {})["client_id"] = str(config.get("auth", {}).get("client_id") or "hermes-core-e2e").strip() or "hermes-core-e2e"
         tailscale_cfg = config.setdefault("network", {}).setdefault("tailscale", {})
-        current_product_config_path = current_home / "product.yaml"
-        if current_product_config_path.exists():
-            current_product_config = yaml.safe_load(current_product_config_path.read_text(encoding="utf-8")) or {}
-            current_tailscale_cfg = ((current_product_config.get("network") or {}).get("tailscale") or {})
-            for key in ("device_name", "tailnet_name", "api_tailnet_name"):
-                if current_tailscale_cfg.get(key) and not tailscale_cfg.get(key):
-                    tailscale_cfg[key] = str(current_tailscale_cfg[key])
-        if not tailscale_cfg.get("device_name") or not tailscale_cfg.get("tailnet_name"):
-            status = json.loads(
-                subprocess.check_output(["tailscale", "status", "--json"], text=True)
+        tailscale_cfg["device_name"] = str(os.environ.get("HERMES_E2E_DEVICE_NAME", "")).strip()
+        tailscale_cfg["tailnet_name"] = str(os.environ.get("HERMES_E2E_TAILNET_NAME", "")).strip()
+        api_tailnet_name = str(os.environ.get("HERMES_E2E_API_TAILNET_NAME", "")).strip()
+        if api_tailnet_name:
+            tailscale_cfg["api_tailnet_name"] = api_tailnet_name
+        missing_tailnet = [key for key in ("device_name", "tailnet_name") if not tailscale_cfg.get(key)]
+        if missing_tailnet:
+            raise SystemExit(
+                "Missing required product E2E tailnet settings: "
+                + ", ".join(missing_tailnet)
+                + ". Set HERMES_E2E_DEVICE_NAME and HERMES_E2E_TAILNET_NAME."
             )
-            self_info = status.get("Self", {})
-            dns_name = str(self_info.get("DNSName") or "").rstrip(".")
-            if ".ts.net" in dns_name:
-                host_part, _, suffix = dns_name.partition(".")
-                tailnet_name = suffix[: -len(".ts.net")] if suffix.endswith(".ts.net") else suffix
-                if host_part and not tailscale_cfg.get("device_name"):
-                    tailscale_cfg["device_name"] = host_part
-                if tailnet_name and not tailscale_cfg.get("tailnet_name"):
-                    tailscale_cfg["tailnet_name"] = tailnet_name
         save_product_config(config)
 
         config = initialize_product_stack(config)
@@ -229,18 +201,9 @@ def _seed_secrets_and_admin_script() -> str:
 
         users = list_product_users()
         if not any(user.is_admin and not user.disabled for user in users):
-            current_users_path = current_home / "product" / "bootstrap" / "users.json"
             admin_login = "e2e-admin@example.test"
             admin_subject = "userid:e2e-admin"
             admin_name = "E2E Admin"
-            if allow_admin_fallback and current_users_path.exists():
-                existing = json.loads(current_users_path.read_text(encoding="utf-8"))
-                for row in existing:
-                    if row.get("is_admin") and not row.get("disabled"):
-                        admin_login = str(row.get("tailscale_login") or row.get("email") or admin_login)
-                        admin_subject = str(row.get("tailscale_subject") or admin_subject)
-                        admin_name = str(row.get("display_name") or row.get("username") or admin_name)
-                        break
             bootstrap_first_admin_user(
                 tailscale_subject=admin_subject,
                 tailscale_login=admin_login,

@@ -305,23 +305,26 @@ Required local inputs:
   - `HERMES_PRODUCT_TAILSCALE_AUTH_KEY`
   - `HERMES_PRODUCT_TAILSCALE_API_TOKEN`
   - `HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET`
+- tailnet routing metadata for the isolated install:
+  - `HERMES_E2E_DEVICE_NAME`
+  - `HERMES_E2E_TAILNET_NAME`
+  - optional: `HERMES_E2E_API_TAILNET_NAME`
 
 Safer default behavior:
 
 - the suite does not silently copy secrets from the default WSL `~/.hermes/.env`
 - the suite does not clone the default install's admin identity into the isolated E2E home
+- the suite does not infer tailnet routing from the operator's existing product config
 - screenshot artifacts redact invite-token UI fields before writing PNGs
-
-Optional compatibility fallbacks for local operator machines:
-
-- `HERMES_E2E_ALLOW_DEFAULT_SECRET_FALLBACK=1`
-- `HERMES_E2E_ALLOW_DEFAULT_ADMIN_FALLBACK=1`
 
 Optional overrides:
 
 - `HERMES_E2E_WSL_DISTRO`
 - `HERMES_E2E_WSL_USER`
 - `HERMES_E2E_BASE_URL`
+- `HERMES_E2E_DEVICE_NAME`
+- `HERMES_E2E_TAILNET_NAME`
+- `HERMES_E2E_API_TAILNET_NAME`
 - `HERMES_E2E_HOME`
 - `HERMES_E2E_INSTALL_DIR`
 - `HERMES_E2E_BIN_HOME`
