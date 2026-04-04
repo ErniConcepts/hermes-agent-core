@@ -72,6 +72,7 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Runtime workspace is user-scoped and live-mounted for user uploads.
 - Runtime-local `SOUL.md` and generated runtime `config.yaml` are mounted read-only inside the container.
 - The staged Hermes home is mounted read-only by default; only runtime session state, runtime memory state, and the user workspace remain writable.
+- Runtime deletion and recreation preserve the user's workspace by default; wiping workspace data must be an explicit operator action.
 - Each per-user Hermes home also carries a `profiles/product-runtime/` copy of the operator-owned runtime inputs so the install layout matches the upstream profile-oriented direction.
 - The bundled runtime `SOUL.md` is product-specific and can be overridden by an operator-provided runtime SOUL template path in product setup.
 

@@ -107,8 +107,13 @@ def stop_product_runtime_turn(user: dict[str, Any], *, config: dict[str, Any] | 
     return _stop_product_runtime_turn_impl(record)
 
 
-def delete_product_runtime(user_id: str, *, config: dict[str, Any] | None = None) -> None:
-    _delete_product_runtime_impl(user_id, config=config)
+def delete_product_runtime(
+    user_id: str,
+    *,
+    config: dict[str, Any] | None = None,
+    delete_workspace: bool = False,
+) -> None:
+    _delete_product_runtime_impl(user_id, config=config, delete_workspace=delete_workspace)
 
 
 __all__ = [

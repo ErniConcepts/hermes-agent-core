@@ -10,7 +10,11 @@ import yaml
 from hermes_constants import get_hermes_home
 from hermes_cli.product_config import load_product_config, resolve_hermes_runtime_toolsets
 from hermes_cli.product_identity import render_product_soul
-from hermes_cli.product_runtime_common import ProductRuntimeLaunchSettings, secure_container_readable_file, secure_runtime_dir
+from hermes_cli.product_runtime_common import (
+    ProductRuntimeLaunchSettings,
+    secure_operator_readable_file,
+    secure_runtime_writable_dir,
+)
 from hermes_cli.runtime_config import build_runtime_cli_config
 
 _DEFAULT_TEMPLATE_NAME = "default"
@@ -93,11 +97,11 @@ def stage_runtime_template(
     product_config = config or load_product_config()
     template_root = runtime_template_root(product_config)
     template_root.mkdir(parents=True, exist_ok=True)
-    secure_runtime_dir(template_root)
+    secure_runtime_writable_dir(template_root)
 
     profile_root = runtime_template_profile_root(product_config)
     profile_root.mkdir(parents=True, exist_ok=True)
-    secure_runtime_dir(profile_root)
+    secure_runtime_writable_dir(profile_root)
 
     runtime_config = build_runtime_cli_config(
         base_url=launch_settings.base_url,
@@ -119,7 +123,7 @@ def stage_runtime_template(
     ]
     for soul_path in soul_paths:
         _write_text_if_changed(soul_path, soul_text)
-        secure_container_readable_file(soul_path)
+        secure_operator_readable_file(soul_path)
 
     config_paths = [
         template_root / "config.yaml",
@@ -129,11 +133,11 @@ def stage_runtime_template(
     for config_path in config_paths:
         if config_text:
             _write_text_if_changed(config_path, config_text)
-            secure_container_readable_file(config_path)
+            secure_operator_readable_file(config_path)
         elif config_path.exists():
             config_path.unlink()
 
     manifest_path = runtime_template_manifest_path(product_config)
     _write_text_if_changed(manifest_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    secure_container_readable_file(manifest_path)
+    secure_operator_readable_file(manifest_path)
     return payload

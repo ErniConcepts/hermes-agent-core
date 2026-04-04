@@ -91,6 +91,14 @@ def secure_runtime_file(path) -> None:
         pass
 
 
+def secure_operator_readable_file(path) -> None:
+    try:
+        if path.exists():
+            path.chmod(0o600)
+    except (OSError, NotImplementedError):
+        pass
+
+
 def secure_container_readable_file(path) -> None:
     try:
         if path.exists():

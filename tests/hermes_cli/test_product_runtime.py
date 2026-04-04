@@ -119,14 +119,20 @@ def test_stage_product_runtime_uses_container_readable_permissions(tmp_path, mon
     runtime_root = Path(record.runtime_root)
     hermes_home = Path(record.hermes_home)
     workspace_root = Path(record.workspace_root)
+    template_root = Path(record.template_root)
     soul_path = hermes_home / "SOUL.md"
     env_path = Path(record.env_file)
+    template_soul_path = template_root / "SOUL.md"
+    template_manifest = template_root / "template.json"
 
     assert oct(runtime_root.stat().st_mode & 0o777) == "0o755"
     assert oct(hermes_home.stat().st_mode & 0o777) == "0o700"
     assert oct(workspace_root.stat().st_mode & 0o777) == "0o700"
+    assert oct(template_root.stat().st_mode & 0o777) == "0o700"
     assert oct(soul_path.stat().st_mode & 0o777) == "0o644"
     assert oct(env_path.stat().st_mode & 0o777) == "0o600"
+    assert oct(template_soul_path.stat().st_mode & 0o777) == "0o600"
+    assert oct(template_manifest.stat().st_mode & 0o777) == "0o600"
 
 
 def test_stage_product_runtime_reuses_existing_runtime_token(tmp_path, monkeypatch):
@@ -662,8 +668,10 @@ def test_delete_product_runtime_removes_install_and_runtime_roots(tmp_path, monk
     record = stage_product_runtime(_runtime_user())
     runtime_root = Path(record.runtime_root)
     install_root = Path(record.install_root)
+    workspace_root = Path(record.workspace_root)
     assert runtime_root.exists()
     assert install_root.exists()
+    assert workspace_root.exists()
 
     monkeypatch.setattr("hermes_cli.product_runtime_container.remove_container_if_exists", lambda *_args, **_kwargs: None)
 
@@ -673,6 +681,24 @@ def test_delete_product_runtime_removes_install_and_runtime_roots(tmp_path, monk
 
     assert not runtime_root.exists()
     assert not install_root.exists()
+    assert workspace_root.exists()
+
+
+def test_delete_product_runtime_can_remove_workspace_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
+
+    record = stage_product_runtime(_runtime_user())
+    workspace_root = Path(record.workspace_root)
+    (workspace_root / "notes.txt").write_text("keep me unless explicitly removed", encoding="utf-8")
+
+    monkeypatch.setattr("hermes_cli.product_runtime_container.remove_container_if_exists", lambda *_args, **_kwargs: None)
+
+    from hermes_cli.product_runtime import delete_product_runtime
+
+    delete_product_runtime("user-1", delete_workspace=True)
+
+    assert not workspace_root.exists()
 
 
 def test_stage_product_runtime_parallel_staging_allocates_distinct_ports(tmp_path, monkeypatch):

@@ -294,14 +294,20 @@ def stop_product_runtime_turn(record: ProductRuntimeRecord) -> bool:
     return bool(payload.get("stopped"))
 
 
-def delete_product_runtime(user_id: str, *, config: dict[str, Any] | None = None) -> None:
+def delete_product_runtime(user_id: str, *, config: dict[str, Any] | None = None, delete_workspace: bool = False) -> None:
     from hermes_cli.product_runtime_staging import load_runtime_record
 
     product_config = config or load_product_config()
     record = load_runtime_record(user_id, config=product_config)
     if record is not None:
         remove_container_if_exists(record.container_name)
-        for target in (record.runtime_root, record.install_root):
+        # Runtime deletion keeps the user's workspace by default so container
+        # recreation, deactivation, and reinstall flows do not silently wipe
+        # user files. Callers must opt into full workspace removal explicitly.
+        targets = [record.runtime_root, record.install_root]
+        if delete_workspace:
+            targets.append(record.workspace_root)
+        for target in targets:
             if not target:
                 continue
             target_path = Path(target)

@@ -479,15 +479,15 @@ def stage_product_runtime(user: dict[str, object], *, config: dict[str, object] 
     launch_settings = resolve_runtime_launch_settings(product_config)
     root_config = load_config()
     model_cfg = resolve_hermes_model_config()
-    template_payload = stage_runtime_template(
-        launch_settings,
-        config=product_config,
-        root_config=root_config,
-        model_cfg=model_cfg,
-    )
-    ensure_runtime_install(product_config, stable_user_id, template_payload)
     session_id = existing.session_id if existing is not None else product_runtime_session_id(stable_user_id)
     with runtime_staging_lock(product_config):
+        template_payload = stage_runtime_template(
+            launch_settings,
+            config=product_config,
+            root_config=root_config,
+            model_cfg=model_cfg,
+        )
+        ensure_runtime_install(product_config, stable_user_id, template_payload)
         runtime_port = existing.runtime_port if existing is not None else resolve_runtime_port(product_config, stable_user_id)
         stable_runtime_key = existing.runtime_key if existing is not None and existing.runtime_key else runtime_key(stable_user_id)
         container_name = existing.container_name if existing is not None else f"hermes-product-runtime-{stable_runtime_key}"
