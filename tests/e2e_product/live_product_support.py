@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import platform
 import shutil
 import subprocess
 import textwrap
@@ -41,10 +42,14 @@ class LiveProductState:
 
 
 def _wsl_available() -> bool:
+    if platform.system() != "Windows":
+        return True
     return shutil.which("wsl.exe") is not None or shutil.which("wsl") is not None
 
 
 def _wsl_exe() -> str:
+    if platform.system() != "Windows":
+        return "bash"
     for candidate in ("wsl.exe", "wsl"):
         resolved = shutil.which(candidate)
         if resolved:
@@ -53,14 +58,16 @@ def _wsl_exe() -> str:
 
 
 def _wsl_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
+    wsl_user = os.getenv("HERMES_E2E_WSL_USER", "hermestest")
+    default_home = f"/home/{wsl_user}"
     env = dict(os.environ)
     env.update(
         {
-            "HERMES_E2E_HOME": E2E_HOME,
-            "HERMES_E2E_INSTALL_DIR": E2E_INSTALL_DIR,
-            "HERMES_E2E_BIN_HOME": E2E_BIN_HOME,
+            "HERMES_E2E_HOME": _normalize_wsl_path(E2E_HOME, default_home),
+            "HERMES_E2E_INSTALL_DIR": _normalize_wsl_path(E2E_INSTALL_DIR, default_home),
+            "HERMES_E2E_BIN_HOME": _normalize_wsl_path(E2E_BIN_HOME, default_home),
             "HERMES_E2E_ARTIFACTS_DIR": E2E_ARTIFACTS_DIR,
-            "HERMES_E2E_DEFAULT_HOME": DEFAULT_LIVE_HOME,
+            "HERMES_E2E_DEFAULT_HOME": _normalize_wsl_path(DEFAULT_LIVE_HOME, default_home),
             "HERMES_E2E_ALLOW_DEFAULT_SECRET_FALLBACK": os.getenv("HERMES_E2E_ALLOW_DEFAULT_SECRET_FALLBACK", "0"),
             "HERMES_E2E_ALLOW_DEFAULT_ADMIN_FALLBACK": os.getenv("HERMES_E2E_ALLOW_DEFAULT_ADMIN_FALLBACK", "0"),
         }
@@ -70,7 +77,27 @@ def _wsl_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def _normalize_wsl_path(path: str, default_home: str) -> str:
+    if path == "~":
+        return default_home
+    if path.startswith("~/"):
+        return f"{default_home}/{path[2:]}"
+    return path
+
+
 def _run_wsl_bash(command: str, *, extra_env: dict[str, str] | None = None, check: bool = True) -> str:
+    if platform.system() != "Windows":
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=_wsl_env(extra_env),
+        )
+        if check and result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "WSL command failed")
+        return result.stdout.strip()
+
     distro = os.getenv("HERMES_E2E_WSL_DISTRO", "Ubuntu")
     user = os.getenv("HERMES_E2E_WSL_USER", "hermestest")
     result = subprocess.run(
@@ -90,6 +117,8 @@ def _windows_repo_root() -> str:
 
 
 def _wsl_repo_root() -> str:
+    if platform.system() != "Windows":
+        return _windows_repo_root()
     windows_repo = _windows_repo_root().replace("\\", "\\\\")
     return _run_wsl_bash(f"wslpath -a '{windows_repo}'")
 
@@ -97,11 +126,17 @@ def _wsl_repo_root() -> str:
 def _e2e_exports() -> str:
     return textwrap.dedent(
         f"""
-        export HERMES_HOME="{E2E_HOME}"
-        export HERMES_INSTALL_DIR="{E2E_INSTALL_DIR}"
-        export HERMES_CORE_INSTALL_DIR="{E2E_INSTALL_DIR}"
-        export XDG_BIN_HOME="{E2E_BIN_HOME}"
-        export PATH="{E2E_BIN_HOME}:$PATH"
+        export HERMES_HOME="${{HERMES_E2E_HOME:-{E2E_HOME}}}"
+        export HERMES_INSTALL_DIR="${{HERMES_E2E_INSTALL_DIR:-{E2E_INSTALL_DIR}}}"
+        export XDG_BIN_HOME="${{HERMES_E2E_BIN_HOME:-{E2E_BIN_HOME}}}"
+        case "$HERMES_HOME" in "~/"*) HERMES_HOME="$HOME/${{HERMES_HOME#~/}}" ;; "~") HERMES_HOME="$HOME" ;; esac
+        case "$HERMES_INSTALL_DIR" in "~/"*) HERMES_INSTALL_DIR="$HOME/${{HERMES_INSTALL_DIR#~/}}" ;; "~") HERMES_INSTALL_DIR="$HOME" ;; esac
+        case "$XDG_BIN_HOME" in "~/"*) XDG_BIN_HOME="$HOME/${{XDG_BIN_HOME#~/}}" ;; "~") XDG_BIN_HOME="$HOME" ;; esac
+        export HERMES_HOME
+        export HERMES_INSTALL_DIR
+        export HERMES_CORE_INSTALL_DIR="$HERMES_INSTALL_DIR"
+        export XDG_BIN_HOME
+        export PATH="$XDG_BIN_HOME:$PATH"
         mkdir -p "$HERMES_HOME" "$XDG_BIN_HOME"
         """
     ).strip()
@@ -114,6 +149,7 @@ def _seed_secrets_and_admin_script() -> str:
         python3 - <<'PY'
         import json
         import os
+        import yaml
         from pathlib import Path
 
         from hermes_cli.config import save_env_value_secure
@@ -121,6 +157,7 @@ def _seed_secrets_and_admin_script() -> str:
         from hermes_cli.product_install import ensure_product_app_service_started
         from hermes_cli.product_stack import bootstrap_first_admin_enrollment, ensure_product_stack_started, initialize_product_stack, resolve_product_urls
         from hermes_cli.product_users import bootstrap_first_admin_user, list_product_users
+        import subprocess
 
         current_home = Path(os.path.expanduser(os.environ["HERMES_E2E_DEFAULT_HOME"]))
         target_home = Path(os.path.expanduser(os.environ["HERMES_HOME"]))
@@ -162,6 +199,27 @@ def _seed_secrets_and_admin_script() -> str:
         config = load_product_config()
         config.setdefault("product", {}).setdefault("brand", {})["name"] = "Hermes Core E2E"
         config.setdefault("auth", {})["client_id"] = str(config.get("auth", {}).get("client_id") or "hermes-core-e2e").strip() or "hermes-core-e2e"
+        tailscale_cfg = config.setdefault("network", {}).setdefault("tailscale", {})
+        current_product_config_path = current_home / "product.yaml"
+        if current_product_config_path.exists():
+            current_product_config = yaml.safe_load(current_product_config_path.read_text(encoding="utf-8")) or {}
+            current_tailscale_cfg = ((current_product_config.get("network") or {}).get("tailscale") or {})
+            for key in ("device_name", "tailnet_name", "api_tailnet_name"):
+                if current_tailscale_cfg.get(key) and not tailscale_cfg.get(key):
+                    tailscale_cfg[key] = str(current_tailscale_cfg[key])
+        if not tailscale_cfg.get("device_name") or not tailscale_cfg.get("tailnet_name"):
+            status = json.loads(
+                subprocess.check_output(["tailscale", "status", "--json"], text=True)
+            )
+            self_info = status.get("Self", {})
+            dns_name = str(self_info.get("DNSName") or "").rstrip(".")
+            if ".ts.net" in dns_name:
+                host_part, _, suffix = dns_name.partition(".")
+                tailnet_name = suffix[: -len(".ts.net")] if suffix.endswith(".ts.net") else suffix
+                if host_part and not tailscale_cfg.get("device_name"):
+                    tailscale_cfg["device_name"] = host_part
+                if tailnet_name and not tailscale_cfg.get("tailnet_name"):
+                    tailscale_cfg["tailnet_name"] = tailnet_name
         save_product_config(config)
 
         config = initialize_product_stack(config)
@@ -259,9 +317,22 @@ def run_repo_source_install() -> None:
         f"""
         set -euo pipefail
         {_e2e_exports()}
-        bash "{repo_root}/scripts/install-product.sh" --skip-setup
+        rm -rf /tmp/hermes-e2e-source
+        mkdir -p /tmp/hermes-e2e-source
+        rsync -a --delete \
+          --exclude='.git' \
+          --exclude='.venv' \
+          --exclude='.pytest_cache' \
+          --exclude='__pycache__' \
+          --exclude='.tmp' \
+          --exclude='.tmp-*' \
+          --exclude='build/pytesttmp*' \
+          "{repo_root}/" /tmp/hermes-e2e-source/
+        tr -d '\\r' < "{repo_root}/scripts/install-product.sh" > /tmp/hermes-install-product.sh
+        chmod +x /tmp/hermes-install-product.sh
+        bash /tmp/hermes-install-product.sh --skip-setup
         """,
-        extra_env={"HERMES_CORE_SOURCE_DIR": repo_root},
+        extra_env={"HERMES_CORE_SOURCE_DIR": "/tmp/hermes-e2e-source"},
     )
 
 

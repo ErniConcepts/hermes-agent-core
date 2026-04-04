@@ -92,14 +92,21 @@ def test_run_wsl_bash_passes_e2e_env(monkeypatch) -> None:
         captured["env"] = env
         return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
 
-    monkeypatch.setattr(support, "_wsl_exe", lambda: "wsl.exe")
+    if support.platform.system() == "Windows":
+        monkeypatch.setattr(support, "_wsl_exe", lambda: "wsl.exe")
+        expected_args = ["wsl.exe", "-d", "Ubuntu", "-u", "hermestest", "bash", "-lc", "echo ok"]
+    else:
+        expected_args = ["bash", "-lc", "echo ok"]
     monkeypatch.setattr(support.subprocess, "run", fake_run)
 
     result = support._run_wsl_bash("echo ok", extra_env={"EXTRA_FLAG": "1"})
 
     assert result == "ok"
-    assert captured["args"] == ["wsl.exe", "-d", "Ubuntu", "-u", "hermestest", "bash", "-lc", "echo ok"]
-    assert captured["env"]["HERMES_E2E_HOME"] == support.E2E_HOME
+    assert captured["args"] == expected_args
+    assert captured["env"]["HERMES_E2E_HOME"] == support._normalize_wsl_path(
+        support.E2E_HOME,
+        "/home/hermestest",
+    )
     assert captured["env"]["EXTRA_FLAG"] == "1"
 
 
@@ -115,7 +122,6 @@ def test_run_wsl_bash_raises_on_failure(monkeypatch) -> None:
         del args, check, capture_output, text, env
         return SimpleNamespace(returncode=1, stdout="", stderr="boom")
 
-    monkeypatch.setattr(support, "_wsl_exe", lambda: "wsl.exe")
     monkeypatch.setattr(support.subprocess, "run", fake_run)
 
     try:
