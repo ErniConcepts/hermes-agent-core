@@ -177,6 +177,30 @@ def _workspace_response_payload(payload: Any) -> ProductWorkspaceResponse:
     return ProductWorkspaceResponse(**data)
 
 
+def _load_product_oidc_client_settings(*args, **kwargs):
+    return load_product_oidc_client_settings(*args, **kwargs)
+
+
+def _discover_product_oidc_provider_metadata(*args, **kwargs):
+    return discover_product_oidc_provider_metadata(*args, **kwargs)
+
+
+def _exchange_product_oidc_code(*args, **kwargs):
+    return exchange_product_oidc_code(*args, **kwargs)
+
+
+def _validate_product_oidc_id_token(*args, **kwargs):
+    return validate_product_oidc_id_token(*args, **kwargs)
+
+
+def _fetch_product_oidc_userinfo(*args, **kwargs):
+    return fetch_product_oidc_userinfo(*args, **kwargs)
+
+
+def _claim_product_user_from_invite(*args, **kwargs):
+    return claim_product_user_from_invite(*args, **kwargs)
+
+
 def _session_secret() -> str:
     product_config = load_product_config()
     secret_ref = str(product_config.get("auth", {}).get("session_secret_ref", "")).strip()
@@ -443,6 +467,93 @@ def _build_product_app_context() -> ProductAppContext:
     return ProductAppContext(product_config=product_config, auth_provider=auth_provider, product_name=product_name)
 
 
+def _root_route_services() -> RootRouteServices:
+    return RootRouteServices(
+        build_product_index_html=build_product_index_html,
+        set_pending_invite_token=_set_pending_invite_token,
+        set_pending_bootstrap_token=_set_pending_bootstrap_token,
+        current_product_urls=_current_product_urls,
+        current_app_base_url=_current_app_base_url,
+        product_health_response_model=ProductHealthResponse,
+    )
+
+
+def _auth_route_services() -> AuthRouteServices:
+    return AuthRouteServices(
+        enforce_auth_rate_limit=_enforce_auth_rate_limit,
+        csrf_token=_csrf_token,
+        clear_notice=_clear_notice,
+        set_pending_invite_identity=_set_pending_invite_identity,
+        pending_invite_token=_pending_invite_token,
+        pending_bootstrap_token=_pending_bootstrap_token,
+        resolve_session_user=_resolve_session_user,
+        mark_bootstrap_completed_if_admin=_mark_bootstrap_completed_if_admin,
+        current_app_base_url=_current_app_base_url,
+        start_tsidp_login=_start_tsidp_login,
+        load_product_oidc_client_settings=_load_product_oidc_client_settings,
+        discover_product_oidc_provider_metadata=_discover_product_oidc_provider_metadata,
+        exchange_product_oidc_code=_exchange_product_oidc_code,
+        validate_product_oidc_id_token=_validate_product_oidc_id_token,
+        fetch_product_oidc_userinfo=_fetch_product_oidc_userinfo,
+        tailscale_identity_from_claims=_tailscale_identity_from_claims,
+        handle_tsidp_identity=_handle_tsidp_identity,
+        store_session_user=_store_session_user,
+        provider_user_session_payload=_provider_user_session_payload,
+        session_response_payload=_session_response_payload,
+        require_csrf=_require_csrf,
+        pending_invite_identity=_pending_invite_identity,
+        claim_product_user_from_invite=_claim_product_user_from_invite,
+        set_pending_invite_token=_set_pending_invite_token,
+        set_notice=_set_notice,
+        product_session_response_model=ProductSessionResponse,
+    )
+
+
+def _chat_route_services() -> ChatRouteServices:
+    return ChatRouteServices(
+        require_product_user=_require_product_user,
+        require_csrf=_require_csrf,
+        runtime_session_payload=_runtime_session_payload,
+        stream_product_runtime_turn=stream_product_chat_turn,
+        stop_product_runtime_turn=stop_product_chat_turn,
+        product_chat_session_response_model=ProductChatSessionResponse,
+        product_chat_turn_request_model=ProductChatTurnRequest,
+    )
+
+
+def _workspace_route_services() -> WorkspaceRouteServices:
+    return WorkspaceRouteServices(
+        require_product_user=_require_product_user,
+        require_csrf=_require_csrf,
+        get_workspace_state=get_workspace_state,
+        resolve_workspace_file=resolve_workspace_file,
+        create_workspace_folder=create_workspace_folder,
+        store_workspace_file=store_workspace_file,
+        delete_workspace_path=delete_workspace_path,
+        move_workspace_path=move_workspace_path,
+        product_workspace_response_model=ProductWorkspaceResponse,
+        product_create_workspace_folder_request_model=ProductCreateWorkspaceFolderRequest,
+        product_delete_workspace_path_request_model=ProductDeleteWorkspacePathRequest,
+        product_move_workspace_path_request_model=ProductMoveWorkspacePathRequest,
+        product_workspace_quota_error=ProductWorkspaceQuotaError,
+        workspace_response_payload=_workspace_response_payload,
+    )
+
+
+def _admin_route_services() -> AdminRouteServices:
+    return AdminRouteServices(
+        require_admin_user=_require_admin_user,
+        require_csrf=_require_csrf,
+        product_admin_users_response_model=ProductAdminUsersResponse,
+        product_created_user_model=ProductCreatedUser,
+        product_create_user_request_model=ProductCreateUserRequest,
+        product_user_model=ProductUser,
+        list_admin_entries=_list_admin_entries,
+        create_invited_user=_create_invited_user,
+        deactivate_product_user=_deactivate_product_user,
+    )
+
+
 def _runtime_session_payload(user: dict[str, Any]) -> dict[str, Any]:
     try:
         return get_product_chat_session(user)
@@ -631,90 +742,23 @@ def create_product_app() -> FastAPI:
     register_root_routes(
         app,
         context,
-        RootRouteServices(
-            build_product_index_html=build_product_index_html,
-            set_pending_invite_token=_set_pending_invite_token,
-            set_pending_bootstrap_token=_set_pending_bootstrap_token,
-            current_product_urls=_current_product_urls,
-            current_app_base_url=_current_app_base_url,
-            product_health_response_model=ProductHealthResponse,
-        ),
+        _root_route_services(),
     )
     register_auth_routes(
         app,
         context,
-        AuthRouteServices(
-            enforce_auth_rate_limit=lambda *args, **kwargs: _enforce_auth_rate_limit(*args, **kwargs),
-            csrf_token=lambda *args, **kwargs: _csrf_token(*args, **kwargs),
-            clear_notice=lambda *args, **kwargs: _clear_notice(*args, **kwargs),
-            set_pending_invite_identity=lambda *args, **kwargs: _set_pending_invite_identity(*args, **kwargs),
-            pending_invite_token=lambda *args, **kwargs: _pending_invite_token(*args, **kwargs),
-            pending_bootstrap_token=lambda *args, **kwargs: _pending_bootstrap_token(*args, **kwargs),
-            resolve_session_user=lambda *args, **kwargs: _resolve_session_user(*args, **kwargs),
-            mark_bootstrap_completed_if_admin=lambda *args, **kwargs: _mark_bootstrap_completed_if_admin(*args, **kwargs),
-            current_app_base_url=lambda *args, **kwargs: _current_app_base_url(*args, **kwargs),
-            start_tsidp_login=lambda *args, **kwargs: _start_tsidp_login(*args, **kwargs),
-            load_product_oidc_client_settings=lambda *args, **kwargs: load_product_oidc_client_settings(*args, **kwargs),
-            discover_product_oidc_provider_metadata=lambda *args, **kwargs: discover_product_oidc_provider_metadata(*args, **kwargs),
-            exchange_product_oidc_code=lambda *args, **kwargs: exchange_product_oidc_code(*args, **kwargs),
-            validate_product_oidc_id_token=lambda *args, **kwargs: validate_product_oidc_id_token(*args, **kwargs),
-            fetch_product_oidc_userinfo=lambda *args, **kwargs: fetch_product_oidc_userinfo(*args, **kwargs),
-            tailscale_identity_from_claims=lambda *args, **kwargs: _tailscale_identity_from_claims(*args, **kwargs),
-            handle_tsidp_identity=lambda *args, **kwargs: _handle_tsidp_identity(*args, **kwargs),
-            store_session_user=lambda *args, **kwargs: _store_session_user(*args, **kwargs),
-            provider_user_session_payload=lambda *args, **kwargs: _provider_user_session_payload(*args, **kwargs),
-            session_response_payload=lambda *args, **kwargs: _session_response_payload(*args, **kwargs),
-            require_csrf=lambda *args, **kwargs: _require_csrf(*args, **kwargs),
-            pending_invite_identity=lambda *args, **kwargs: _pending_invite_identity(*args, **kwargs),
-            claim_product_user_from_invite=lambda *args, **kwargs: claim_product_user_from_invite(*args, **kwargs),
-            set_pending_invite_token=lambda *args, **kwargs: _set_pending_invite_token(*args, **kwargs),
-            set_notice=lambda *args, **kwargs: _set_notice(*args, **kwargs),
-            product_session_response_model=ProductSessionResponse,
-        ),
+        _auth_route_services(),
     )
     register_chat_routes(
         app,
-        ChatRouteServices(
-            require_product_user=lambda *args, **kwargs: _require_product_user(*args, **kwargs),
-            require_csrf=lambda *args, **kwargs: _require_csrf(*args, **kwargs),
-            runtime_session_payload=lambda *args, **kwargs: _runtime_session_payload(*args, **kwargs),
-            stream_product_runtime_turn=lambda *args, **kwargs: stream_product_chat_turn(*args, **kwargs),
-            stop_product_runtime_turn=lambda *args, **kwargs: stop_product_chat_turn(*args, **kwargs),
-            product_chat_session_response_model=ProductChatSessionResponse,
-            product_chat_turn_request_model=ProductChatTurnRequest,
-        ),
+        _chat_route_services(),
     )
     register_workspace_routes(
         app,
-        WorkspaceRouteServices(
-            require_product_user=lambda *args, **kwargs: _require_product_user(*args, **kwargs),
-            require_csrf=lambda *args, **kwargs: _require_csrf(*args, **kwargs),
-            get_workspace_state=lambda *args, **kwargs: get_workspace_state(*args, **kwargs),
-            resolve_workspace_file=lambda *args, **kwargs: resolve_workspace_file(*args, **kwargs),
-            create_workspace_folder=lambda *args, **kwargs: create_workspace_folder(*args, **kwargs),
-            store_workspace_file=lambda *args, **kwargs: store_workspace_file(*args, **kwargs),
-            delete_workspace_path=lambda *args, **kwargs: delete_workspace_path(*args, **kwargs),
-            move_workspace_path=lambda *args, **kwargs: move_workspace_path(*args, **kwargs),
-            product_workspace_response_model=ProductWorkspaceResponse,
-            product_create_workspace_folder_request_model=ProductCreateWorkspaceFolderRequest,
-            product_delete_workspace_path_request_model=ProductDeleteWorkspacePathRequest,
-            product_move_workspace_path_request_model=ProductMoveWorkspacePathRequest,
-            product_workspace_quota_error=ProductWorkspaceQuotaError,
-            workspace_response_payload=lambda *args, **kwargs: _workspace_response_payload(*args, **kwargs),
-        ),
+        _workspace_route_services(),
     )
     register_admin_routes(
         app,
-        AdminRouteServices(
-            require_admin_user=lambda *args, **kwargs: _require_admin_user(*args, **kwargs),
-            require_csrf=lambda *args, **kwargs: _require_csrf(*args, **kwargs),
-            product_admin_users_response_model=ProductAdminUsersResponse,
-            product_created_user_model=ProductCreatedUser,
-            product_create_user_request_model=ProductCreateUserRequest,
-            product_user_model=ProductUser,
-            list_admin_entries=lambda *args, **kwargs: _list_admin_entries(*args, **kwargs),
-            create_invited_user=lambda *args, **kwargs: _create_invited_user(*args, **kwargs),
-            deactivate_product_user=lambda *args, **kwargs: _deactivate_product_user(*args, **kwargs),
-        ),
+        _admin_route_services(),
     )
     return app

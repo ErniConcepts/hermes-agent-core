@@ -397,6 +397,20 @@ def ensure_product_runtime_networking() -> dict[str, bool]:
     return {"created_network": network_created, "updated_firewall": firewall_changed}
 
 
+def _record_runtime_management_state(
+    *,
+    managed_runsc_registration: bool | None = None,
+    networking: dict[str, bool] | None = None,
+) -> None:
+    state = _product_install_state()
+    if managed_runsc_registration is not None:
+        state["managed_runsc_registration"] = bool(managed_runsc_registration or state.get("managed_runsc_registration"))
+    if networking is not None:
+        state["managed_runtime_network"] = bool(networking["created_network"] or state.get("managed_runtime_network"))
+        state["managed_runtime_firewall"] = bool(networking["updated_firewall"] or state.get("managed_runtime_firewall"))
+    save_product_install_state(state)
+
+
 def perform_product_cleanup() -> dict[str, bool]:
     result = _perform_product_cleanup_impl(
         docker_available_fn=_docker_available,
@@ -442,23 +456,15 @@ def run_product_install(args: Any) -> None:
     docker_ready, docker_message = _docker_readiness_probe()
     if not docker_ready:
         raise SystemExit(docker_message)
-    state = _product_install_state()
-    state["managed_runsc_registration"] = bool(changed or state.get("managed_runsc_registration"))
     networking = ensure_product_runtime_networking()
-    state["managed_runtime_network"] = bool(networking["created_network"] or state.get("managed_runtime_network"))
-    state["managed_runtime_firewall"] = bool(networking["updated_firewall"] or state.get("managed_runtime_firewall"))
-    save_product_install_state(state)
+    _record_runtime_management_state(managed_runsc_registration=changed, networking=networking)
     build_product_runtime_image()
     if getattr(args, "skip_setup", False):
         return
     validate_product_host_prereqs()
     setattr(args, "from_install", True)
     run_product_setup_wizard(args)
-    networking = ensure_product_runtime_networking()
-    state = _product_install_state()
-    state["managed_runtime_network"] = bool(networking["created_network"] or state.get("managed_runtime_network"))
-    state["managed_runtime_firewall"] = bool(networking["updated_firewall"] or state.get("managed_runtime_firewall"))
-    save_product_install_state(state)
+    _record_runtime_management_state(networking=ensure_product_runtime_networking())
 
 
 def run_product_uninstall(args: Any) -> None:

@@ -53,6 +53,7 @@ Hermes-native configuration remains on the upstream CLI surface:
 
 - Per-user Hermes installs running inside per-user runtime containers.
 - Each user install is seeded from one operator-owned runtime template.
+- The browser app reaches runtime chat only through the product chat transport layer; the transport should stay thin and should not grow into a second conversation engine.
 - Per-user runtimes resolve model/provider/tool behavior from the main Hermes config through that template.
 - Per-user runtimes also inherit Hermes `session_reset` policy from the main Hermes config.
 - Default runtime toolsets in this fork are `file`, `terminal`, `memory` unless the operator broadens them with normal Hermes tool configuration.
@@ -70,6 +71,7 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Product HTTP/install/setup/runtime entry files should remain thin orchestration layers over smaller fork-side helpers.
 - Runtime workspace is user-scoped and live-mounted for user uploads.
 - Runtime-local `SOUL.md` and generated runtime `config.yaml` are mounted read-only inside the container.
+- The staged Hermes home is mounted read-only by default; only runtime session state, runtime memory state, and the user workspace remain writable.
 - Each per-user Hermes home also carries a `profiles/product-runtime/` copy of the operator-owned runtime inputs so the install layout matches the upstream profile-oriented direction.
 - The bundled runtime `SOUL.md` is product-specific and can be overridden by an operator-provided runtime SOUL template path in product setup.
 

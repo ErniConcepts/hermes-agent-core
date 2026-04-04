@@ -1,10 +1,10 @@
 # Hermes Core
 
-`hermes-core` is a fork of [Hermes Agent](https://github.com/NousResearch/hermes-agent) focused on one use case:
+`hermes-core` is a fork of [Hermes Agent](https://github.com/NousResearch/hermes-agent) for one deployment shape:
 
-run one local Linux host that multiple people can access through the same Tailscale tailnet, each with their own Hermes session, workspace, and runtime.
+run one Linux host that multiple people access through the same Tailscale tailnet, each with their own Hermes account, workspace, and isolated runtime.
 
-It keeps upstream Hermes as the core, and adds:
+It keeps upstream Hermes as the agent core and adds:
 
 - multi-user web access through a Tailnet URL
 - `tsidp` authentication through Tailscale OIDC
@@ -16,7 +16,7 @@ It keeps upstream Hermes as the core, and adds:
 
 ## What This Fork Adds
 
-The deployment layer lives primarily in `hermes_cli/product_*` and includes:
+The product layer lives primarily in `hermes_cli/product_*` and adds:
 
 - `hermes-core install`
   - prepares a Linux host for Tailnet-only multi-user access
@@ -40,21 +40,20 @@ Hermes-native configuration stays on the upstream CLI:
 - `hermes setup tools` (optional when you want more than the default runtime toolset)
 - `hermes setup agent`
 
-The authenticated web surface is intentionally narrow:
+The authenticated web surface stays intentionally narrow:
 
 - sign-in
 - chat
 - user workspace
 - small admin user-management surface
 
-The product runtime used by the web app is intentionally narrower than the full
-Hermes CLI runtime. By default this fork enables only:
+The web runtime is intentionally narrower than the full Hermes CLI/runtime surface. By default it enables only:
 
 - `file`
 - `terminal`
 - `memory`
 
-The web runtime also follows Hermes-native session behavior more closely now:
+The web runtime also follows Hermes-native session behavior:
 
 - it uses the normal Hermes session transcript rather than a product-only reduced-history layer
 - it honors the standard `session_reset` policy from `~/.hermes/config.yaml`
@@ -114,7 +113,7 @@ docker info
 
 ## Quick Start
 
-Typical install flow:
+Typical operator flow:
 
 1. run the installer as your normal user
 2. let `hermes-core setup` detect the current Tailscale device and tailnet
@@ -134,7 +133,7 @@ Typical install flow:
    - `hermes setup model`
    - optional: `hermes setup tools`
    - optional: `hermes setup agent`
-11. sign into the Tailnet app URL and start using personalized agent sessions
+11. sign into the Tailnet app URL and start using per-user agent sessions
 
 ## Setup Inputs
 
@@ -245,22 +244,18 @@ The normal `hermes-core setup` flow already includes the bootstrap/start step at
 
 ## Runtime Identity
 
-By default, the web product runtime uses a product-specific generated `SOUL.md`.
-
-That bundled runtime identity tells the agent that:
+By default, the product runtime uses a generated product-specific `SOUL.md`. It tells the agent:
 
 - it is running in a per-user product runtime
 - persistent user-visible work belongs in `/workspace`
 - `/workspace/.tmp` is available for scratch/intermediate work but is not part of the normal user-facing workspace
 - actual capabilities come only from the enabled runtime toolsets
 
-Operators can still override that bundled runtime identity during `hermes-core setup` by providing a custom runtime SOUL template path.
-
-This is separate from the normal CLI `~/.hermes/SOUL.md`, which still controls standalone `hermes` sessions.
+Operators can override that runtime identity during `hermes-core setup` by providing a custom runtime SOUL template path. This is separate from the normal CLI `~/.hermes/SOUL.md`, which still controls standalone `hermes` sessions.
 
 ## Runtime Sessions
 
-Per-user web runtimes now use the normal Hermes session transcript and standard Hermes session-reset policy.
+Per-user web runtimes use the normal Hermes session transcript and standard Hermes session-reset policy.
 
 If you want automatic runtime rollover behavior, configure it through normal Hermes config in `~/.hermes/config.yaml`:
 
@@ -378,6 +373,7 @@ The fork-specific product layer is mainly here:
 
 - `hermes_cli/product_app.py`
 - `hermes_cli/product_config.py`
+- `hermes_cli/product_chat_transport.py`
 - `hermes_cli/product_install.py`
 - `hermes_cli/product_oidc.py`
 - `hermes_cli/product_runtime.py`
@@ -398,16 +394,16 @@ The fork policy is to prefer sidecar adaptation over modifying upstream Hermes f
 
 ## Architecture Flow
 
-Current high-level runtime flow:
+Current high-level flow:
 
-1. `hermes-core install` prepares host prerequisites and installs product services.
-2. `hermes-core setup` writes `~/.hermes/product.yaml`, starts bundled `tsidp`, and records its OIDC client credentials.
-3. `hermes setup ...` configures Hermes-native model/tools/gateway/agent behavior in `~/.hermes/config.yaml`.
-4. App service (`hermes_cli/product_app.py`) serves auth/session, chat proxy, workspace APIs, and narrow admin APIs.
-5. `tsidp` provides identity through Tailscale OIDC; the app stays an OIDC client.
-6. Per-user runtime containers are launched by runtime orchestration (`hermes_cli/product_runtime.py` + `hermes_cli/product_runtime_service.py`).
-7. Runtime launch settings are derived from the main Hermes config, while product infrastructure comes from `product.yaml`.
-8. User workspace files are written to user-scoped storage and live-mounted into the corresponding runtime.
+1. `hermes-core install` prepares host prerequisites, runtime networking, and product services.
+2. `hermes-core setup` writes `~/.hermes/product.yaml`, starts bundled `tsidp`, and records product auth/bootstrap state.
+3. `hermes setup ...` configures Hermes-native model, tool, and agent behavior in `~/.hermes/config.yaml`.
+4. `product_app.py` serves the browser-facing auth, session, chat, workspace, and narrow admin routes.
+5. `product_chat_transport.py` keeps the web chat path thin and routes it into the runtime layer.
+6. `product_runtime.py` stages or refreshes the per-user install, then ensures the user container is healthy.
+7. `product_runtime_service.py` runs inside the per-user container and reuses `AIAgent` against the staged Hermes home.
+8. User workspace files are stored server-side and live-mounted into the matching runtime container.
 
 Primary runtime surfaces:
 
@@ -452,7 +448,7 @@ Main fork-owned code and assets (current):
 
 ## Development
 
-Product development notes live in:
+Use the public README for install/use guidance, then the fork docs for maintenance details:
 
 - [DEVELOPMENT.md](docs/fork/DEVELOPMENT.md)
 - [SPEC.md](docs/fork/SPEC.md)

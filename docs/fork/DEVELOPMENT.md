@@ -15,7 +15,7 @@ For agent-facing fork rules and session handover expectations, also see:
 
 ## Current Product Architecture
 
-The fork adds a product layer around upstream Hermes:
+The fork adds a narrow product layer around upstream Hermes:
 
 - Product CLI:
   - `hermes-core install`
@@ -40,19 +40,22 @@ The fork adds a product layer around upstream Hermes:
 
 Current internal structure:
 
-- `product_app.py` acts as the HTTP composition layer:
+- `product_app.py` is the composition root for the browser-facing app:
   - shared auth/session helpers
-  - explicit route-service wiring
-  - route registration grouped by concern (`root`, `auth`, `chat`, `workspace`, `admin`)
-- `product_runtime.py` acts as the runtime composition layer:
-  - runtime template resolution
-  - per-user Hermes install staging
-  - runtime env staging
-  - container lifecycle and health checks
-- `product_install.py` acts as the install composition layer:
+  - explicit route registration grouped by concern (`root`, `auth`, `chat`, `workspace`, `admin`)
+  - service-bundle wiring for those route modules
+- `product_chat_transport.py` is the only web-chat transport shim:
+  - app-facing session fetch
+  - streamed turn forwarding
+  - stop forwarding
+- `product_runtime.py` is the product runtime facade:
+  - per-user install staging
+  - runtime container ensure/reuse
+  - runtime session and turn entrypoints
+- `product_install.py` is the installer orchestration layer:
   - host prerequisite checks
   - service unit rendering
-  - installer cleanup/build orchestration
+  - cleanup/build orchestration
   - runtime bridge network and firewall setup for host-local inference access
 
 Current security boundary:
@@ -69,7 +72,7 @@ Current security boundary:
   - runtime env files must reject unsafe values such as newline-delimited secrets
   - runtime env files should also reject pathologically long values
   - runtime auth must stay constant-time and token-scoped
-  - operator-seeded runtime config and SOUL inputs remain read-only mounts
+  - operator-seeded runtime config and SOUL inputs remain read-only inside the container; only runtime session/memory state and the user workspace stay writable
   - runtime session rollover should follow Hermes-native `session_reset` behavior rather than fork-only transcript heuristics
   - reasoning-tag stripping and mixed reasoning/answer stream splitting should stay in shared Hermes helpers, not product-only code
   - dangerous runtime terminal commands should fail closed unless a real product approval flow exists
@@ -109,7 +112,7 @@ Current security boundary:
 
 Product runtimes are considered ready when the Hermes config resolves to a runnable model/provider configuration. Readiness is determined from config state, not from whether a user happened to run every setup command.
 
-The current fork now stages runtime behavior through a server-owned runtime template and then materializes a full per-user Hermes home for each product user. The product app still exposes the same web/API surface, but the runtime is no longer treated as a small product-only overlay.
+The current fork stages runtime behavior through a server-owned runtime template and then materializes a full per-user Hermes home for each product user. The product app still exposes the same web/API surface, but the runtime is no longer treated as a small product-only overlay.
 
 ## Maintainer Workflow
 
@@ -117,10 +120,11 @@ For any change:
 
 1. Read relevant product-side code and tests first.
 2. Implement at the product edge (`hermes_cli/product_*`) where possible.
-3. Add or update focused tests.
-4. Verify behavior with targeted pytest slices.
-5. Update `README.md` (if user-facing) and `docs/fork/*` (if maintainer-facing).
-6. Commit only intended files; avoid bundling unrelated local artifacts.
+3. Prefer simplifying weak abstractions instead of layering new wrappers on top of old ones.
+4. Add or update focused tests.
+5. Verify behavior with targeted pytest slices.
+6. Update `README.md` (if user-facing) and `docs/fork/*` (if maintainer-facing).
+7. Commit only intended files; avoid bundling unrelated local artifacts.
 
 For installer/runtime changes, also smoke-test:
 
@@ -186,9 +190,11 @@ CI split:
 - Do not reintroduce product-only history compaction or summary handoff logic when Hermes-native session-reset behavior is sufficient.
 - Do not reintroduce host-networked runtimes; local-model reachability must go through the dedicated runtime bridge plus host firewall policy.
 
-## Related Docs
+## Doc Roles
 
-- `README.md` (public install/use guidance)
-- `docs/fork/SPEC.md` (current product contract)
-- `docs/fork/UPSTREAM-SYNC.md` (sync process with upstream Hermes)
-- `docs/fork/ROADMAP.md` (maintainer planning and next bets)
+- `README.md`: operator-facing install, setup, runtime, and E2E guidance
+- `docs/fork/AGENTS-FORK.md`: fork rules and handoff expectations
+- `docs/fork/SPEC.md`: current product contract only
+- `docs/fork/DEVELOPMENT.md`: maintainer workflow and implementation map
+- `docs/fork/ROADMAP.md`: forward-looking bets only
+- `docs/fork/UPSTREAM-SYNC.md`: upstream sync process

@@ -1,7 +1,13 @@
+"""Product runtime facade.
+
+This module intentionally exposes a small public entry surface for the product
+app and tests while delegating most work to staging/container/template helpers.
+Keep it as a thin composition layer rather than growing business logic here.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 
 from hermes_cli.product_config import load_product_config
@@ -72,12 +78,7 @@ from hermes_cli.product_runtime_staging import (
     write_runtime_record as _write_runtime_record,
     write_runtime_text_if_changed as _write_runtime_text_if_changed,
 )
-from hermes_cli.product_runtime_template import (
-    runtime_profile_name as _runtime_profile_name,
-    runtime_template_manifest_path as _runtime_template_manifest_path,
-    runtime_template_root as _runtime_template_root,
-    stage_runtime_template as _stage_runtime_template,
-)
+from hermes_cli.product_runtime_template import runtime_profile_name as _runtime_profile_name
 
 
 def ensure_product_runtime(user: dict[str, Any], *, config: dict[str, Any] | None = None) -> ProductRuntimeRecord:
@@ -108,3 +109,69 @@ def stop_product_runtime_turn(user: dict[str, Any], *, config: dict[str, Any] | 
 
 def delete_product_runtime(user_id: str, *, config: dict[str, Any] | None = None) -> None:
     _delete_product_runtime_impl(user_id, config=config)
+
+
+__all__ = [
+    "ProductRuntimeEvent",
+    "ProductRuntimeLaunchSettings",
+    "ProductRuntimeRecord",
+    "ProductRuntimeSession",
+    "ProductRuntimeTurnRequest",
+    "_RUNTIME_ENV_MATCH_KEYS",
+    "_RUNTIME_HEALTH_CACHE",
+    "_RUNTIME_HEALTH_TTL_SECONDS",
+    "_RUNTIME_WORKSPACE_PATH",
+    "_container_env_map",
+    "_docker_inspect_state",
+    "_docker_run_command",
+    "_env_path",
+    "_hermes_home",
+    "_install_root",
+    "_legacy_user_ids",
+    "_manifest_path",
+    "_migrate_legacy_runtime",
+    "_normalize_runtime_session_payload",
+    "_product_storage_root",
+    "_product_users_root",
+    "_profile_root",
+    "_remove_container_if_exists",
+    "_resolve_runtime_api_key",
+    "_resolve_runtime_launch_settings",
+    "_resolve_runtime_model_base_url",
+    "_resolve_runtime_port",
+    "_runtime_binary",
+    "_runtime_config_path",
+    "_runtime_container_user",
+    "_runtime_environment",
+    "_runtime_image",
+    "_runtime_internal_port",
+    "_runtime_key",
+    "_runtime_launch_env",
+    "_runtime_mounts",
+    "_runtime_port_range",
+    "_runtime_profile_name",
+    "_runtime_root",
+    "_runtime_toolsets",
+    "_running_container_matches_record",
+    "_secure_container_readable_file",
+    "_secure_runtime_dir",
+    "_secure_runtime_file",
+    "_secure_runtime_writable_dir",
+    "_user_id",
+    "_user_storage_root",
+    "_wait_for_runtime_health",
+    "_workspace_root",
+    "_write_runtime_cli_config",
+    "_write_runtime_env_file",
+    "_write_runtime_record",
+    "_write_runtime_text_if_changed",
+    "delete_product_runtime",
+    "ensure_product_runtime",
+    "get_product_runtime_session",
+    "load_runtime_record",
+    "product_runtime_session_id",
+    "runtime_base_url",
+    "stage_product_runtime",
+    "stop_product_runtime_turn",
+    "stream_product_runtime_turn",
+]
