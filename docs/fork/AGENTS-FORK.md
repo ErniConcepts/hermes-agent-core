@@ -55,6 +55,7 @@ Current product assumptions:
 - first admin bootstrap uses a one-time bootstrap link
 - users join through one-time invite claim links
 - per-user runtime containers
+- per-user Hermes installs inside runtime containers
 - product workspaces are live-mounted into the user runtime
 - route registration is split by concern and wired through explicit service objects
 - runtime/setup/install modules should stay as thin orchestration layers over smaller helpers

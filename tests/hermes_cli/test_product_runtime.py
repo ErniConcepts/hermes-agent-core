@@ -80,6 +80,13 @@ def test_stage_product_runtime_writes_soul_and_manifest(tmp_path, monkeypatch):
     assert loaded.runtime_key
     assert loaded.auth_token
     assert loaded.runtime == "runsc"
+    assert loaded.install_root
+    assert loaded.template_root
+    assert loaded.template_version
+    assert loaded.profile_name == "product-runtime"
+    assert Path(loaded.install_root, "template.json").exists()
+    assert Path(loaded.template_root, "template.json").exists()
+    assert Path(loaded.hermes_home, "profiles", "product-runtime", "SOUL.md").exists()
 
 
 def test_stage_product_runtime_carries_session_reset_policy_into_runtime_config(tmp_path, monkeypatch):
@@ -98,6 +105,12 @@ def test_stage_product_runtime_carries_session_reset_policy_into_runtime_config(
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are only meaningful on non-Windows hosts")
 def test_stage_product_runtime_uses_container_readable_permissions(tmp_path, monkeypatch):
+    probe = tmp_path / "chmod-probe"
+    probe.mkdir()
+    probe.chmod(0o755)
+    if oct(probe.stat().st_mode & 0o777) != "0o755":
+        pytest.skip("filesystem does not enforce POSIX mode bits for tmp_path")
+
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _configure_hermes_runtime()
 
@@ -321,6 +334,7 @@ def test_stage_product_runtime_writes_runtime_context_override_config(tmp_path, 
     assert payload["model"]["provider"] == "custom"
     assert payload["model"]["context_length"] == 32768
     assert Path(record.env_file).exists()
+    assert (Path(record.hermes_home) / "profiles" / "product-runtime" / "config.yaml").exists()
 
 
 def test_docker_run_command_adds_host_gateway_mapping():
@@ -639,3 +653,23 @@ def test_write_runtime_env_file_rejects_oversized_values(tmp_path):
                 "HERMES_PRODUCT_MODEL": "qwen3.5-9b-local",
             },
         )
+
+
+def test_delete_product_runtime_removes_install_and_runtime_roots(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime()
+
+    record = stage_product_runtime(_runtime_user())
+    runtime_root = Path(record.runtime_root)
+    install_root = Path(record.install_root)
+    assert runtime_root.exists()
+    assert install_root.exists()
+
+    monkeypatch.setattr("hermes_cli.product_runtime_container.remove_container_if_exists", lambda *_args, **_kwargs: None)
+
+    from hermes_cli.product_runtime import delete_product_runtime
+
+    delete_product_runtime("user-1")
+
+    assert not runtime_root.exists()
+    assert not install_root.exists()

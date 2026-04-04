@@ -31,6 +31,11 @@ from hermes_cli.product_auth_rate_limit import (
     ProductAuthRateLimitExceeded,
     enforce_product_auth_rate_limit,
 )
+from hermes_cli.product_chat_transport import (
+    get_product_chat_session,
+    stop_product_chat_turn,
+    stream_product_chat_turn,
+)
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_invites import list_pending_product_signup_invites
 from hermes_cli.product_oidc import (
@@ -41,7 +46,11 @@ from hermes_cli.product_oidc import (
     load_product_oidc_client_settings,
     validate_product_oidc_id_token,
 )
-from hermes_cli.product_runtime import delete_product_runtime, get_product_runtime_session, stop_product_runtime_turn, stream_product_runtime_turn
+from hermes_cli.product_runtime import (
+    delete_product_runtime,
+    stop_product_runtime_turn,
+    stream_product_runtime_turn,
+)
 from hermes_cli.product_stack import (
     load_first_admin_enrollment_state,
     mark_first_admin_bootstrap_completed,
@@ -440,7 +449,7 @@ def _build_product_app_context() -> ProductAppContext:
 
 def _runtime_session_payload(user: dict[str, Any]) -> dict[str, Any]:
     try:
-        return get_product_runtime_session(user)
+        return get_product_chat_session(user)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -673,7 +682,7 @@ def create_product_app() -> FastAPI:
             require_product_user=lambda *args, **kwargs: _require_product_user(*args, **kwargs),
             require_csrf=lambda *args, **kwargs: _require_csrf(*args, **kwargs),
             runtime_session_payload=lambda *args, **kwargs: _runtime_session_payload(*args, **kwargs),
-            stream_product_runtime_turn=lambda *args, **kwargs: stream_product_runtime_turn(*args, **kwargs),
+            stream_product_runtime_turn=lambda *args, **kwargs: stream_product_chat_turn(*args, **kwargs),
             stop_product_runtime_turn=lambda *args, **kwargs: stop_product_runtime_turn(*args, **kwargs),
             product_chat_session_response_model=ProductChatSessionResponse,
             product_chat_turn_request_model=ProductChatTurnRequest,

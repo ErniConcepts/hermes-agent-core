@@ -301,6 +301,9 @@ def delete_product_runtime(user_id: str, *, config: dict[str, Any] | None = None
     record = load_runtime_record(user_id, config=product_config)
     if record is not None:
         remove_container_if_exists(record.container_name)
-        runtime_root = Path(record.runtime_root)
-        if runtime_root.exists():
-            shutil.rmtree(runtime_root)
+        for target in (record.runtime_root, record.install_root):
+            if not target:
+                continue
+            target_path = Path(target)
+            if target_path.exists():
+                shutil.rmtree(target_path)

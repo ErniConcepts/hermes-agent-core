@@ -51,12 +51,13 @@ Hermes-native configuration remains on the upstream CLI surface:
 
 ## Runtime Model
 
-- Per-user runtime containers.
-- Per-user runtimes resolve model/provider/tool behavior from the main Hermes config.
+- Per-user Hermes installs running inside per-user runtime containers.
+- Each user install is seeded from one operator-owned runtime template.
+- Per-user runtimes resolve model/provider/tool behavior from the main Hermes config through that template.
 - Per-user runtimes also inherit Hermes `session_reset` policy from the main Hermes config.
 - Default runtime toolsets in this fork are `file`, `terminal`, `memory` unless the operator broadens them with normal Hermes tool configuration.
 - Runtime reuse is config-aware:
-  - if staged runtime env differs from the running container env, the runtime container is recreated automatically
+  - if staged runtime env or template version differs from the running container env, the runtime container is recreated automatically
 - Runtime conversation handling follows Hermes-native session behavior:
   - the full session transcript is used
   - automatic rollover is controlled by `session_reset`
@@ -69,6 +70,7 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Product HTTP/install/setup/runtime entry files should remain thin orchestration layers over smaller fork-side helpers.
 - Runtime workspace is user-scoped and live-mounted for user uploads.
 - Runtime-local `SOUL.md` and generated runtime `config.yaml` are mounted read-only inside the container.
+- Each per-user Hermes home also carries a `profiles/product-runtime/` copy of the operator-owned runtime inputs so the install layout matches the upstream profile-oriented direction.
 - The bundled runtime `SOUL.md` is product-specific and can be overridden by an operator-provided runtime SOUL template path in product setup.
 
 ## Auth and Access Contract
@@ -105,34 +107,13 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Product sessions must use a dedicated session secret; they must never derive signing keys from OIDC client secrets.
 - Public `/healthz` should stay a minimal liveness probe without issuer or topology details.
 
-## Future Direction: Contained Control Plane
+## Runtime Ownership Direction
 
-The current fork installs the Hermes control plane on the host and runs user chat execution in separate runtime containers. This keeps the product practical today, but it is not the desired long-term isolation model.
+The product runtime source of truth is operator-owned, not user-owned.
 
-Target architecture:
-
-- The host runs only a thin bootstrap/launcher layer.
-- Hermes control-plane state moves into one dedicated product-managed container.
-- That control-plane container owns:
-  - Hermes config
-  - provider credentials and runtime routing
-  - tool policy
-  - runtime defaults/templates
-- Per-user runtimes remain separate containers derived from that server-managed configuration.
-- `tsidp` and the product app continue as separate services with explicit network boundaries.
-
-Why this is preferred over using the first admin runtime as the template/source of truth:
-
-- avoids coupling platform bootstrap to one user account
-- keeps model keys and provider settings in operator-owned infrastructure, not user-owned state
-- avoids drift when the first admin changes personal runtime settings
-- makes reset, migration, backup, and multi-user tenancy cleaner
-
-Status:
-
-- not implemented yet
-- current system-level Hermes install is the temporary control-plane implementation
-- future work should move toward a contained server control plane, not toward "first admin runtime = master runtime"
+- The operator-owned product layer maintains the runtime template.
+- User installs are materialized from that template and can be recreated at any time.
+- The first admin runtime is not a template and must not become the source of truth for platform runtime policy.
 
 ## Non-Goals (Current)
 

@@ -41,6 +41,8 @@ from hermes_cli.product_runtime_container import (
 from hermes_cli.product_runtime_staging import (
     env_path as _env_path,
     hermes_home as _hermes_home,
+    profile_root as _profile_root,
+    user_install_root as _install_root,
     legacy_user_ids as _legacy_user_ids,
     load_runtime_record,
     manifest_path as _manifest_path,
@@ -69,6 +71,12 @@ from hermes_cli.product_runtime_staging import (
     write_runtime_env_file as _write_runtime_env_file,
     write_runtime_record as _write_runtime_record,
     write_runtime_text_if_changed as _write_runtime_text_if_changed,
+)
+from hermes_cli.product_runtime_template import (
+    runtime_profile_name as _runtime_profile_name,
+    runtime_template_manifest_path as _runtime_template_manifest_path,
+    runtime_template_root as _runtime_template_root,
+    stage_runtime_template as _stage_runtime_template,
 )
 
 

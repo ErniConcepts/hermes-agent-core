@@ -16,6 +16,8 @@ _RUNTIME_ENV_MATCH_KEYS = {
     "HERMES_PRODUCT_TOOLSETS",
     "HERMES_PRODUCT_API_MODE",
     "HERMES_PRODUCT_RUNTIME_MODE",
+    "HERMES_PRODUCT_PROFILE",
+    "HERMES_PRODUCT_TEMPLATE_VERSION",
     "TIRITH_FAIL_OPEN",
 }
 
@@ -35,6 +37,10 @@ class ProductRuntimeRecord(BaseModel):
     runtime_key: str | None = None
     display_name: str | None = None
     session_id: str
+    profile_name: str = "product-runtime"
+    template_root: str | None = None
+    template_version: str | None = None
+    install_root: str | None = None
     container_name: str
     runtime: str
     runtime_port: int

@@ -8,8 +8,6 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
-import yaml
-
 from hermes_cli.config import ensure_hermes_home, get_env_value, get_hermes_home, load_config
 from hermes_cli.product_config import (
     load_product_config,
@@ -17,7 +15,6 @@ from hermes_cli.product_config import (
     resolve_hermes_runtime_toolsets,
     runtime_host_access_host,
 )
-from hermes_cli.product_identity import render_product_soul
 from hermes_cli.product_runtime_common import (
     ProductRuntimeLaunchSettings,
     ProductRuntimeRecord,
@@ -27,7 +24,11 @@ from hermes_cli.product_runtime_common import (
     secure_runtime_file,
     secure_runtime_writable_dir,
 )
-from hermes_cli.runtime_config import build_runtime_cli_config
+from hermes_cli.product_runtime_template import (
+    runtime_profile_name,
+    runtime_template_root,
+    stage_runtime_template,
+)
 from hermes_cli.runtime_provider import format_runtime_provider_error, resolve_runtime_provider
 
 _MAX_RUNTIME_ENV_VALUE_LENGTH = 8192
@@ -76,6 +77,10 @@ def runtime_root(config: dict[str, object], stable_user_id: str) -> Path:
     return product_users_root(config) / runtime_key(stable_user_id) / "runtime"
 
 
+def user_install_root(config: dict[str, object], stable_user_id: str) -> Path:
+    return product_users_root(config) / runtime_key(stable_user_id) / "install"
+
+
 def user_storage_root(config: dict[str, object], stable_user_id: str) -> Path:
     return product_users_root(config) / runtime_key(stable_user_id)
 
@@ -85,7 +90,11 @@ def workspace_root(config: dict[str, object], stable_user_id: str) -> Path:
 
 
 def hermes_home(config: dict[str, object], stable_user_id: str) -> Path:
-    return runtime_root(config, stable_user_id) / "hermes"
+    return user_install_root(config, stable_user_id) / "hermes-home"
+
+
+def profile_root(config: dict[str, object], stable_user_id: str) -> Path:
+    return hermes_home(config, stable_user_id) / "profiles" / runtime_profile_name()
 
 
 def manifest_path(config: dict[str, object], stable_user_id: str) -> Path:
@@ -198,23 +207,57 @@ def write_runtime_text_if_changed(path: Path, content: str) -> bool:
     return True
 
 
+def ensure_runtime_install(
+    config: dict[str, object],
+    stable_user_id: str,
+    template_payload: dict[str, object],
+) -> Path:
+    install_root = user_install_root(config, stable_user_id)
+    runtime_home = hermes_home(config, stable_user_id)
+    runtime_profile_root = profile_root(config, stable_user_id)
+    template_root = runtime_template_root(config)
+    template_profile_root = template_root / "profiles" / runtime_profile_name()
+
+    for path in (
+        install_root,
+        runtime_home,
+        runtime_home / "profiles",
+        runtime_profile_root,
+        runtime_home / "memories",
+        runtime_home / "sessions",
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+        secure_runtime_writable_dir(path)
+
+    soul_text = (template_root / "SOUL.md").read_text(encoding="utf-8")
+    write_runtime_text_if_changed(runtime_home / "SOUL.md", soul_text)
+    secure_container_readable_file(runtime_home / "SOUL.md")
+    write_runtime_text_if_changed(runtime_profile_root / "SOUL.md", soul_text)
+    secure_container_readable_file(runtime_profile_root / "SOUL.md")
+
+    template_config_path = template_root / "config.yaml"
+    runtime_config_target = runtime_home / "config.yaml"
+    profile_config_target = runtime_profile_root / "config.yaml"
+    if template_config_path.exists():
+        config_text = template_config_path.read_text(encoding="utf-8")
+        write_runtime_text_if_changed(runtime_config_target, config_text)
+        secure_container_readable_file(runtime_config_target)
+        write_runtime_text_if_changed(profile_config_target, config_text)
+        secure_container_readable_file(profile_config_target)
+    else:
+        for path in (runtime_config_target, profile_config_target):
+            if path.exists():
+                path.unlink()
+
+    manifest_target = install_root / "template.json"
+    write_runtime_text_if_changed(manifest_target, json.dumps(template_payload, indent=2, sort_keys=True) + "\n")
+    secure_container_readable_file(manifest_target)
+    return install_root
+
+
 def write_runtime_cli_config(config: dict[str, object], stable_user_id: str, *, base_url: str, model: str) -> None:
-    _ = config
-    model_cfg = resolve_hermes_model_config()
-    root_config = load_config()
-    config_path = runtime_config_path(config, stable_user_id)
-    runtime_config = build_runtime_cli_config(
-        base_url=base_url,
-        model=model,
-        model_cfg=model_cfg,
-        root_config=root_config,
-    )
-    if not runtime_config:
-        if config_path.exists():
-            config_path.unlink()
-        return
-    write_runtime_text_if_changed(config_path, yaml.safe_dump(runtime_config, sort_keys=False))
-    secure_container_readable_file(config_path)
+    _ = (config, stable_user_id, base_url, model)
+    return None
 
 
 def resolve_runtime_api_key(model_cfg: dict[str, object]) -> str:
@@ -287,6 +330,8 @@ def runtime_environment(
     session_id: str,
     auth_token: str,
     internal_port: int,
+    profile_name: str,
+    template_version: str,
 ) -> dict[str, str]:
     return {
         "HERMES_HOME": "/srv/hermes",
@@ -307,6 +352,8 @@ def runtime_environment(
         "HERMES_PRODUCT_PROVIDER": settings.provider,
         "HERMES_PRODUCT_API_MODE": settings.api_mode,
         "HERMES_PRODUCT_MODEL": settings.model,
+        "HERMES_PRODUCT_PROFILE": profile_name,
+        "HERMES_PRODUCT_TEMPLATE_VERSION": template_version,
         "HERMES_PRODUCT_RUNTIME_TOKEN": auth_token,
     }
 
@@ -371,19 +418,24 @@ def stage_product_runtime(user: dict[str, object], *, config: dict[str, object] 
     staged_runtime_root = runtime_root(product_config, stable_user_id)
     staged_hermes_home = hermes_home(product_config, stable_user_id)
     staged_workspace_root = workspace_root(product_config, stable_user_id)
+    staged_install_root = user_install_root(product_config, stable_user_id)
     for path in (product_storage_root(product_config), product_users_root(product_config), staged_runtime_root):
         path.mkdir(parents=True, exist_ok=True)
         secure_runtime_dir(path)
-    for path in (staged_hermes_home, staged_hermes_home / "memories", staged_workspace_root, staged_workspace_root / ".tmp"):
+    for path in (staged_install_root, staged_workspace_root, staged_workspace_root / ".tmp"):
         path.mkdir(parents=True, exist_ok=True)
         secure_runtime_writable_dir(path)
 
-    soul_path = staged_hermes_home / "SOUL.md"
-    write_runtime_text_if_changed(soul_path, render_product_soul(product_config))
-    secure_container_readable_file(soul_path)
-
     launch_settings = resolve_runtime_launch_settings(product_config)
-    write_runtime_cli_config(product_config, stable_user_id, base_url=launch_settings.base_url, model=launch_settings.model)
+    root_config = load_config()
+    model_cfg = resolve_hermes_model_config()
+    template_payload = stage_runtime_template(
+        launch_settings,
+        config=product_config,
+        root_config=root_config,
+        model_cfg=model_cfg,
+    )
+    ensure_runtime_install(product_config, stable_user_id, template_payload)
     session_id = existing.session_id if existing is not None else product_runtime_session_id(stable_user_id)
     runtime_port = existing.runtime_port if existing is not None else resolve_runtime_port(product_config, stable_user_id)
     stable_runtime_key = existing.runtime_key if existing is not None and existing.runtime_key else runtime_key(stable_user_id)
@@ -398,6 +450,8 @@ def stage_product_runtime(user: dict[str, object], *, config: dict[str, object] 
             session_id=session_id,
             auth_token=auth_token,
             internal_port=runtime_internal_port(product_config),
+            profile_name=str(template_payload.get("profile_name") or runtime_profile_name()),
+            template_version=str(template_payload.get("template_version") or ""),
         ),
     )
 
@@ -406,6 +460,10 @@ def stage_product_runtime(user: dict[str, object], *, config: dict[str, object] 
         runtime_key=stable_runtime_key,
         display_name=str(user.get("name") or user.get("preferred_username") or "").strip() or None,
         session_id=session_id,
+        profile_name=str(template_payload.get("profile_name") or runtime_profile_name()),
+        template_root=str(runtime_template_root(product_config)),
+        template_version=str(template_payload.get("template_version") or ""),
+        install_root=str(staged_install_root),
         container_name=container_name,
         runtime=runtime_binary(product_config),
         runtime_port=runtime_port,
@@ -418,4 +476,5 @@ def stage_product_runtime(user: dict[str, object], *, config: dict[str, object] 
         status="staged",
     )
     write_runtime_record(record)
+    secure_runtime_dir(staged_runtime_root)
     return record

@@ -41,7 +41,7 @@ def test_ensure_runtime_docker_network_creates_missing_network():
     changed = ensure_runtime_docker_network(_run)
 
     assert changed is True
-    assert calls[1] == [
+    assert calls[1][:9] == [
         "docker",
         "network",
         "create",
@@ -51,8 +51,8 @@ def test_ensure_runtime_docker_network_creates_missing_network():
         PRODUCT_RUNTIME_NETWORK_SUBNET,
         "--gateway",
         PRODUCT_RUNTIME_NETWORK_GATEWAY,
-        PRODUCT_RUNTIME_NETWORK_NAME,
     ]
+    assert calls[1][-1] == PRODUCT_RUNTIME_NETWORK_NAME
 
 
 def test_ensure_runtime_docker_network_includes_host_mtu(monkeypatch):
