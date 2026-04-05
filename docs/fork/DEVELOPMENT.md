@@ -144,12 +144,10 @@ Latest stable verification snapshot:
 
 - branch: `main`
 - pinned commit: `643e0c4f0c921d598614e74571653e28aaa88741`
-- clean WSL install: verified
+- clean install: verified
 - `hermes-core setup`: verified
 - automatic `tsidp` OIDC client registration: verified
-- local model setup from WSL: verified with `http://172.23.240.1:8080/v1`
-- Windows-host local model URL during the same run: `http://127.0.0.1:8080/v1`
-- verified local model alias: `qwen3.5-9b-local`
+- model setup and app startup: verified
 
 Useful cleanup for repeated live E2E runs:
 
