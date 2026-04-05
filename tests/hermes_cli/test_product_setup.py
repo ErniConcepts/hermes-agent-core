@@ -130,6 +130,10 @@ def test_configure_tsidp_client_credentials_saves_client_values(tmp_path, monkey
 
     monkeypatch.setattr("hermes_cli.product_setup_bootstrap.prompt", lambda *args, **kwargs: next(prompts))
     monkeypatch.setattr(
+        "hermes_cli.product_setup_bootstrap.bootstrap_product_tailscale_oidc_client",
+        lambda config=None: (_ for _ in ()).throw(RuntimeError("auto registration unavailable")),
+    )
+    monkeypatch.setattr(
         "hermes_cli.product_setup_bootstrap.save_env_value_secure",
         lambda key, value: saved.setdefault(key, value),
     )
@@ -156,6 +160,10 @@ def test_configure_tsidp_client_credentials_keeps_existing_secret_on_blank_input
 
     monkeypatch.setattr("hermes_cli.product_setup_bootstrap.prompt", lambda *args, **kwargs: next(prompts))
     monkeypatch.setattr(
+        "hermes_cli.product_setup_bootstrap.bootstrap_product_tailscale_oidc_client",
+        lambda config=None: (_ for _ in ()).throw(RuntimeError("auto registration unavailable")),
+    )
+    monkeypatch.setattr(
         "hermes_cli.product_setup_bootstrap.save_env_value_secure",
         lambda key, value: saved.setdefault(key, value),
     )
@@ -172,6 +180,23 @@ def test_configure_tsidp_client_credentials_keeps_existing_secret_on_blank_input
     config = load_product_config()
     assert config["auth"]["client_id"] == "hermes-core"
     assert saved == {}
+
+
+def test_configure_tsidp_client_credentials_auto_registers_when_available(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_bootstrap.bootstrap_product_tailscale_oidc_client",
+        lambda config=None: {"created": True, "client_id": "auto-client"},
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_bootstrap.resolve_product_urls",
+        lambda config=None: {
+            "issuer_url": "https://idp.tail5fd7a5.ts.net",
+            "oidc_callback_url": "https://device.tail5fd7a5.ts.net/api/auth/oidc/callback",
+        },
+    )
+
+    _configure_tsidp_client_credentials()
 
 
 def test_setup_product_tailscale_requires_auth_key_and_saves_detected_values(tmp_path, monkeypatch):

@@ -6,9 +6,15 @@ import subprocess
 import time
 from typing import Any
 
+import httpx
+
 from hermes_cli.config import _secure_file, get_env_value, save_env_value_secure
 from hermes_cli.product_config import ensure_product_home, load_product_config, save_product_config
-from hermes_cli.product_oidc import discover_product_oidc_provider_metadata, load_product_oidc_client_settings
+from hermes_cli.product_oidc import (
+    discover_product_oidc_provider_metadata,
+    discover_product_oidc_provider_metadata_by_issuer,
+    load_product_oidc_client_settings,
+)
 from hermes_cli.product_stack_paths import (
     get_first_admin_enrollment_state_path,
     get_product_bootstrap_root,
@@ -258,6 +264,13 @@ def bootstrap_product_oidc_client(config: dict[str, Any] | None = None) -> dict[
     product_config = initialize_product_stack(config or load_product_config())
     ensure_product_stack_started(product_config)
     wait_for_tsidp_ready(product_config, READY_TIMEOUT_SECONDS)
+    auth = product_config.get("auth", {})
+    client_id = str(auth.get("client_id", "")).strip()
+    client_secret_ref = str(auth.get("client_secret_ref", "")).strip()
+    client_secret = str(get_env_value(client_secret_ref) or "").strip() if client_secret_ref else ""
+    if not client_id or not client_secret:
+        bootstrap_product_tailscale_oidc_client(product_config)
+        product_config = load_product_config()
     settings = load_product_oidc_client_settings(product_config)
     metadata = discover_product_oidc_provider_metadata(settings)
     return {
@@ -277,8 +290,8 @@ def tailscale_oidc_registration_payload(config: dict[str, Any]) -> dict[str, Any
     urls = resolve_product_urls(config)
     brand_name = str(config.get("product", {}).get("brand", {}).get("name", "Hermes Core")).strip() or "Hermes Core"
     return {
-        "client_name": f"{brand_name} Tailnet",
-        "redirect_uris": [f"{urls['tailnet_app_base_url'].rstrip('/')}/api/auth/tailscale/callback"],
+        "client_name": brand_name,
+        "redirect_uris": [urls["oidc_callback_url"]],
         "grant_types": ["authorization_code"],
         "response_types": ["code"],
         "scope": "openid profile email",
@@ -287,7 +300,83 @@ def tailscale_oidc_registration_payload(config: dict[str, Any]) -> dict[str, Any
 
 
 def bootstrap_product_tailscale_oidc_client(config: dict[str, Any] | None = None) -> dict[str, Any]:
-    return bootstrap_product_oidc_client(config)
+    product_config = initialize_product_stack(config or load_product_config())
+    ensure_product_stack_started(product_config)
+    wait_for_tsidp_ready(product_config, READY_TIMEOUT_SECONDS)
+    auth = product_config.setdefault("auth", {})
+    client_id = str(auth.get("client_id", "")).strip()
+    client_secret_ref = str(auth.get("client_secret_ref", "")).strip()
+    saved_client_secret = str(get_env_value(client_secret_ref) or "").strip() if client_secret_ref else ""
+    issuer_url = str(auth.get("issuer_url", "")).strip()
+
+    if client_id and client_secret_ref and saved_client_secret:
+        settings = load_product_oidc_client_settings(product_config)
+        metadata = discover_product_oidc_provider_metadata(settings)
+        return {
+            "client_id": settings.client_id,
+            "client_secret": settings.client_secret,
+            "issuer_url": settings.issuer_url,
+            "callback_url": settings.redirect_uri,
+            "registration_endpoint": metadata.registration_endpoint,
+            "created": False,
+        }
+
+    metadata = discover_product_oidc_provider_metadata_by_issuer(issuer_url)
+    registration_endpoint = str(metadata.registration_endpoint or "").strip()
+    if not registration_endpoint:
+        raise RuntimeError(
+            "tsidp does not expose an OIDC registration endpoint. Enable tsidp dynamic client registration or create the client manually."
+        )
+
+    payload = tailscale_oidc_registration_payload(product_config)
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(
+                registration_endpoint,
+                json=payload,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+            registration = response.json()
+    except httpx.HTTPStatusError as exc:
+        detail = ""
+        try:
+            detail_payload = exc.response.json()
+            if isinstance(detail_payload, dict):
+                detail = str(detail_payload.get("error_description") or detail_payload.get("error") or "").strip()
+        except ValueError:
+            detail = (exc.response.text or "").strip()
+        message = "Automatic tsidp OIDC client registration failed"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError("Automatic tsidp OIDC client registration failed") from exc
+
+    if not isinstance(registration, dict):
+        raise RuntimeError("Automatic tsidp OIDC client registration returned an unexpected payload.")
+    new_client_id = str(registration.get("client_id", "")).strip()
+    new_client_secret = str(registration.get("client_secret", "")).strip()
+    if not new_client_id or not new_client_secret:
+        raise RuntimeError("Automatic tsidp OIDC client registration did not return a client id and secret.")
+    if not client_secret_ref:
+        raise RuntimeError("auth.client_secret_ref must be configured in product.yaml")
+
+    auth["client_id"] = new_client_id
+    save_env_value_secure(client_secret_ref, new_client_secret)
+    save_product_config(product_config)
+
+    return {
+        "client_id": new_client_id,
+        "client_secret": new_client_secret,
+        "issuer_url": str(auth.get("issuer_url", "")).strip(),
+        "callback_url": resolve_product_urls(product_config)["oidc_callback_url"],
+        "registration_endpoint": registration_endpoint,
+        "created": True,
+    }
 
 
 def load_first_admin_enrollment_state() -> dict[str, Any] | None:

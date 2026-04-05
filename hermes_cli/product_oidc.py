@@ -38,6 +38,62 @@ class ProductOIDCProviderMetadata:
     userinfo_endpoint: str | None = None
     end_session_endpoint: str | None = None
     jwks_uri: str | None = None
+    registration_endpoint: str | None = None
+
+
+def discover_product_oidc_provider_metadata_by_issuer(
+    issuer_url: str,
+    *,
+    client: httpx.Client | None = None,
+) -> ProductOIDCProviderMetadata:
+    cache_key = _required_string(str(issuer_url).rstrip("/"), "auth.issuer_url")
+    if client is None:
+        cached = _OIDC_METADATA_CACHE.get(cache_key)
+        if cached is not None:
+            expires_at, metadata = cached
+            if expires_at > time.monotonic():
+                return metadata
+            _OIDC_METADATA_CACHE.pop(cache_key, None)
+    well_known_url = f"{cache_key}/.well-known/openid-configuration"
+    owns_client = client is None
+    http_client = client or httpx.Client(timeout=10.0)
+    try:
+        response = http_client.get(well_known_url)
+        response.raise_for_status()
+        payload = response.json()
+    finally:
+        if owns_client:
+            http_client.close()
+
+    issuer = _required_string(str(payload.get("issuer", cache_key)), "oidc issuer")
+    authorization_endpoint = _required_string(
+        str(payload.get("authorization_endpoint", "")),
+        "authorization_endpoint",
+    )
+    token_endpoint = _required_string(
+        str(payload.get("token_endpoint", "")),
+        "token_endpoint",
+    )
+    userinfo_endpoint = str(payload.get("userinfo_endpoint", "")).strip() or None
+    end_session_endpoint = (
+        str(payload.get("end_session_endpoint", "")).strip()
+        or str(payload.get("end_session_endpoint_uri", "")).strip()
+        or None
+    )
+    jwks_uri = str(payload.get("jwks_uri", "")).strip() or None
+    registration_endpoint = str(payload.get("registration_endpoint", "")).strip() or None
+    metadata = ProductOIDCProviderMetadata(
+        issuer=issuer,
+        authorization_endpoint=authorization_endpoint,
+        token_endpoint=token_endpoint,
+        userinfo_endpoint=userinfo_endpoint,
+        end_session_endpoint=end_session_endpoint,
+        jwks_uri=jwks_uri,
+        registration_endpoint=registration_endpoint,
+    )
+    if client is None:
+        _OIDC_METADATA_CACHE[cache_key] = (time.monotonic() + _OIDC_METADATA_CACHE_TTL_SECONDS, metadata)
+    return metadata
 
 
 def _required_string(value: str, field_name: str) -> str:
@@ -80,52 +136,7 @@ def discover_product_oidc_provider_metadata(
     *,
     client: httpx.Client | None = None,
 ) -> ProductOIDCProviderMetadata:
-    cache_key = settings.issuer_url.rstrip("/")
-    if client is None:
-        cached = _OIDC_METADATA_CACHE.get(cache_key)
-        if cached is not None:
-            expires_at, metadata = cached
-            if expires_at > time.monotonic():
-                return metadata
-            _OIDC_METADATA_CACHE.pop(cache_key, None)
-    well_known_url = f"{settings.issuer_url}/.well-known/openid-configuration"
-    owns_client = client is None
-    http_client = client or httpx.Client(timeout=10.0)
-    try:
-        response = http_client.get(well_known_url)
-        response.raise_for_status()
-        payload = response.json()
-    finally:
-        if owns_client:
-            http_client.close()
-
-    issuer = _required_string(str(payload.get("issuer", settings.issuer_url)), "oidc issuer")
-    authorization_endpoint = _required_string(
-        str(payload.get("authorization_endpoint", "")),
-        "authorization_endpoint",
-    )
-    token_endpoint = _required_string(
-        str(payload.get("token_endpoint", "")),
-        "token_endpoint",
-    )
-    userinfo_endpoint = str(payload.get("userinfo_endpoint", "")).strip() or None
-    end_session_endpoint = (
-        str(payload.get("end_session_endpoint", "")).strip()
-        or str(payload.get("end_session_endpoint_uri", "")).strip()
-        or None
-    )
-    jwks_uri = str(payload.get("jwks_uri", "")).strip() or None
-    metadata = ProductOIDCProviderMetadata(
-        issuer=issuer,
-        authorization_endpoint=authorization_endpoint,
-        token_endpoint=token_endpoint,
-        userinfo_endpoint=userinfo_endpoint,
-        end_session_endpoint=end_session_endpoint,
-        jwks_uri=jwks_uri,
-    )
-    if client is None:
-        _OIDC_METADATA_CACHE[cache_key] = (time.monotonic() + _OIDC_METADATA_CACHE_TTL_SECONDS, metadata)
-    return metadata
+    return discover_product_oidc_provider_metadata_by_issuer(settings.issuer_url, client=client)
 
 
 def clear_product_oidc_provider_metadata_cache() -> None:

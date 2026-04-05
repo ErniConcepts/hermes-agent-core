@@ -31,6 +31,10 @@ def test_merge_tsidp_policy_grants_is_idempotent(tmp_path, monkeypatch):
     assert merged["ssh"] == [{"action": "check"}]
     assert changed_again is False
     assert merged_again == merged
+    member_entries = merged["grants"][1]["app"]["tailscale.com/cap/tsidp"]
+    admin_entries = merged["grants"][2]["app"]["tailscale.com/cap/tsidp"]
+    assert member_entries[0]["allow_dcr"] is True
+    assert admin_entries[0]["allow_dcr"] is True
 
 
 def test_ensure_tsidp_policy_updates_policy_and_creates_backup(tmp_path, monkeypatch):
@@ -46,6 +50,8 @@ def test_ensure_tsidp_policy_updates_policy_and_creates_backup(tmp_path, monkeyp
         if request.method == "POST":
             payload = json.loads(request.content.decode("utf-8"))
             assert policy_has_required_tsidp_grants(payload) is True
+            assert payload["grants"][1]["app"]["tailscale.com/cap/tsidp"][0]["allow_dcr"] is True
+            assert payload["grants"][2]["app"]["tailscale.com/cap/tsidp"][0]["allow_dcr"] is True
             return httpx.Response(200, json=payload)
         if request.method == "GET":
             merged, _ = merge_tsidp_policy_grants(current_policy)

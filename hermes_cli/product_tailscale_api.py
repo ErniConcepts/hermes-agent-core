@@ -64,6 +64,7 @@ def _member_tsidp_grant() -> Dict[str, Any]:
         "app": {
             _TSIDP_CAPABILITY: [
                 {
+                    "allow_dcr": True,
                     "users": ["*"],
                     "resources": ["*"],
                 }
@@ -80,6 +81,7 @@ def _admin_tsidp_grant() -> Dict[str, Any]:
             _TSIDP_CAPABILITY: [
                 {
                     "allow_admin_ui": True,
+                    "allow_dcr": True,
                     "users": ["*"],
                     "resources": ["*"],
                 }
@@ -98,7 +100,7 @@ def _grant_capability_entries(grant: Dict[str, Any]) -> list[Dict[str, Any]]:
     return [item for item in entries if isinstance(item, dict)]
 
 
-def _is_matching_tsidp_grant(grant: Dict[str, Any], *, allow_admin_ui: bool) -> bool:
+def _is_matching_tsidp_grant(grant: Dict[str, Any], *, allow_admin_ui: bool, allow_dcr: bool = True) -> bool:
     src = grant.get("src")
     dst = grant.get("dst")
     if allow_admin_ui:
@@ -110,7 +112,10 @@ def _is_matching_tsidp_grant(grant: Dict[str, Any], *, allow_admin_ui: bool) -> 
     for entry in _grant_capability_entries(grant):
         if entry.get("users") != ["*"] or entry.get("resources") != ["*"]:
             continue
-        if bool(entry.get("allow_admin_ui", False)) == allow_admin_ui:
+        if (
+            bool(entry.get("allow_admin_ui", False)) == allow_admin_ui
+            and bool(entry.get("allow_dcr", False)) == allow_dcr
+        ):
             return True
     return False
 

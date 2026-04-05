@@ -7,6 +7,7 @@ from hermes_cli.config import get_config_path, get_env_path, get_env_value, get_
 from hermes_cli.product_config import load_product_config, save_product_config
 from hermes_cli.product_install import ensure_product_app_service_started, product_install_root, validate_product_host_prereqs
 from hermes_cli.product_stack import (
+    bootstrap_product_tailscale_oidc_client,
     bootstrap_first_admin_enrollment,
     ensure_product_stack_started,
     first_admin_bootstrap_completed,
@@ -36,6 +37,21 @@ def configure_tsidp_client_credentials() -> None:
     existing_client_secret = str(get_env_value(client_secret_ref) or "").strip()
     print()
     print_header("tsidp Client")
+    try:
+        auto_state = bootstrap_product_tailscale_oidc_client(product_config)
+    except RuntimeError as exc:
+        print_warning(str(exc))
+        print_info("Falling back to manual tsidp client setup.")
+    else:
+        if auto_state.get("created"):
+            print_success(f"Automatically created the {product_name} OIDC client in tsidp.")
+        else:
+            print_info("Reusing the saved tsidp OIDC client.")
+        print_info(f"  tsidp URL:      {urls['issuer_url']}")
+        print_info(f"  Redirect URI:   {urls['oidc_callback_url']}")
+        print_info(f"  OIDC client id: {auto_state['client_id']}")
+        return
+
     print_info("The bundled tsidp service is running.")
     print_info(f"Open the tsidp URL below and create or update the {product_name} OIDC client.")
     print_info(f"  tsidp URL:      {urls['issuer_url']}")

@@ -8,6 +8,7 @@ from hermes_cli.product_oidc import (
     create_oidc_login_request,
     create_pkce_challenge,
     discover_product_oidc_provider_metadata,
+    discover_product_oidc_provider_metadata_by_issuer,
     exchange_product_oidc_code,
     load_product_oidc_client_settings,
 )
@@ -66,6 +67,7 @@ def test_discover_product_oidc_provider_metadata_uses_well_known(monkeypatch):
                 "token_endpoint": "https://idp.corpnet.ts.net/token",
                 "userinfo_endpoint": "https://idp.corpnet.ts.net/userinfo",
                 "jwks_uri": "https://idp.corpnet.ts.net/jwks",
+                "registration_endpoint": "https://idp.corpnet.ts.net/register",
             },
         )
 
@@ -96,6 +98,32 @@ def test_discover_product_oidc_provider_metadata_uses_well_known(monkeypatch):
     assert metadata.token_endpoint == "https://idp.corpnet.ts.net/token"
     assert metadata.userinfo_endpoint == "https://idp.corpnet.ts.net/userinfo"
     assert metadata.jwks_uri == "https://idp.corpnet.ts.net/jwks"
+    assert metadata.registration_endpoint == "https://idp.corpnet.ts.net/register"
+
+
+def test_discover_product_oidc_provider_metadata_by_issuer_uses_registration_endpoint():
+    clear_product_oidc_provider_metadata_cache()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://idp.corpnet.ts.net/.well-known/openid-configuration"
+        return httpx.Response(
+            200,
+            json={
+                "issuer": "https://idp.corpnet.ts.net",
+                "authorization_endpoint": "https://idp.corpnet.ts.net/authorize",
+                "token_endpoint": "https://idp.corpnet.ts.net/token",
+                "registration_endpoint": "https://idp.corpnet.ts.net/register",
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(_handler))
+
+    metadata = discover_product_oidc_provider_metadata_by_issuer(
+        "https://idp.corpnet.ts.net",
+        client=client,
+    )
+
+    assert metadata.registration_endpoint == "https://idp.corpnet.ts.net/register"
 
 
 def test_create_oidc_login_request_uses_pkce_and_standard_scopes(monkeypatch):
