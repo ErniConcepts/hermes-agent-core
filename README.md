@@ -84,6 +84,12 @@ curl -fsSL https://github.com/ErniConcepts/hermes-agent-core/raw/refs/heads/main
 bash install-product.sh
 ```
 
+Current stable pinned install used for the latest clean WSL verification:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/643e0c4f0c921d598614e74571653e28aaa88741/scripts/install-product.sh -o install-product.sh && HERMES_CORE_SOURCE_URL="https://codeload.github.com/ErniConcepts/hermes-agent-core/tar.gz/643e0c4f0c921d598614e74571653e28aaa88741" bash install-product.sh
+```
+
 The installer is designed to:
 
 - bootstrap Python via `uv` if needed
@@ -134,6 +140,12 @@ Typical operator flow:
    - optional: `hermes setup tools`
    - optional: `hermes setup agent`
 11. sign into the Tailnet app URL and start using per-user agent sessions
+
+For the current local `llama.cpp` setup used during verification:
+
+- on Windows, use `http://127.0.0.1:8080/v1`
+- from WSL, use `http://172.23.240.1:8080/v1`
+- verified local model alias: `qwen3.5-9b-local`
 
 ## Setup Inputs
 

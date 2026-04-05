@@ -82,6 +82,9 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Product app is an OIDC client.
 - `hermes-core setup` is expected to auto-register the product OIDC client through `tsidp` when dynamic client registration is available.
 - If automatic registration is unavailable, setup may fall back to a manual operator prompt for the OIDC client id and secret.
+- The currently verified local-model operator flow uses:
+  - Windows host URL: `http://127.0.0.1:8080/v1`
+  - WSL operator URL: `http://172.23.240.1:8080/v1`
 - Tailnet URL is the only supported browser/login origin.
 - First admin bootstrap uses a one-time bootstrap link created during `hermes-core setup`.
 - First admin bootstrap can complete before any Hermes model is configured.
