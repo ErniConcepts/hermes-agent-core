@@ -462,6 +462,22 @@ def test_product_runtime_service_rejects_mismatched_runtime_token(monkeypatch, t
     assert response.status_code == 401
 
 
+def test_classify_runtime_error_treats_timeout_as_model_unavailable(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+
+    from hermes_cli.product_runtime_service import _classify_runtime_error
+
+    status_code, detail = _classify_runtime_error(RuntimeError("APITimeoutError: Request timed out."))
+
+    assert status_code == 503
+    assert detail == "Model not available. Check the server configuration."
+
+
 def test_product_runtime_session_filters_blank_assistant_messages(monkeypatch, tmp_path):
     hermes_home = tmp_path / "hermes"
     hermes_home.mkdir(parents=True)

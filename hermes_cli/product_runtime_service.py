@@ -199,10 +199,14 @@ def _classify_runtime_error(exc: Exception) -> tuple[int, str]:
     normalized = detail.lower()
     if (
         "apiconnectionerror" in normalized
+        or "apitimeouterror" in normalized
+        or "connecttimeout" in normalized
         or "connection error" in normalized
         or "max retries" in normalized
         or "failed to establish a new connection" in normalized
         or "connection refused" in normalized
+        or "timed out" in normalized
+        or "timeout" in normalized
     ):
         endpoint = _required_env("OPENAI_BASE_URL")
         model = _required_env("HERMES_PRODUCT_MODEL")

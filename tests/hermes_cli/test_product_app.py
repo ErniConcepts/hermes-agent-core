@@ -148,6 +148,27 @@ def test_product_app_invite_claim_page_includes_pending_ui(tmp_path, monkeypatch
     assert "buttonSpin" in response.text
 
 
+def test_product_app_chat_error_keeps_user_message_visible(tmp_path, monkeypatch):
+    _configure_app(
+        monkeypatch,
+        tmp_path,
+        {
+            "sub": "ts-sub",
+            "email": "admin@example.com",
+            "preferred_username": "admin@example.com",
+            "name": "Admin Example",
+        },
+    )
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "fallbackConversation" in response.text
+    assert "Your message was not saved." in response.text
+
+
 def test_product_app_uses_configured_branding_and_no_brand_dot(tmp_path, monkeypatch):
     _configure_app(
         monkeypatch,
