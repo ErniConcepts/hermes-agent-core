@@ -316,6 +316,27 @@ def print_error(text: str):
     print(color(f"✗ {text}", Colors.RED))
 
 
+def print_header(title: str):
+    """Print a section header."""
+    print()
+    print(color(f"== {title} ==", Colors.CYAN, Colors.BOLD))
+
+
+def print_success(text: str):
+    """Print success message."""
+    print(color(f"[ok] {text}", Colors.GREEN))
+
+
+def print_warning(text: str):
+    """Print warning message."""
+    print(color(f"[warn] {text}", Colors.YELLOW))
+
+
+def print_error(text: str):
+    """Print error message."""
+    print(color(f"[error] {text}", Colors.RED))
+
+
 def is_interactive_stdin() -> bool:
     """Return True when stdin looks like a usable interactive TTY."""
     stdin = getattr(sys, "stdin", None)

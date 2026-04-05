@@ -12,7 +12,7 @@ BOLD='\033[1m'
 REPO_OWNER="ErniConcepts"
 REPO_NAME="hermes-agent-core"
 DEFAULT_BRANCH="main"
-PINNED_INSTALL_REF="v2026.4.5"
+PINNED_INSTALL_REF="$DEFAULT_BRANCH"
 PYTHON_VERSION="3.11"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 INSTALL_DIR="${HERMES_INSTALL_DIR:-$HERMES_HOME/hermes-core}"
@@ -43,6 +43,28 @@ log_error() {
 print_banner() {
     echo ""
     echo -e "${MAGENTA}${BOLD}⚕ Hermes Core Installer${NC}"
+    echo ""
+}
+
+log_info() {
+    echo -e "${CYAN}>${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[ok]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[warn]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[error]${NC} $1"
+}
+
+print_banner() {
+    echo ""
+    echo -e "${MAGENTA}${BOLD}Hermes Core Installer${NC}"
     echo ""
 }
 
