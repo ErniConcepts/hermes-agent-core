@@ -27,7 +27,7 @@ The product layer lives primarily in `hermes_cli/product_*` and adds:
     - Tailscale node/tailnet detection
     - bundled `tsidp` auth key
     - Tailscale API token for automatic policy patching
-    - `tsidp` OIDC client credentials
+    - automatic `tsidp` OIDC client registration
     - first-admin bootstrap link
     - workspace limits
 - `hermes-core uninstall`
@@ -121,8 +121,8 @@ Typical operator flow:
    - Tailscale auth key for the bundled `tsidp` node
    - Tailscale API token so setup can patch tailnet policy automatically
 4. let setup patch the tailnet policy and start the bundled `tsidp` service
-5. open the `tsidp` URL shown by setup and create a Hermes Core OIDC client
-6. paste the `tsidp` client id/secret back into setup
+5. let setup automatically create or reuse the Hermes Core OIDC client in `tsidp`
+6. only if automatic registration fails, follow the printed fallback instructions and paste the `tsidp` client id/secret back into setup
 7. finish the remaining product questions:
    - product title shown in the web UI
    - optional SOUL template path
@@ -143,8 +143,6 @@ Typical operator flow:
   - Tailnet must already be available on the host
   - Tailscale auth key for the bundled `tsidp` node
   - Tailscale API token for automatic `tsidp` policy setup
-  - `tsidp` OIDC client id
-  - `tsidp` OIDC client secret
 - prompted by setup:
   - product title shown in the web UI
   - optional SOUL template path
@@ -154,16 +152,18 @@ What setup automates:
 
 - it detects the current Tailscale device and MagicDNS suffix
 - it uses the fixed `idp.<tailnet>.ts.net` hostname for the bundled `tsidp` issuer
-- it uses the API token to add the required `tailscale.com/cap/tsidp` grants
-- it verifies the policy before continuing to the `tsidp` client step
+- it uses the API token to add the required `tailscale.com/cap/tsidp` grants, including dynamic client registration
+- it automatically creates the Hermes Core OIDC client through `tsidp` when no saved client is present
+- it keeps the saved OIDC client on later runs by default
+- it falls back to the manual `tsidp` UI flow only when automatic registration is unavailable or rejected
 
 ## First Admin Bootstrap
 
 Current first-admin flow:
 
 1. `hermes-core setup` starts `tsidp` and prints the Tailnet app URL and `tsidp` issuer URL.
-2. You create a Hermes Core OIDC client in the `tsidp` UI.
-3. You paste the `client_id` and `client_secret` back into setup.
+2. Setup automatically creates or reuses the Hermes Core OIDC client in `tsidp`.
+3. If automatic registration is unavailable, setup falls back to the manual `tsidp` UI flow and prompts for `client_id` and `client_secret`.
 4. Setup generates a one-time bootstrap link on the Tailnet app URL.
 5. Open that exact bootstrap link in a browser that can access the same tailnet.
 6. Sign in with Tailscale through `tsidp`.
@@ -342,7 +342,8 @@ On reruns:
 
 - Tailscale detection is repeated from the current host/tailnet state
 - pressing Enter keeps the existing saved Tailscale auth key and API token
-- the `tsidp` client step can keep the existing client id and client secret by pressing Enter
+- the `tsidp` client is reused automatically when a saved client id and secret already exist
+- manual client prompts only appear if automatic `tsidp` registration is unavailable
 - if the first admin already exists, setup offers:
   - keep the current admin bootstrap state
   - or generate a fresh bootstrap link

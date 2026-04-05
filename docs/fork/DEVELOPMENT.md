@@ -114,6 +114,13 @@ Product runtimes are considered ready when the Hermes config resolves to a runna
 
 The current fork stages runtime behavior through a server-owned runtime template and then materializes a full per-user Hermes home for each product user. The product app still exposes the same web/API surface, but the runtime is no longer treated as a small product-only overlay.
 
+Current `tsidp` setup behavior:
+
+- setup patches tailnet policy for both `tsidp` login/admin access and dynamic client registration
+- setup attempts automatic OIDC client registration against `tsidp` when no saved client exists
+- setup keeps the saved client on reruns by default
+- setup falls back to the manual `tsidp` UI prompt only when automatic registration is unavailable or rejected
+
 ## Maintainer Workflow
 
 For any change:

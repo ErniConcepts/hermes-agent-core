@@ -80,6 +80,8 @@ Hermes-native configuration remains on the upstream CLI surface:
 
 - `tsidp` is the bundled and only auth provider.
 - Product app is an OIDC client.
+- `hermes-core setup` is expected to auto-register the product OIDC client through `tsidp` when dynamic client registration is available.
+- If automatic registration is unavailable, setup may fall back to a manual operator prompt for the OIDC client id and secret.
 - Tailnet URL is the only supported browser/login origin.
 - First admin bootstrap uses a one-time bootstrap link created during `hermes-core setup`.
 - First admin bootstrap can complete before any Hermes model is configured.
