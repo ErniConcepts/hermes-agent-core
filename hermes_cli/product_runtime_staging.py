@@ -273,6 +273,8 @@ def ensure_runtime_install(
         runtime_home,
         runtime_home / "profiles",
         runtime_profile_root,
+        runtime_home / "cron",
+        runtime_home / "logs",
         runtime_home / "memories",
         runtime_home / "sessions",
     ):

@@ -341,6 +341,8 @@ def test_stage_product_runtime_writes_runtime_context_override_config(tmp_path, 
     assert payload["model"]["context_length"] == 32768
     assert Path(record.env_file).exists()
     assert (Path(record.hermes_home) / "profiles" / "product-runtime" / "config.yaml").exists()
+    assert (Path(record.hermes_home) / "cron").is_dir()
+    assert (Path(record.hermes_home) / "logs").is_dir()
 
 
 def test_docker_run_command_adds_host_gateway_mapping():

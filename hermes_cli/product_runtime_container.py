@@ -30,10 +30,14 @@ logger = logging.getLogger(__name__)
 
 def runtime_mounts(record: ProductRuntimeRecord) -> list[str]:
     hermes_home = Path(record.hermes_home)
+    cron_dir = hermes_home / "cron"
+    logs_dir = hermes_home / "logs"
     sessions_dir = hermes_home / "sessions"
     memories_dir = hermes_home / "memories"
     mounts = [
         f"type=bind,src={hermes_home.as_posix()},dst=/srv/hermes,readonly",
+        f"type=bind,src={cron_dir.as_posix()},dst=/srv/hermes/cron",
+        f"type=bind,src={logs_dir.as_posix()},dst=/srv/hermes/logs",
         f"type=bind,src={sessions_dir.as_posix()},dst=/srv/hermes/sessions",
         f"type=bind,src={memories_dir.as_posix()},dst=/srv/hermes/memories",
         f"type=bind,src={Path(record.workspace_root).as_posix()},dst={_RUNTIME_WORKSPACE_PATH}",
