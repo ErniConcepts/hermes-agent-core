@@ -584,3 +584,12 @@ def test_product_app_requires_dedicated_session_secret(tmp_path, monkeypatch):
         assert "HERMES_PRODUCT_SESSION_SECRET" in str(exc)
     else:
         raise AssertionError("Expected product app session secret lookup to fail closed")
+
+
+def test_create_product_auth_proxy_app_compatibility_factory(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr("hermes_cli.product_app.create_product_app", lambda: sentinel)
+
+    from hermes_cli.product_app import create_product_auth_proxy_app
+
+    assert create_product_auth_proxy_app() is sentinel

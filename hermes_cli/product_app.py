@@ -762,3 +762,8 @@ def create_product_app() -> FastAPI:
         _admin_route_services(),
     )
     return app
+
+
+def create_product_auth_proxy_app() -> FastAPI:
+    """Compatibility factory for legacy auth-proxy service units."""
+    return create_product_app()
