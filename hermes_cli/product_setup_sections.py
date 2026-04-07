@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from environments.tool_call_parsers import list_parsers
 from hermes_cli.product_config import (
     load_product_config,
     runtime_backend_policy,
@@ -88,7 +89,7 @@ def setup_product_storage() -> None:
 def setup_product_runtime_backend() -> None:
     product_config = load_product_config()
     current_policy = runtime_backend_policy(product_config)
-    parser_name = runtime_tool_call_parser(product_config)
+    current_parser = runtime_tool_call_parser(product_config)
     print_header("Local Model Backend")
     print_info("Choose how product runtimes should handle local/custom model endpoints.")
     print_info("Managed backend uses Hermes tool-call parsing and is recommended for local models.")
@@ -109,9 +110,20 @@ def setup_product_runtime_backend() -> None:
         2: "managed",
     }[selected]
     product_config.setdefault("runtime", {})["backend_policy"] = backend_policy
+    if backend_policy != "standard":
+        parser_choices = list_parsers()
+        if current_parser not in parser_choices:
+            parser_choices.append(current_parser)
+        parser_choices = sorted(dict.fromkeys(parser_choices))
+        default_parser = current_parser if current_parser in parser_choices else "hermes"
+        default_parser_idx = parser_choices.index(default_parser)
+        print_info("Choose the tool-call parser for managed local-model runtimes.")
+        print_info("Hermes is the recommended default unless you are testing a model-specific format.")
+        parser_idx = prompt_choice("Managed tool-call parser:", parser_choices, default_parser_idx)
+        product_config.setdefault("runtime", {})["tool_call_parser"] = parser_choices[parser_idx]
     save_product_config(product_config)
     print_info(f"  Runtime backend policy: {backend_policy}")
-    print_info(f"  Managed tool-call parser: {parser_name}")
+    print_info(f"  Managed tool-call parser: {runtime_tool_call_parser(product_config)}")
 
 
 def setup_product_bootstrap_identity() -> bool:

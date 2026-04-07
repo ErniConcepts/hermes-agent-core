@@ -105,6 +105,7 @@ Current security boundary:
   - product title / branding shown in the web UI
   - SOUL template selection
   - runtime backend policy for local models
+  - managed tool-call parser selection for managed local-model mode
   - per-user workspace quota
   - product service startup
 - `hermes setup ...` owns:

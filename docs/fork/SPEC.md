@@ -60,6 +60,7 @@ Hermes-native configuration remains on the upstream CLI surface:
   - local/custom model endpoints default to the managed Hermes parser backend
   - remote providers stay on the standard `AIAgent` provider path
   - the managed parser defaults to `hermes`
+  - setup may expose parser selection when the operator keeps managed local-model mode enabled
 - Default runtime toolsets in this fork are `file`, `terminal`, `memory` unless the operator broadens them with normal Hermes tool configuration.
 - Runtime reuse is config-aware:
   - if staged runtime env or template version differs from the running container env, the runtime container is recreated automatically
