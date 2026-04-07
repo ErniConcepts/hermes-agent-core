@@ -319,6 +319,8 @@ def test_stage_product_runtime_writes_container_reachable_model_url(tmp_path, mo
     assert f"TMP={_RUNTIME_WORKSPACE_PATH}/.tmp" in env_text
     assert "PYTHONPATH=/app" in env_text
     assert "HERMES_PRODUCT_PROVIDER=custom" in env_text
+    assert "HERMES_PRODUCT_RUNTIME_BACKEND=managed" in env_text
+    assert "HERMES_PRODUCT_TOOL_CALL_PARSER=hermes" in env_text
     assert "TIRITH_FAIL_OPEN=false" in env_text
     assert "OPENAI_BASE_URL=http://host.docker.internal:8080/v1" in env_text
 
@@ -517,6 +519,18 @@ def test_resolve_runtime_launch_settings_uses_saved_custom_provider_api_key(tmp_
 
     assert settings.base_url == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     assert settings.api_key == "dashscope-test-key"
+    assert settings.backend == "standard"
+    assert settings.tool_call_parser is None
+
+
+def test_resolve_runtime_launch_settings_prefers_managed_backend_for_local_custom_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _configure_hermes_runtime("http://127.0.0.1:8080/v1")
+
+    settings = _resolve_runtime_launch_settings(load_product_config())
+
+    assert settings.backend == "managed"
+    assert settings.tool_call_parser == "hermes"
 
 
 def test_stage_product_runtime_migrates_legacy_username_runtime(tmp_path, monkeypatch):

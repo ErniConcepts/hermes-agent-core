@@ -65,6 +65,8 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         "host_port_end": 18150,
         "host_access_host": "host.docker.internal",
         "pids_limit": 256,
+        "backend_policy": "auto_local_managed",
+        "tool_call_parser": "hermes",
     },
     "storage": {
         "root": "product",
@@ -226,4 +228,22 @@ def runtime_host_access_host(config: Dict[str, Any] | None = None) -> str:
     configured = str(runtime_cfg.get("host_access_host", "")).strip()
     if not configured:
         raise ValueError("product runtime.host_access_host must be configured")
+    return configured
+
+
+def runtime_backend_policy(config: Dict[str, Any] | None = None) -> str:
+    product_config = config or load_product_config()
+    runtime_cfg = product_config.get("runtime", {})
+    configured = str(runtime_cfg.get("backend_policy", "auto_local_managed")).strip().lower()
+    if configured not in {"auto_local_managed", "standard", "managed"}:
+        raise ValueError("product runtime.backend_policy must be auto_local_managed, standard, or managed")
+    return configured
+
+
+def runtime_tool_call_parser(config: Dict[str, Any] | None = None) -> str:
+    product_config = config or load_product_config()
+    runtime_cfg = product_config.get("runtime", {})
+    configured = str(runtime_cfg.get("tool_call_parser", "hermes")).strip()
+    if not configured:
+        raise ValueError("product runtime.tool_call_parser must not be empty")
     return configured

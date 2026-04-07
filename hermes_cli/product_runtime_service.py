@@ -268,6 +268,8 @@ def build_runtime_agent(db: SessionDB, session_id: str, *, reasoning_callback: A
 
     provider = _required_env("HERMES_PRODUCT_PROVIDER").lower()
     api_mode = _required_env("HERMES_PRODUCT_API_MODE").lower()
+    backend = (os.getenv("HERMES_PRODUCT_RUNTIME_BACKEND", "standard") or "standard").strip().lower()
+    tool_call_parser = (os.getenv("HERMES_PRODUCT_TOOL_CALL_PARSER", "").strip() or None) if backend == "managed" else None
     model = _required_env("HERMES_PRODUCT_MODEL")
     base_url = _required_env("OPENAI_BASE_URL")
     api_key = _required_env("OPENAI_API_KEY")
@@ -287,6 +289,7 @@ def build_runtime_agent(db: SessionDB, session_id: str, *, reasoning_callback: A
         session_db=db,
         platform="product-runtime",
         reasoning_callback=reasoning_callback,
+        tool_call_parser=tool_call_parser,
         skip_context_files=False,
         save_trajectories=False,
         verbose_logging=False,

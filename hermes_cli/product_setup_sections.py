@@ -3,7 +3,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from hermes_cli.product_config import load_product_config, save_product_config
+from hermes_cli.product_config import (
+    load_product_config,
+    runtime_backend_policy,
+    runtime_tool_call_parser,
+    save_product_config,
+)
 from hermes_cli.product_stack import first_admin_bootstrap_completed, load_first_admin_enrollment_state
 from hermes_cli.setup import print_header, print_info, print_warning, prompt, prompt_choice
 
@@ -78,6 +83,35 @@ def setup_product_storage() -> None:
         save_product_config(product_config)
         print_info(f"  Per-user workspace limit: {limit_mb / 1024:.1f} GB")
         return
+
+
+def setup_product_runtime_backend() -> None:
+    product_config = load_product_config()
+    current_policy = runtime_backend_policy(product_config)
+    parser_name = runtime_tool_call_parser(product_config)
+    print_header("Local Model Backend")
+    print_info("Choose how product runtimes should handle local/custom model endpoints.")
+    print_info("Managed backend uses Hermes tool-call parsing and is recommended for local models.")
+    choices = [
+        "Managed backend for local models (recommended)",
+        "Standard backend always",
+        "Managed backend always",
+    ]
+    default_idx = {
+        "auto_local_managed": 0,
+        "standard": 1,
+        "managed": 2,
+    }.get(current_policy, 0)
+    selected = prompt_choice("Runtime backend policy:", choices, default_idx)
+    backend_policy = {
+        0: "auto_local_managed",
+        1: "standard",
+        2: "managed",
+    }[selected]
+    product_config.setdefault("runtime", {})["backend_policy"] = backend_policy
+    save_product_config(product_config)
+    print_info(f"  Runtime backend policy: {backend_policy}")
+    print_info(f"  Managed tool-call parser: {parser_name}")
 
 
 def setup_product_bootstrap_identity() -> bool:

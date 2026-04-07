@@ -10,6 +10,7 @@ from hermes_cli.product_setup import (
     complete_first_admin_bootstrap,
     setup_product_branding,
     setup_product_bootstrap_identity,
+    setup_product_runtime_backend,
     setup_product_tailscale,
 )
 from hermes_cli.product_stack import first_admin_bootstrap_completed
@@ -65,6 +66,7 @@ def test_run_product_setup_full_wizard_restarts_app_service_after_branding(tmp_p
     )
     monkeypatch.setattr("hermes_cli.product_setup.setup_product_branding", lambda: calls.append("branding"))
     monkeypatch.setattr("hermes_cli.product_setup.setup_product_identity", lambda: calls.append("identity"))
+    monkeypatch.setattr("hermes_cli.product_setup.setup_product_runtime_backend", lambda: calls.append("runtime"))
     monkeypatch.setattr("hermes_cli.product_setup.setup_product_storage", lambda: calls.append("storage"))
     monkeypatch.setattr("hermes_cli.product_setup._reload_product_app_service", lambda: calls.append("reload"))
     monkeypatch.setattr("hermes_cli.product_setup._print_product_setup_summary", lambda: calls.append("summary"))
@@ -79,10 +81,21 @@ def test_run_product_setup_full_wizard_restarts_app_service_after_branding(tmp_p
         "bootstrap:False",
         "branding",
         "identity",
+        "runtime",
         "storage",
         "reload",
         "summary",
     ]
+
+
+def test_setup_product_runtime_backend_saves_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.product_setup_sections.prompt_choice", lambda *args, **kwargs: 2)
+
+    setup_product_runtime_backend()
+
+    config = load_product_config()
+    assert config["runtime"]["backend_policy"] == "managed"
 
 
 def test_setup_product_bootstrap_identity_does_not_require_manual_login_value(tmp_path, monkeypatch):

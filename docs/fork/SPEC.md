@@ -56,6 +56,10 @@ Hermes-native configuration remains on the upstream CLI surface:
 - The browser app reaches runtime chat only through the product chat transport layer; the transport should stay thin and should not grow into a second conversation engine.
 - Per-user runtimes resolve model/provider/tool behavior from the main Hermes config through that template.
 - Per-user runtimes also inherit Hermes `session_reset` policy from the main Hermes config.
+- Runtime backend policy is product-managed:
+  - local/custom model endpoints default to the managed Hermes parser backend
+  - remote providers stay on the standard `AIAgent` provider path
+  - the managed parser defaults to `hermes`
 - Default runtime toolsets in this fork are `file`, `terminal`, `memory` unless the operator broadens them with normal Hermes tool configuration.
 - Runtime reuse is config-aware:
   - if staged runtime env or template version differs from the running container env, the runtime container is recreated automatically

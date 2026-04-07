@@ -16,6 +16,8 @@ _RUNTIME_ENV_MATCH_KEYS = {
     "HERMES_PRODUCT_TOOLSETS",
     "HERMES_PRODUCT_API_MODE",
     "HERMES_PRODUCT_RUNTIME_MODE",
+    "HERMES_PRODUCT_RUNTIME_BACKEND",
+    "HERMES_PRODUCT_TOOL_CALL_PARSER",
     "HERMES_PRODUCT_PROFILE",
     "HERMES_PRODUCT_TEMPLATE_VERSION",
     "TIRITH_FAIL_OPEN",
@@ -30,6 +32,8 @@ class ProductRuntimeLaunchSettings:
     api_mode: str
     api_key: str
     toolsets: list[str]
+    backend: str
+    tool_call_parser: str | None
 
 
 class ProductRuntimeRecord(BaseModel):
@@ -50,6 +54,8 @@ class ProductRuntimeRecord(BaseModel):
     env_file: str
     manifest_file: str
     auth_token: str | None = None
+    backend: str | None = None
+    tool_call_parser: str | None = None
     status: str = "staged"
 
 

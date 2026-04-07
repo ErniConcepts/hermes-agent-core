@@ -52,6 +52,7 @@ Current internal structure:
   - per-user install staging
   - runtime container ensure/reuse
   - runtime session and turn entrypoints
+  - backend selection for local-model-first runtimes (`standard` vs managed parser mode)
 - `product_install.py` is the installer orchestration layer:
   - host prerequisite checks
   - service unit rendering
@@ -75,6 +76,7 @@ Current security boundary:
   - operator-seeded runtime config and SOUL inputs remain read-only inside the container; only runtime session/memory state and the user workspace stay writable
   - runtime session rollover should follow Hermes-native `session_reset` behavior rather than fork-only transcript heuristics
   - reasoning-tag stripping and mixed reasoning/answer stream splitting should stay in shared Hermes helpers, not product-only code
+  - local/custom endpoints should default to the managed Hermes parser backend; remote providers should stay on the standard path unless the operator overrides it
   - dangerous runtime terminal commands should fail closed unless a real product approval flow exists
 
 ## Current Auth and Admin Behavior
@@ -102,6 +104,7 @@ Current security boundary:
   - first-admin bootstrap link creation
   - product title / branding shown in the web UI
   - SOUL template selection
+  - runtime backend policy for local models
   - per-user workspace quota
   - product service startup
 - `hermes setup ...` owns:

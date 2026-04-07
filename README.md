@@ -132,6 +132,7 @@ Typical operator flow:
 7. finish the remaining product questions:
    - product title shown in the web UI
    - optional SOUL template path
+   - local-model backend policy
    - per-user workspace limit
 8. open the one-time first-admin bootstrap URL from the setup summary
 9. sign in with Tailscale to create the first admin account
@@ -152,6 +153,7 @@ Typical operator flow:
 - prompted by setup:
   - product title shown in the web UI
   - optional SOUL template path
+  - local-model backend policy
   - per-user workspace limit
 
 What setup automates:
@@ -162,6 +164,7 @@ What setup automates:
 - it automatically creates the Hermes Core OIDC client through `tsidp` when no saved client is present
 - it keeps the saved OIDC client on later runs by default
 - it falls back to the manual `tsidp` UI flow only when automatic registration is unavailable or rejected
+- it defaults local/custom runtime routes to the managed Hermes parser backend while leaving remote providers on the standard runtime path
 
 ## First Admin Bootstrap
 

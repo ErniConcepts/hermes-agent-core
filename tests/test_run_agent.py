@@ -259,6 +259,33 @@ class TestExtractReasoning:
         assert "part1" in result
         assert "part2" in result
 
+
+class TestToolCallParserFallback:
+    def test_recovers_hermes_xml_tool_calls(self, agent):
+        agent.tool_call_parser = "hermes"
+        msg = _mock_assistant_msg(
+            content='<tool_call>{"name":"web_search","arguments":{"query":"hello"}}</tool_call>',
+            tool_calls=None,
+        )
+
+        agent._apply_tool_call_parser_fallback(msg)
+
+        assert msg.tool_calls is not None
+        assert len(msg.tool_calls) == 1
+        assert msg.tool_calls[0].function.name == "web_search"
+        assert json.loads(msg.tool_calls[0].function.arguments) == {"query": "hello"}
+        assert msg.content is None
+
+    def test_noop_when_parser_disabled(self, agent):
+        msg = _mock_assistant_msg(
+            content='<tool_call>{"name":"web_search","arguments":{"query":"hello"}}</tool_call>',
+            tool_calls=None,
+        )
+
+        agent._apply_tool_call_parser_fallback(msg)
+
+        assert msg.tool_calls is None
+
     def test_deduplication(self, agent):
         msg = _mock_assistant_msg(
             reasoning="same text",

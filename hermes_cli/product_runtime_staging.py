@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -16,7 +17,9 @@ from hermes_cli.product_config import (
     load_product_config,
     resolve_hermes_model_config,
     resolve_hermes_runtime_toolsets,
+    runtime_backend_policy,
     runtime_host_access_host,
+    runtime_tool_call_parser,
 )
 from hermes_cli.product_runtime_common import (
     ProductRuntimeLaunchSettings,
@@ -337,6 +340,52 @@ def resolve_runtime_api_key(model_cfg: dict[str, object]) -> str:
     return str(get_env_value("OPENAI_API_KEY") or "").strip()
 
 
+def _host_looks_local(hostname: str) -> bool:
+    normalized = str(hostname or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized in {"localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal"}:
+        return True
+    try:
+        parsed = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return bool(parsed.is_loopback or parsed.is_private or parsed.is_link_local)
+
+
+def _route_looks_local(base_url: str) -> bool:
+    parsed = urlparse(str(base_url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return _host_looks_local(parsed.hostname or "")
+
+
+def resolve_runtime_backend_mode(
+    product_config: dict[str, object],
+    *,
+    provider: str,
+    base_url: str,
+) -> str:
+    policy = runtime_backend_policy(product_config)
+    if policy == "standard":
+        return "standard"
+    if policy == "managed":
+        return "managed"
+    if provider == "custom" and _route_looks_local(base_url):
+        return "managed"
+    return "standard"
+
+
+def resolve_runtime_tool_parser(
+    product_config: dict[str, object],
+    *,
+    backend: str,
+) -> str | None:
+    if backend != "managed":
+        return None
+    return runtime_tool_call_parser(product_config)
+
+
 def resolve_runtime_launch_settings(product_config: dict[str, object]) -> ProductRuntimeLaunchSettings:
     try:
         model_cfg = resolve_hermes_model_config()
@@ -365,14 +414,23 @@ def resolve_runtime_launch_settings(product_config: dict[str, object]) -> Produc
         raise RuntimeError("Hermes model.default must be configured. Run 'hermes setup model'.")
     if not base_url:
         raise RuntimeError("Hermes runtime base URL is not available. Run 'hermes setup model'.")
+    adjusted_base_url = resolve_runtime_model_base_url(product_config, base_url)
+    backend = resolve_runtime_backend_mode(
+        product_config,
+        provider=provider,
+        base_url=adjusted_base_url,
+    )
+    tool_call_parser = resolve_runtime_tool_parser(product_config, backend=backend)
 
     return ProductRuntimeLaunchSettings(
         model=model,
         provider=provider,
-        base_url=resolve_runtime_model_base_url(product_config, base_url),
+        base_url=adjusted_base_url,
         api_mode=api_mode,
         api_key=api_key,
         toolsets=runtime_toolsets(product_config),
+        backend=backend,
+        tool_call_parser=tool_call_parser,
     )
 
 
@@ -396,6 +454,7 @@ def runtime_environment(
         "OPENAI_BASE_URL": settings.base_url,
         "OPENAI_API_KEY": settings.api_key,
         "HERMES_PRODUCT_RUNTIME_MODE": "product",
+        "HERMES_PRODUCT_RUNTIME_BACKEND": settings.backend,
         "TIRITH_FAIL_OPEN": "false",
         "HERMES_RUNTIME_HOST": "0.0.0.0",
         "HERMES_RUNTIME_PORT": str(internal_port),
@@ -404,6 +463,7 @@ def runtime_environment(
         "HERMES_PRODUCT_PROVIDER": settings.provider,
         "HERMES_PRODUCT_API_MODE": settings.api_mode,
         "HERMES_PRODUCT_MODEL": settings.model,
+        "HERMES_PRODUCT_TOOL_CALL_PARSER": settings.tool_call_parser or "",
         "HERMES_PRODUCT_PROFILE": profile_name,
         "HERMES_PRODUCT_TEMPLATE_VERSION": template_version,
         "HERMES_PRODUCT_RUNTIME_TOKEN": auth_token,
@@ -526,6 +586,8 @@ def stage_product_runtime(user: dict[str, object], *, config: dict[str, object] 
             env_file=str(staged_env_path),
             manifest_file=str(manifest_path(product_config, stable_user_id)),
             auth_token=auth_token,
+            backend=launch_settings.backend,
+            tool_call_parser=launch_settings.tool_call_parser,
             status="staged",
         )
         write_runtime_record(record)

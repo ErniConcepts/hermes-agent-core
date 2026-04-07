@@ -20,6 +20,7 @@ from hermes_cli.product_setup_sections import (
     setup_product_branding,
     setup_product_bootstrap_identity,
     setup_product_identity,
+    setup_product_runtime_backend,
     setup_product_storage,
 )
 from hermes_cli.product_setup_tailscale import (
@@ -41,6 +42,7 @@ PRODUCT_SETUP_SECTIONS = [
     ("bootstrap", "Tailnet Auth & First Admin"),
     ("branding", "Branding"),
     ("identity", "Agent Identity"),
+    ("runtime", "Local Model Backend"),
     ("storage", "Workspace Storage"),
 ]
 
@@ -70,6 +72,8 @@ def run_product_setup_wizard(args: Any) -> None:
             setup_product_branding()
         elif section == "identity":
             setup_product_identity()
+        elif section == "runtime":
+            setup_product_runtime_backend()
         elif section == "storage":
             setup_product_storage()
         elif section == "bootstrap":
@@ -94,6 +98,7 @@ def run_product_setup_wizard(args: Any) -> None:
     _run_bootstrap_section(force_new_bootstrap=force_new_bootstrap)
     setup_product_branding()
     setup_product_identity()
+    setup_product_runtime_backend()
     setup_product_storage()
     _reload_app_after_setup()
     _print_product_setup_summary()

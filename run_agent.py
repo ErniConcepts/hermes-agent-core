@@ -41,6 +41,7 @@ from types import SimpleNamespace
 import uuid
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
+from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall
 import fire
 from datetime import datetime
 from pathlib import Path
@@ -407,6 +408,7 @@ class AIAgent:
         step_callback: callable = None,
         stream_delta_callback: callable = None,
         status_callback: callable = None,
+        tool_call_parser: str = None,
         max_tokens: int = None,
         reasoning_config: Dict[str, Any] = None,
         prefill_messages: List[Dict[str, Any]] = None,
@@ -535,6 +537,7 @@ class AIAgent:
         self.step_callback = step_callback
         self.stream_delta_callback = stream_delta_callback
         self.status_callback = status_callback
+        self.tool_call_parser = tool_call_parser.strip() if isinstance(tool_call_parser, str) and tool_call_parser.strip() else None
         self._last_reported_tool = None  # Track for "new tool" mode
         
         # Tool execution state — allows _vprint during tool execution
@@ -3507,6 +3510,37 @@ class AIAgent:
         return (
             self.stream_delta_callback is not None
             or getattr(self, "_stream_callback", None) is not None
+        )
+
+    def _apply_tool_call_parser_fallback(self, assistant_message) -> None:
+        parser_name = self.tool_call_parser
+        if not parser_name:
+            return
+        if getattr(assistant_message, "tool_calls", None):
+            return
+        raw_content = getattr(assistant_message, "content", None)
+        if not isinstance(raw_content, str) or "<tool_call>" not in raw_content:
+            return
+        if not self.valid_tool_names:
+            return
+        try:
+            from environments.tool_call_parsers import get_parser
+
+            parser = get_parser(parser_name)
+            parsed_content, parsed_tool_calls = parser.parse(raw_content)
+        except Exception:
+            logging.debug("Tool call parser fallback failed", exc_info=True)
+            return
+        if not parsed_tool_calls:
+            return
+        if not isinstance(parsed_tool_calls, list) or not all(isinstance(tc, ChatCompletionMessageToolCall) for tc in parsed_tool_calls):
+            return
+        assistant_message.tool_calls = parsed_tool_calls
+        assistant_message.content = parsed_content
+        logging.debug(
+            "Recovered %s tool call(s) from raw assistant content using parser '%s'",
+            len(parsed_tool_calls),
+            parser_name,
         )
 
     def _interruptible_streaming_api_call(
@@ -6495,6 +6529,8 @@ class AIAgent:
                         assistant_message.content = "\n".join(parts)
                     else:
                         assistant_message.content = str(raw)
+
+                self._apply_tool_call_parser_fallback(assistant_message)
 
                 # Handle assistant response
                 if assistant_message.content and not self.quiet_mode:

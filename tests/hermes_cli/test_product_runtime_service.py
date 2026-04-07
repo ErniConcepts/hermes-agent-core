@@ -255,6 +255,64 @@ def test_product_runtime_turn_uses_full_history(monkeypatch, tmp_path):
     assert agent.history_seen == stored_messages
 
 
+def test_build_runtime_agent_enables_parser_in_managed_mode(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_BACKEND", "managed")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOL_CALL_PARSER", "hermes")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "carnice-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+
+    captured = {}
+
+    class FakeAIAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("run_agent.AIAgent", FakeAIAgent)
+    terminal_tool_module = importlib.import_module("tools.terminal_tool")
+    monkeypatch.setattr(terminal_tool_module, "register_task_env_overrides", lambda *_args, **_kwargs: None)
+
+    build_runtime_agent(object(), "product_admin_123")
+
+    assert captured["tool_call_parser"] == "hermes"
+
+
+def test_build_runtime_agent_keeps_standard_mode_without_parser(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_BACKEND", "standard")
+    monkeypatch.delenv("HERMES_PRODUCT_TOOL_CALL_PARSER", raising=False)
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+
+    captured = {}
+
+    class FakeAIAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("run_agent.AIAgent", FakeAIAgent)
+    terminal_tool_module = importlib.import_module("tools.terminal_tool")
+    monkeypatch.setattr(terminal_tool_module, "register_task_env_overrides", lambda *_args, **_kwargs: None)
+
+    build_runtime_agent(object(), "product_admin_123")
+
+    assert captured["tool_call_parser"] is None
+
+
 def test_product_runtime_turn_preserves_rich_history(monkeypatch, tmp_path):
     hermes_home = tmp_path / "hermes"
     hermes_home.mkdir(parents=True)
