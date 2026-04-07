@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from environments.tool_call_parsers import list_parsers
 from hermes_cli.product_config import (
     load_product_config,
     runtime_backend_policy,
@@ -15,12 +14,29 @@ from hermes_cli.setup import print_header, print_info, print_warning, prompt, pr
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_MANAGED_TOOL_CALL_PARSERS = [
+    "hermes",
+    "deepseek_v3",
+    "deepseek_v3_1",
+    "glm45",
+    "glm47",
+    "kimi_k2",
+    "llama3_json",
+    "longcat_flash",
+    "mistral",
+    "qwen",
+    "qwen3_coder",
+]
 
 
 def _sanitize_prompt_text(value: str) -> str:
     cleaned = _ANSI_ESCAPE_RE.sub("", value or "")
     cleaned = _CONTROL_CHAR_RE.sub("", cleaned)
     return cleaned.strip()
+
+
+def _managed_tool_call_parsers() -> list[str]:
+    return list(_MANAGED_TOOL_CALL_PARSERS)
 
 
 def setup_product_branding() -> None:
@@ -111,7 +127,7 @@ def setup_product_runtime_backend() -> None:
     }[selected]
     product_config.setdefault("runtime", {})["backend_policy"] = backend_policy
     if backend_policy != "standard":
-        parser_choices = list_parsers()
+        parser_choices = _managed_tool_call_parsers()
         if current_parser not in parser_choices:
             parser_choices.append(current_parser)
         parser_choices = sorted(dict.fromkeys(parser_choices))

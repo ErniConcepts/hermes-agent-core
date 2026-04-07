@@ -92,7 +92,7 @@ def test_setup_product_runtime_backend_saves_policy(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     choices = iter([2, 0])
     monkeypatch.setattr("hermes_cli.product_setup_sections.prompt_choice", lambda *args, **kwargs: next(choices))
-    monkeypatch.setattr("hermes_cli.product_setup_sections.list_parsers", lambda: ["hermes", "qwen", "qwen3_coder"])
+    monkeypatch.setattr("hermes_cli.product_setup_sections._managed_tool_call_parsers", lambda: ["hermes", "qwen", "qwen3_coder"])
 
     setup_product_runtime_backend()
 
@@ -110,7 +110,7 @@ def test_setup_product_runtime_backend_skips_parser_for_standard_mode(tmp_path, 
         called["value"] = True
         return ["hermes", "qwen"]
 
-    monkeypatch.setattr("hermes_cli.product_setup_sections.list_parsers", _list_parsers)
+    monkeypatch.setattr("hermes_cli.product_setup_sections._managed_tool_call_parsers", _list_parsers)
 
     setup_product_runtime_backend()
 
