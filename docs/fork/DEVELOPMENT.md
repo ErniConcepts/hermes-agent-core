@@ -146,10 +146,11 @@ For installer/runtime changes, also smoke-test:
 Latest stable verification snapshot:
 
 - branch: `main`
-- pinned commit: `643e0c4f0c921d598614e74571653e28aaa88741`
+- pinned commit: `c6815cc5a3d070d82b901b84fe815342d9534925`
 - clean install: verified
 - `hermes-core setup`: verified
 - automatic `tsidp` OIDC client registration: verified
+- managed local-model backend default: verified
 - model setup and app startup: verified
 
 Useful cleanup for repeated live E2E runs:

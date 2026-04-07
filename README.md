@@ -87,7 +87,7 @@ bash install-product.sh
 Current stable pinned install used for the latest clean install verification:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/643e0c4f0c921d598614e74571653e28aaa88741/scripts/install-product.sh -o install-product.sh && HERMES_CORE_SOURCE_URL="https://codeload.github.com/ErniConcepts/hermes-agent-core/tar.gz/643e0c4f0c921d598614e74571653e28aaa88741" bash install-product.sh
+curl -fsSL https://raw.githubusercontent.com/ErniConcepts/hermes-agent-core/c6815cc5a3d070d82b901b84fe815342d9534925/scripts/install-product.sh -o install-product.sh && HERMES_CORE_SOURCE_URL="https://codeload.github.com/ErniConcepts/hermes-agent-core/tar.gz/c6815cc5a3d070d82b901b84fe815342d9534925" bash install-product.sh
 ```
 
 The installer is designed to:
