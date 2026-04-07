@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from starlette.testclient import TestClient
 
 from hermes_cli.product_oidc import ProductOIDCClientSettings, ProductOIDCProviderMetadata
@@ -18,6 +20,7 @@ def _product_config():
         "bootstrap": {},
         "network": {
             "app_port": 8086,
+            "trusted_proxy_ips": ["127.0.0.1", "::1"],
             "tailscale": {
                 "enabled": True,
                 "tailnet_name": "tail5fd7a5",
@@ -67,19 +70,19 @@ def _configure_app(monkeypatch, tmp_path, claims):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_SECRET", "session-secret")
     monkeypatch.setenv("HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET", "oidc-secret")
-    monkeypatch.setattr("hermes_cli.product_app.enforce_product_auth_rate_limit", lambda *args, **kwargs: None)
-    monkeypatch.setattr("hermes_cli.product_app.load_product_config", _product_config)
-    monkeypatch.setattr("hermes_cli.product_app.resolve_product_urls", lambda config=None: _urls())
-    monkeypatch.setattr("hermes_cli.product_app.load_product_oidc_client_settings", lambda config=None: _oidc_settings())
-    monkeypatch.setattr("hermes_cli.product_app.discover_product_oidc_provider_metadata", lambda settings: _oidc_metadata())
+    monkeypatch.setattr("hermes_cli.product_app_support.enforce_product_auth_rate_limit", lambda *args, **kwargs: None)
+    monkeypatch.setattr("hermes_cli.product_app_support.load_product_config", _product_config)
+    monkeypatch.setattr("hermes_cli.product_app_support.resolve_product_urls", lambda config=None: _urls())
+    monkeypatch.setattr("hermes_cli.product_app_support.load_product_oidc_client_settings", lambda config=None: _oidc_settings())
+    monkeypatch.setattr("hermes_cli.product_app_support.discover_product_oidc_provider_metadata", lambda settings: _oidc_metadata())
     monkeypatch.setattr(
-        "hermes_cli.product_app.exchange_product_oidc_code",
+        "hermes_cli.product_app_support.exchange_product_oidc_code",
         lambda settings, metadata, code, verifier: {"access_token": "token", "id_token": "id-token"},
     )
-    monkeypatch.setattr("hermes_cli.product_app.validate_product_oidc_id_token", lambda *args, **kwargs: claims)
-    monkeypatch.setattr("hermes_cli.product_app.fetch_product_oidc_userinfo", lambda *args, **kwargs: claims)
+    monkeypatch.setattr("hermes_cli.product_app_support.validate_product_oidc_id_token", lambda *args, **kwargs: claims)
+    monkeypatch.setattr("hermes_cli.product_app_support.fetch_product_oidc_userinfo", lambda *args, **kwargs: claims)
     monkeypatch.setattr(
-        "hermes_cli.product_app.create_oidc_login_request",
+        "hermes_cli.product_app_support.create_oidc_login_request",
         lambda settings, metadata: {
             "state": "state-123",
             "nonce": "nonce-123",
@@ -88,7 +91,7 @@ def _configure_app(monkeypatch, tmp_path, claims):
         },
     )
     monkeypatch.setattr(
-        "hermes_cli.product_app.load_first_admin_enrollment_state",
+        "hermes_cli.product_app_support.load_first_admin_enrollment_state",
         lambda: {
             "bootstrap_token": "bootstrap-token-123",
             "bootstrap_url": "https://device.tail5fd7a5.ts.net/bootstrap/bootstrap-token-123",
@@ -96,7 +99,7 @@ def _configure_app(monkeypatch, tmp_path, claims):
         },
     )
     monkeypatch.setattr(
-        "hermes_cli.product_app.mark_first_admin_bootstrap_completed",
+        "hermes_cli.product_app_support.mark_first_admin_bootstrap_completed",
         lambda tailscale_login=None: {
             "tailscale_login": tailscale_login,
             "first_admin_login_seen": True,
@@ -186,7 +189,7 @@ def test_product_app_uses_configured_branding_and_no_brand_dot(tmp_path, monkeyp
         config["product"]["brand"]["name"] = "Atlas Core"
         return config
 
-    monkeypatch.setattr("hermes_cli.product_app.load_product_config", _branded_config)
+    monkeypatch.setattr("hermes_cli.product_app_support.load_product_config", _branded_config)
     from hermes_cli.product_app import create_product_app
 
     client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
@@ -244,8 +247,8 @@ def test_product_app_rejects_uninvited_tailscale_identity_after_bootstrap(tmp_pa
         "preferred_username": "other@example.com",
         "name": "Other User",
     }
-    monkeypatch.setattr("hermes_cli.product_app.validate_product_oidc_id_token", lambda *args, **kwargs: stranger_claims)
-    monkeypatch.setattr("hermes_cli.product_app.fetch_product_oidc_userinfo", lambda *args, **kwargs: stranger_claims)
+    monkeypatch.setattr("hermes_cli.product_app_support.validate_product_oidc_id_token", lambda *args, **kwargs: stranger_claims)
+    monkeypatch.setattr("hermes_cli.product_app_support.fetch_product_oidc_userinfo", lambda *args, **kwargs: stranger_claims)
 
     client.post(
         "/api/auth/logout",
@@ -286,8 +289,8 @@ def test_product_app_claims_pending_invite_on_oidc_callback(tmp_path, monkeypatc
         "preferred_username": "bob@example.com",
         "name": "Bob Example",
     }
-    monkeypatch.setattr("hermes_cli.product_app.validate_product_oidc_id_token", lambda *args, **kwargs: invited_claims)
-    monkeypatch.setattr("hermes_cli.product_app.fetch_product_oidc_userinfo", lambda *args, **kwargs: invited_claims)
+    monkeypatch.setattr("hermes_cli.product_app_support.validate_product_oidc_id_token", lambda *args, **kwargs: invited_claims)
+    monkeypatch.setattr("hermes_cli.product_app_support.fetch_product_oidc_userinfo", lambda *args, **kwargs: invited_claims)
 
     start = client.get(f"/invite/{invite.token}", follow_redirects=False)
     assert start.status_code == 303
@@ -353,7 +356,7 @@ def test_product_app_admin_creates_generic_invite_link(tmp_path, monkeypatch):
     from hermes_cli.product_app import create_product_app
 
     monkeypatch.setattr(
-        "hermes_cli.product_app._require_admin_user",
+        "hermes_cli.product_app_support._require_admin_user",
         lambda request: {
             "id": "user-admin",
             "sub": "user-admin",
@@ -364,7 +367,7 @@ def test_product_app_admin_creates_generic_invite_link(tmp_path, monkeypatch):
             "tailscale_login": "admin@example.com",
         },
     )
-    monkeypatch.setattr("hermes_cli.product_app._require_csrf", lambda request: None)
+    monkeypatch.setattr("hermes_cli.product_app_support._require_csrf", lambda request: None)
     client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
 
     response = client.post(
@@ -402,8 +405,8 @@ def test_product_app_invalidates_disabled_session_without_waiting_for_refresh_tt
         "preferred_username": "bob@example.com",
         "name": "Bob Example",
     }
-    monkeypatch.setattr("hermes_cli.product_app.validate_product_oidc_id_token", lambda *args, **kwargs: invited_claims)
-    monkeypatch.setattr("hermes_cli.product_app.fetch_product_oidc_userinfo", lambda *args, **kwargs: invited_claims)
+    monkeypatch.setattr("hermes_cli.product_app_support.validate_product_oidc_id_token", lambda *args, **kwargs: invited_claims)
+    monkeypatch.setattr("hermes_cli.product_app_support.fetch_product_oidc_userinfo", lambda *args, **kwargs: invited_claims)
 
     start = client.get(f"/invite/{invite.token}", follow_redirects=False)
     client.get(start.headers["location"], follow_redirects=False)
@@ -433,7 +436,7 @@ def test_product_app_stop_route_proxies_runtime_interrupt(tmp_path, monkeypatch)
         },
     )
     monkeypatch.setattr(
-        "hermes_cli.product_app._require_product_user",
+        "hermes_cli.product_app_support._require_product_user",
         lambda request: {
             "id": "user-admin",
             "sub": "user-admin",
@@ -444,8 +447,8 @@ def test_product_app_stop_route_proxies_runtime_interrupt(tmp_path, monkeypatch)
             "tailscale_login": "admin@example.com",
         },
     )
-    monkeypatch.setattr("hermes_cli.product_app._require_csrf", lambda request: None)
-    monkeypatch.setattr("hermes_cli.product_app.stop_product_chat_turn", lambda *args, **kwargs: True)
+    monkeypatch.setattr("hermes_cli.product_app_support._require_csrf", lambda request: None)
+    monkeypatch.setattr("hermes_cli.product_app_chat_routes.stop_product_chat_turn", lambda *args, **kwargs: True)
     from hermes_cli.product_app import create_product_app
 
     client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
@@ -467,7 +470,7 @@ def test_product_app_chat_stream_uses_transport_layer(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "hermes_cli.product_app._require_product_user",
+        "hermes_cli.product_app_support._require_product_user",
         lambda request: {
             "id": "user-admin",
             "sub": "user-admin",
@@ -478,14 +481,14 @@ def test_product_app_chat_stream_uses_transport_layer(tmp_path, monkeypatch):
             "tailscale_login": "admin@example.com",
         },
     )
-    monkeypatch.setattr("hermes_cli.product_app._require_csrf", lambda request: None)
+    monkeypatch.setattr("hermes_cli.product_app_support._require_csrf", lambda request: None)
     seen = {}
 
     def _stream(_user, user_message, *, config=None):
         seen["user_message"] = user_message
         yield "event: final\ndata: {}\n\n"
 
-    monkeypatch.setattr("hermes_cli.product_app.stream_product_chat_turn", _stream)
+    monkeypatch.setattr("hermes_cli.product_app_chat_routes.stream_product_chat_turn", _stream)
     from hermes_cli.product_app import create_product_app
 
     client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
@@ -561,6 +564,73 @@ def test_product_app_healthz_minimizes_public_payload(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_product_app_session_exposes_longer_csrf_token(tmp_path, monkeypatch):
+    _configure_app(
+        monkeypatch,
+        tmp_path,
+        {
+            "sub": "ts-sub",
+            "email": "admin@example.com",
+            "preferred_username": "admin@example.com",
+            "name": "Admin Example",
+        },
+    )
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    session = client.get("/api/auth/session").json()
+
+    assert len(session["csrf_token"]) >= 43
+
+
+def test_client_ip_uses_forwarded_for_from_trusted_proxy(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app_support.load_product_config", _product_config)
+    from hermes_cli.product_app_support import _client_ip
+
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1"),
+        headers={"X-Forwarded-For": "198.51.100.9, 127.0.0.1"},
+    )
+
+    assert _client_ip(request) == "198.51.100.9"
+
+
+def test_client_ip_uses_real_ip_for_trusted_proxy_when_forwarded_for_missing(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app_support.load_product_config", _product_config)
+    from hermes_cli.product_app_support import _client_ip
+
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1"),
+        headers={"X-Real-IP": "198.51.100.10"},
+    )
+
+    assert _client_ip(request) == "198.51.100.10"
+
+
+def test_client_ip_ignores_forwarded_headers_from_untrusted_peer(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app_support.load_product_config", _product_config)
+    from hermes_cli.product_app_support import _client_ip
+
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="203.0.113.20"),
+        headers={"X-Forwarded-For": "198.51.100.11", "X-Real-IP": "198.51.100.12"},
+    )
+
+    assert _client_ip(request) == "203.0.113.20"
+
+
+def test_client_ip_falls_back_to_peer_for_malformed_forwarded_headers(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app_support.load_product_config", _product_config)
+    from hermes_cli.product_app_support import _client_ip
+
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1"),
+        headers={"X-Forwarded-For": "not-an-ip", "X-Real-IP": "still-not-an-ip"},
+    )
+
+    assert _client_ip(request) == "127.0.0.1"
 
 
 def test_product_app_requires_dedicated_session_secret(tmp_path, monkeypatch):

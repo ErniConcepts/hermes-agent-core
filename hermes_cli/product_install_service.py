@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -28,7 +29,7 @@ def product_runtime_dockerfile(default_install_dir_name: str) -> Path:
 
 def service_bind_host_and_home(load_product_config_fn: Any, default_install_dir_name: str, config: dict[str, Any] | None = None) -> tuple[str, str, str]:
     product_config = config or load_product_config_fn()
-    bind_host = str(product_config.get("network", {}).get("bind_host", "0.0.0.0")).strip() or "0.0.0.0"
+    bind_host = str(product_config.get("network", {}).get("bind_host", "127.0.0.1")).strip() or "127.0.0.1"
     return bind_host, str(get_hermes_home()), str(product_install_root(default_install_dir_name))
 
 
@@ -41,6 +42,22 @@ def render_product_service_unit(
     install_root: str,
 ) -> str:
     _run_as_user, home_dir = product_service_identity_fn()
+    port = int(spec.port)
+    if port < 1 or port > 65535:
+        raise ValueError(f"Invalid product app port: {spec.port!r}")
+    quoted_command = " ".join(
+        [
+            shlex.quote(sys.executable),
+            "-m",
+            "uvicorn",
+            shlex.quote(f"{spec.module}:{spec.factory}"),
+            "--factory",
+            "--host",
+            shlex.quote(bind_host),
+            "--port",
+            str(port),
+        ]
+    )
     return "\n".join(
         [
             "[Unit]",
@@ -57,8 +74,7 @@ def render_product_service_unit(
             (
                 "ExecStart="
                 "/usr/bin/sg docker -c "
-                f"'{sys.executable} -m uvicorn {spec.module}:{spec.factory} "
-                f"--factory --host {bind_host} --port {spec.port}'"
+                f"'{quoted_command}'"
             ),
             "Restart=always",
             "RestartSec=3",
@@ -73,21 +89,26 @@ def render_product_service_unit(
 def render_product_app_service_unit(
     *,
     load_product_config_fn: Any,
-    service_bind_host_and_home_fn: Any,
-    render_product_service_unit_fn: Any,
+    product_service_identity_fn: Any,
     product_service_unit_spec_cls: Any,
     default_install_dir_name: str,
     config: dict[str, Any] | None = None,
 ) -> str:
     product_config = config or load_product_config_fn()
-    bind_host, hermes_home, install_root = service_bind_host_and_home_fn(load_product_config_fn, default_install_dir_name, product_config)
+    bind_host, hermes_home, install_root = service_bind_host_and_home(load_product_config_fn, default_install_dir_name, product_config)
     spec = product_service_unit_spec_cls(
         description="Hermes Core Product App",
         module="hermes_cli.product_app",
         factory="create_product_app",
         port=int(product_config.get("network", {}).get("app_port", 8086)),
     )
-    return render_product_service_unit_fn(spec, bind_host=bind_host, hermes_home=hermes_home, install_root=install_root)
+    return render_product_service_unit(
+        product_service_identity_fn,
+        spec,
+        bind_host=bind_host,
+        hermes_home=hermes_home,
+        install_root=install_root,
+    )
 
 
 def write_product_app_service_unit(
@@ -138,13 +159,6 @@ def load_product_install_state() -> dict[str, Any]:
 def save_product_install_state(state: dict[str, Any]) -> None:
     ensure_product_home()
     atomic_json_write(get_product_install_state_path(), state)
-
-
-def product_install_state() -> dict[str, Any]:
-    state = load_product_install_state()
-    if not isinstance(state, dict):
-        return {}
-    return state
 
 
 def product_build_context_ignored(patterns: tuple[str, ...], relative_path: PurePosixPath, *, is_dir: bool) -> bool:

@@ -44,6 +44,7 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
     },
     "network": {
         "bind_host": "127.0.0.1",
+        "trusted_proxy_ips": ["127.0.0.1", "::1"],
         "url_scheme": "https",
         "app_port": 8086,
         "tailscale": {

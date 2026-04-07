@@ -54,12 +54,9 @@ from hermes_cli.product_install_service import (
     product_app_service_path as _product_app_service_path_impl,
     product_build_context_ignored as _product_build_context_ignored_impl,
     product_install_root as _product_install_root_impl,
-    product_install_state,
     product_runtime_dockerfile as _product_runtime_dockerfile_impl,
     render_product_app_service_unit as _render_product_app_service_unit_impl,
-    render_product_service_unit as _render_product_service_unit_impl,
     save_product_install_state,
-    service_bind_host_and_home as _service_bind_host_and_home_impl,
     write_product_app_service_unit as _write_product_app_service_unit_impl,
 )
 from hermes_cli.product_runtime_network import (
@@ -175,23 +172,12 @@ def _user_in_group(group_name: str, user_name: str | None = None) -> bool:
     return _user_in_group_impl(group_name, user_name)
 
 
-def _service_bind_host_and_home(config: dict[str, Any] | None = None) -> tuple[str, str, str]:
-    from hermes_cli.product_stack import load_product_config
-
-    return _service_bind_host_and_home_impl(load_product_config, DEFAULT_INSTALL_DIR_NAME, config)
-
-
-def _render_product_service_unit(spec: ProductServiceUnitSpec, *, bind_host: str, hermes_home: str, install_root: str) -> str:
-    return _render_product_service_unit_impl(_product_service_identity, spec, bind_host=bind_host, hermes_home=hermes_home, install_root=install_root)
-
-
 def _render_product_app_service_unit(config: dict[str, Any] | None = None) -> str:
     from hermes_cli.product_stack import load_product_config
 
     return _render_product_app_service_unit_impl(
         load_product_config_fn=load_product_config,
-        service_bind_host_and_home_fn=_service_bind_host_and_home_impl,
-        render_product_service_unit_fn=_render_product_service_unit,
+        product_service_identity_fn=_product_service_identity,
         product_service_unit_spec_cls=ProductServiceUnitSpec,
         default_install_dir_name=DEFAULT_INSTALL_DIR_NAME,
         config=config,
@@ -219,7 +205,7 @@ def ensure_product_app_service_started(config: dict[str, Any] | None = None) -> 
 
 
 def _product_install_state() -> dict[str, Any]:
-    return product_install_state()
+    return load_product_install_state()
 
 
 def _product_build_context_ignored(relative_path: PurePosixPath, *, is_dir: bool) -> bool:

@@ -3,22 +3,30 @@ from __future__ import annotations
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from hermes_cli.product_app_services import ChatRouteServices
+from hermes_cli.product_app_support import (
+    ProductChatSessionResponse,
+    ProductChatTurnRequest,
+    _require_csrf,
+    _require_product_user,
+    _runtime_session_payload,
+    stream_product_chat_turn,
+    stop_product_chat_turn,
+)
 
 
-def register_chat_routes(app: FastAPI, services: ChatRouteServices) -> None:
-    @app.get("/api/chat/session", response_model=services.product_chat_session_response_model)
+def register_chat_routes(app: FastAPI) -> None:
+    @app.get("/api/chat/session", response_model=ProductChatSessionResponse)
     def chat_session(request: Request) -> object:
-        user = services.require_product_user(request)
-        return services.product_chat_session_response_model(**services.runtime_session_payload(user))
+        user = _require_product_user(request)
+        return ProductChatSessionResponse(**_runtime_session_payload(user))
 
     @app.post("/api/chat/turn/stream")
     def chat_turn_stream(request: Request, payload: dict[str, object] = Body(...)) -> StreamingResponse:
-        user = services.require_product_user(request)
-        services.require_csrf(request)
-        validated = services.product_chat_turn_request_model.model_validate(payload)
+        user = _require_product_user(request)
+        _require_csrf(request)
+        validated = ProductChatTurnRequest.model_validate(payload)
         try:
-            event_stream = services.stream_product_runtime_turn(user, validated.user_message)
+            event_stream = stream_product_chat_turn(user, validated.user_message)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return StreamingResponse(
@@ -29,6 +37,6 @@ def register_chat_routes(app: FastAPI, services: ChatRouteServices) -> None:
 
     @app.post("/api/chat/turn/stop")
     def chat_turn_stop(request: Request) -> dict[str, bool]:
-        user = services.require_product_user(request)
-        services.require_csrf(request)
-        return {"stopped": bool(services.stop_product_runtime_turn(user))}
+        user = _require_product_user(request)
+        _require_csrf(request)
+        return {"stopped": bool(stop_product_chat_turn(user))}

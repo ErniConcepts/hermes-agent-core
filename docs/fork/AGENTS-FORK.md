@@ -57,7 +57,7 @@ Current product assumptions:
 - per-user runtime containers
 - per-user Hermes installs inside runtime containers
 - product workspaces are live-mounted into the user runtime
-- route registration is split by concern and wired through explicit service objects
+- route registration is split by concern and backed by shared product app support helpers
 - runtime/setup/install modules should stay as thin orchestration layers over smaller helpers
 
 Reference docs:

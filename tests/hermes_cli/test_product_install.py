@@ -1,3 +1,4 @@
+import shlex
 from argparse import Namespace
 
 import pytest
@@ -24,6 +25,37 @@ def test_render_product_app_service_unit_targets_only_product_app(tmp_path, monk
     assert "create_product_app" in rendered
     assert "create_product_auth_proxy_app" not in rendered
     assert "--port 18086" in rendered
+
+
+def test_render_product_app_service_unit_shell_quotes_bind_host(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_CORE_INSTALL_DIR", str(tmp_path / "checkout"))
+    monkeypatch.setattr("hermes_cli.product_install._product_service_identity", lambda: ("alice", "/home/alice"))
+    bind_host = "0.0.0.0'; echo pwned; echo '"
+
+    rendered = _render_product_app_service_unit({"network": {"bind_host": bind_host, "app_port": 18086}})
+
+    assert shlex.quote(bind_host) in rendered
+    assert "--host" in rendered
+
+
+def test_render_product_app_service_unit_defaults_to_localhost(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_CORE_INSTALL_DIR", str(tmp_path / "checkout"))
+    monkeypatch.setattr("hermes_cli.product_install._product_service_identity", lambda: ("alice", "/home/alice"))
+
+    rendered = _render_product_app_service_unit({"network": {"app_port": 18086}})
+
+    assert "--host 127.0.0.1" in rendered
+
+
+def test_render_product_app_service_unit_rejects_invalid_port(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_CORE_INSTALL_DIR", str(tmp_path / "checkout"))
+    monkeypatch.setattr("hermes_cli.product_install._product_service_identity", lambda: ("alice", "/home/alice"))
+
+    with pytest.raises(ValueError):
+        _render_product_app_service_unit({"network": {"app_port": 70000}})
 
 
 def test_ensure_product_app_service_started_manages_only_one_unit(tmp_path, monkeypatch):

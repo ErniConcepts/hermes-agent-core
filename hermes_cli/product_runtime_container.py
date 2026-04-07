@@ -63,7 +63,6 @@ def runtime_container_user(record: ProductRuntimeRecord) -> str | None:
             return f"{uid}:{gid}"
     except Exception:
         return None
-    return None
 
 
 def docker_run_command(record: ProductRuntimeRecord, config: dict[str, Any]) -> list[str]:
