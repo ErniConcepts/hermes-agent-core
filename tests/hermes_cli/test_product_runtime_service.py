@@ -43,12 +43,14 @@ class FakeAgent:
     def __init__(self):
         self.session_id = "product_admin_123"
         self.reasoning_callback = None
+        self.stream_delta_callback = None
 
     def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
         if self.reasoning_callback is not None:
             self.reasoning_callback("thinking")
-        if stream_callback is not None:
-            stream_callback("answer")
+        callback = self.stream_delta_callback or stream_callback
+        if callback is not None:
+            callback("answer")
         history = list(conversation_history or [])
         history.append({"role": "user", "content": user_message})
         history.append({"role": "assistant", "content": "done"})
@@ -59,10 +61,14 @@ class ThinkStreamingAgent:
     def __init__(self):
         self.session_id = "product_admin_123"
         self.reasoning_callback = None
+        self.stream_delta_callback = None
 
     def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
-        if stream_callback is not None:
-            stream_callback("<think>The user is testing</think>Visible answer")
+        if self.reasoning_callback is not None:
+            self.reasoning_callback("The user is testing")
+        callback = self.stream_delta_callback or stream_callback
+        if callback is not None:
+            callback("Visible answer")
         history = list(conversation_history or [])
         history.append({"role": "user", "content": user_message})
         history.append({"role": "assistant", "content": "<think>The user is testing</think>Visible answer"})
@@ -73,12 +79,14 @@ class SpacedStreamingAgent:
     def __init__(self):
         self.session_id = "product_admin_123"
         self.reasoning_callback = None
+        self.stream_delta_callback = None
 
     def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
-        if stream_callback is not None:
-            stream_callback("this ")
-            stream_callback("is ")
-            stream_callback("a demo text")
+        callback = self.stream_delta_callback or stream_callback
+        if callback is not None:
+            callback("this ")
+            callback("is ")
+            callback("a demo text")
         history = list(conversation_history or [])
         history.append({"role": "user", "content": user_message})
         history.append({"role": "assistant", "content": "this is a demo text"})
@@ -89,14 +97,16 @@ class WhitespaceChunkAgent:
     def __init__(self):
         self.session_id = "product_admin_123"
         self.reasoning_callback = None
+        self.stream_delta_callback = None
 
     def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
-        if stream_callback is not None:
-            stream_callback("this")
-            stream_callback(" ")
-            stream_callback("is")
-            stream_callback(" ")
-            stream_callback("a demo text")
+        callback = self.stream_delta_callback or stream_callback
+        if callback is not None:
+            callback("this")
+            callback(" ")
+            callback("is")
+            callback(" ")
+            callback("a demo text")
         history = list(conversation_history or [])
         history.append({"role": "user", "content": user_message})
         history.append({"role": "assistant", "content": "this is a demo text"})
@@ -107,6 +117,7 @@ class InterruptibleAgent:
     def __init__(self):
         self.session_id = "product_admin_123"
         self.reasoning_callback = None
+        self.stream_delta_callback = None
         self.interrupted = False
 
     def interrupt(self, message=None):
@@ -120,6 +131,7 @@ class CapturingAgent:
     def __init__(self):
         self.session_id = "product_admin_123"
         self.reasoning_callback = None
+        self.stream_delta_callback = None
         self.history_seen = None
 
     def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
@@ -128,6 +140,28 @@ class CapturingAgent:
         history.append({"role": "user", "content": user_message})
         history.append({"role": "assistant", "content": "done"})
         return {"final_response": "done", "messages": history}
+
+
+class RichHistoryAgent:
+    def __init__(self):
+        self.session_id = "product_admin_123"
+        self.reasoning_callback = None
+        self.stream_delta_callback = None
+        self.history_seen = None
+
+    def run_conversation(self, user_message, conversation_history=None, stream_callback=None, sync_honcho=None):
+        self.history_seen = list(conversation_history or [])
+        history = list(conversation_history or [])
+        history.append(
+            {
+                "role": "assistant",
+                "content": "Planning the file creation",
+                "tool_calls": [{"id": "call_1", "function": {"name": "write_file", "arguments": "{}"}}],
+            }
+        )
+        history.append({"role": "tool", "content": '{"success": true}', "tool_call_id": "call_1"})
+        history.append({"role": "assistant", "content": "Done. file.txt created."})
+        return {"final_response": "Done. file.txt created.", "messages": history}
 
 
 def test_visible_messages_hides_intermediate_tool_call_assistant_messages():
@@ -221,6 +255,48 @@ def test_product_runtime_turn_uses_full_history(monkeypatch, tmp_path):
     assert agent.history_seen == stored_messages
 
 
+def test_product_runtime_turn_preserves_rich_history(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "SOUL.md").write_text("Runtime identity", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_MODE", "product")
+    monkeypatch.setenv("HERMES_PRODUCT_TOOLSETS", "memory,session_search")
+    monkeypatch.setenv("HERMES_PRODUCT_PROVIDER", "custom")
+    monkeypatch.setenv("HERMES_PRODUCT_API_MODE", "chat_completions")
+    monkeypatch.setenv("HERMES_PRODUCT_MODEL", "qwen3.5-9b-local")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "product-local-route")
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_ID", "product_admin_123")
+    monkeypatch.setenv("HERMES_PRODUCT_RUNTIME_TOKEN", "runtime-token")
+    monkeypatch.setattr("hermes_cli.product_runtime_service._resolve_runtime_session_id", lambda db: "product_admin_123")
+
+    stored_messages = [
+        {"role": "user", "content": "create a file"},
+        {
+            "role": "assistant",
+            "content": "Planning the file creation",
+            "tool_calls": [{"id": "call_0", "function": {"name": "write_file", "arguments": "{}"}}],
+        },
+        {"role": "tool", "content": '{"success": true}', "tool_call_id": "call_0"},
+    ]
+
+    agent = RichHistoryAgent()
+    monkeypatch.setattr("hermes_cli.product_runtime_service.build_runtime_agent", lambda db, session_id, reasoning_callback=None: agent)
+    monkeypatch.setattr("hermes_cli.product_runtime_service._load_session_messages", lambda db, session_id: stored_messages)
+    monkeypatch.setattr("hermes_cli.product_runtime_service.SessionDB", DummyDB)
+
+    client = TestClient(create_product_runtime_app())
+    turn = client.post("/runtime/turn", json={"user_message": "hello"}, headers={"X-Hermes-Product-Runtime-Token": "runtime-token"})
+
+    assert turn.status_code == 200
+    assert agent.history_seen == stored_messages
+    assert turn.json()["messages"] == [
+        {"role": "user", "content": "create a file"},
+        {"role": "assistant", "content": "Done. file.txt created."},
+    ]
+
+
 def test_resolve_runtime_session_id_rotates_when_session_reset_policy_triggers(monkeypatch, tmp_path):
     hermes_home = tmp_path / "hermes"
     hermes_home.mkdir(parents=True)
@@ -310,7 +386,7 @@ def test_product_runtime_stream_routes_think_blocks_to_reasoning(monkeypatch, tm
     assert response.status_code == 200
     assert "event: reasoning" in payload
     assert "The user is testing" in payload
-    assert "event: answer" in payload
+    assert "event: delta" in payload
     assert "Visible answer" in payload
     assert "\"final_response\": \"Visible answer\"" in payload
 

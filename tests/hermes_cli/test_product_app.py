@@ -172,6 +172,28 @@ def test_product_app_chat_error_keeps_user_message_visible(tmp_path, monkeypatch
     assert "Your message was not saved." in response.text
 
 
+def test_product_app_chat_script_tracks_reasoning_and_visible_answer_separately(tmp_path, monkeypatch):
+    _configure_app(
+        monkeypatch,
+        tmp_path,
+        {
+            "sub": "ts-sub",
+            "email": "admin@example.com",
+            "preferred_username": "admin@example.com",
+            "name": "Admin Example",
+        },
+    )
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "name==='delta'||name==='answer'" in response.text
+    assert "pending.answerText" in response.text
+    assert "pending-answer" in response.text
+
+
 def test_product_app_uses_configured_branding_and_no_brand_dot(tmp_path, monkeypatch):
     _configure_app(
         monkeypatch,
@@ -356,7 +378,7 @@ def test_product_app_admin_creates_generic_invite_link(tmp_path, monkeypatch):
     from hermes_cli.product_app import create_product_app
 
     monkeypatch.setattr(
-        "hermes_cli.product_app_support._require_admin_user",
+        "hermes_cli.product_app_admin_routes._require_admin_user",
         lambda request: {
             "id": "user-admin",
             "sub": "user-admin",
@@ -367,7 +389,7 @@ def test_product_app_admin_creates_generic_invite_link(tmp_path, monkeypatch):
             "tailscale_login": "admin@example.com",
         },
     )
-    monkeypatch.setattr("hermes_cli.product_app_support._require_csrf", lambda request: None)
+    monkeypatch.setattr("hermes_cli.product_app_admin_routes._require_csrf", lambda request: None)
     client = TestClient(create_product_app(), base_url="https://device.tail5fd7a5.ts.net")
 
     response = client.post(
@@ -436,7 +458,7 @@ def test_product_app_stop_route_proxies_runtime_interrupt(tmp_path, monkeypatch)
         },
     )
     monkeypatch.setattr(
-        "hermes_cli.product_app_support._require_product_user",
+        "hermes_cli.product_app_chat_routes._require_product_user",
         lambda request: {
             "id": "user-admin",
             "sub": "user-admin",
@@ -447,7 +469,7 @@ def test_product_app_stop_route_proxies_runtime_interrupt(tmp_path, monkeypatch)
             "tailscale_login": "admin@example.com",
         },
     )
-    monkeypatch.setattr("hermes_cli.product_app_support._require_csrf", lambda request: None)
+    monkeypatch.setattr("hermes_cli.product_app_chat_routes._require_csrf", lambda request: None)
     monkeypatch.setattr("hermes_cli.product_app_chat_routes.stop_product_chat_turn", lambda *args, **kwargs: True)
     from hermes_cli.product_app import create_product_app
 
@@ -470,7 +492,7 @@ def test_product_app_chat_stream_uses_transport_layer(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "hermes_cli.product_app_support._require_product_user",
+        "hermes_cli.product_app_chat_routes._require_product_user",
         lambda request: {
             "id": "user-admin",
             "sub": "user-admin",
@@ -481,7 +503,7 @@ def test_product_app_chat_stream_uses_transport_layer(tmp_path, monkeypatch):
             "tailscale_login": "admin@example.com",
         },
     )
-    monkeypatch.setattr("hermes_cli.product_app_support._require_csrf", lambda request: None)
+    monkeypatch.setattr("hermes_cli.product_app_chat_routes._require_csrf", lambda request: None)
     seen = {}
 
     def _stream(_user, user_message, *, config=None):

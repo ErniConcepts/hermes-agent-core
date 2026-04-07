@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 import uvicorn
 
-from agent.reasoning_stream import ReasoningStreamMux, strip_reasoning_blocks
+from agent.reasoning_stream import strip_reasoning_blocks
 from hermes_state import SessionDB
 from hermes_cli.product_runtime import _RUNTIME_WORKSPACE_PATH
 from session_reset import SessionResetPolicy, session_reset_reason
@@ -255,24 +255,6 @@ def _interrupt_active_agent(session_id: str) -> bool:
     return True
 
 
-def _conversation_for_agent(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    allowed_roles = {"user", "assistant", "system", "tool"}
-    conversation: list[dict[str, Any]] = []
-    for message in messages:
-        role = str(message.get("role", "")).strip()
-        if role not in allowed_roles:
-            continue
-        entry: dict[str, Any] = {"role": role, "content": message.get("content")}
-        if message.get("tool_call_id"):
-            entry["tool_call_id"] = message["tool_call_id"]
-        if message.get("tool_name"):
-            entry["tool_name"] = message["tool_name"]
-        if isinstance(message.get("tool_calls"), list):
-            entry["tool_calls"] = message["tool_calls"]
-        conversation.append(entry)
-    return conversation
-
-
 def _load_session_messages(db: SessionDB, session_id: str) -> list[dict[str, Any]]:
     session = db.get_session(session_id)
     if not session:
@@ -366,10 +348,10 @@ def create_product_runtime_app() -> FastAPI:
             history = _load_session_messages(db, session_id)
             result = agent.run_conversation(
                 request.user_message,
-                conversation_history=_conversation_for_agent(history),
+                conversation_history=history,
                 sync_honcho=False,
             )
-            updated_messages = _load_session_messages(db, session_id)
+            updated_messages = list(result.get("messages") or [])
         except Exception as exc:
             status_code, detail = _classify_runtime_error(exc)
             raise HTTPException(status_code=status_code, detail=detail) from exc
@@ -405,8 +387,7 @@ def create_product_runtime_app() -> FastAPI:
             try:
                 db = _runtime_session_db()
                 reasoning_emitter = lambda text: event_queue.put(("reasoning", {"delta": str(text or "")}))
-                answer_emitter = lambda text: event_queue.put(("answer", {"delta": str(text or "")}))
-                mux = ReasoningStreamMux(on_answer=answer_emitter, on_reasoning=reasoning_emitter)
+                answer_emitter = lambda text: event_queue.put(("delta", {"delta": str(text or "")}))
                 session_id = _resolve_runtime_session_id(db)
                 event_queue.put(("start", {"session_id": session_id}))
                 agent = build_runtime_agent(
@@ -415,20 +396,15 @@ def create_product_runtime_app() -> FastAPI:
                     reasoning_callback=reasoning_emitter,
                 )
                 _register_active_agent(session_id, agent)
-                setattr(
-                    agent,
-                    "reasoning_callback",
-                    reasoning_emitter,
-                )
+                agent.reasoning_callback = reasoning_emitter
+                agent.stream_delta_callback = answer_emitter
                 history = _load_session_messages(db, session_id)
                 result = agent.run_conversation(
                     request.user_message,
-                    conversation_history=_conversation_for_agent(history),
-                    stream_callback=mux.feed,
+                    conversation_history=history,
                     sync_honcho=False,
                 )
-                mux.flush()
-                updated_messages = _load_session_messages(db, session_id)
+                updated_messages = list(result.get("messages") or [])
                 event_queue.put(
                     (
                         "final",
