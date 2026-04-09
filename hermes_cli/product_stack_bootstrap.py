@@ -5,14 +5,14 @@ import secrets
 import subprocess
 import time
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from hermes_cli.config import _secure_file, get_env_value, save_env_value_secure
 from hermes_cli.product_config import ensure_product_home, load_product_config, save_product_config
 from hermes_cli.product_oidc import (
-    discover_product_oidc_provider_metadata,
-    discover_product_oidc_provider_metadata_by_issuer,
+    ProductOIDCProviderMetadata,
     load_product_oidc_client_settings,
 )
 from hermes_cli.product_stack_paths import (
@@ -189,6 +189,118 @@ def running_tsidp_issuer_url(config: dict[str, Any]) -> str:
     return issuer.rstrip("/")
 
 
+def running_tsidp_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    container_name = str(tsidp_service_config(config).get("container_name", "")).strip()
+    if not container_name:
+        raise RuntimeError("services.tsidp.container_name must be configured")
+    command = [
+        "docker",
+        "exec",
+        container_name,
+        "wget",
+        "-qO-",
+        f"http://127.0.0.1:8080{TSIDP_WELL_KNOWN_PATH}",
+    ]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        message = f"Failed to read tsidp metadata from running container {container_name}"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
+    try:
+        payload = json.loads((result.stdout or "").strip() or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Running tsidp returned invalid well-known metadata from {container_name}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Running tsidp returned unexpected metadata from {container_name}")
+    return payload
+
+
+def running_tsidp_provider_metadata(config: dict[str, Any]) -> ProductOIDCProviderMetadata:
+    payload = running_tsidp_metadata(config)
+    issuer = str(payload.get("issuer", "")).strip()
+    authorization_endpoint = str(payload.get("authorization_endpoint", "")).strip()
+    token_endpoint = str(payload.get("token_endpoint", "")).strip()
+    if not issuer or not authorization_endpoint or not token_endpoint:
+        raise RuntimeError("Running tsidp metadata is missing required OIDC endpoints.")
+    return ProductOIDCProviderMetadata(
+        issuer=issuer,
+        authorization_endpoint=authorization_endpoint,
+        token_endpoint=token_endpoint,
+        userinfo_endpoint=str(payload.get("userinfo_endpoint", "")).strip() or None,
+        end_session_endpoint=(
+            str(payload.get("end_session_endpoint", "")).strip()
+            or str(payload.get("end_session_endpoint_uri", "")).strip()
+            or None
+        ),
+        jwks_uri=str(payload.get("jwks_uri", "")).strip() or None,
+        registration_endpoint=str(payload.get("registration_endpoint", "")).strip() or None,
+    )
+
+
+def wait_for_local_tsidp_ready(config: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            return running_tsidp_metadata(config)
+        except Exception as exc:
+            last_error = exc
+        time.sleep(1.0)
+    raise RuntimeError(
+        f"tsidp did not become ready inside the running container: {last_error}. "
+        "Check that the tsidp container started cleanly and can serve local OIDC metadata."
+    )
+
+
+def local_tsidp_registration_endpoint(config: dict[str, Any]) -> str:
+    metadata = running_tsidp_metadata(config)
+    registration_endpoint = str(metadata.get("registration_endpoint", "")).strip()
+    if not registration_endpoint:
+        return "http://127.0.0.1:8080/register"
+    parsed = urlsplit(registration_endpoint)
+    path = parsed.path or "/register"
+    return urlunsplit(("http", "127.0.0.1:8080", path, parsed.query, ""))
+
+
+def register_tsidp_oidc_client_locally(config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    container_name = str(tsidp_service_config(config).get("container_name", "")).strip()
+    if not container_name:
+        raise RuntimeError("services.tsidp.container_name must be configured")
+    endpoint = local_tsidp_registration_endpoint(config)
+    command = [
+        "docker",
+        "exec",
+        container_name,
+        "wget",
+        "-qO-",
+        "--header",
+        "Accept: application/json",
+        "--header",
+        "Content-Type: application/json",
+        "--post-data",
+        json.dumps(payload),
+        endpoint,
+    ]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        message = "Automatic tsidp OIDC client registration failed"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
+    try:
+        registration = json.loads((result.stdout or "").strip() or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Automatic tsidp OIDC client registration returned invalid JSON.") from exc
+    if not isinstance(registration, dict):
+        raise RuntimeError("Automatic tsidp OIDC client registration returned an unexpected payload.")
+    return registration
+
+
 def sync_running_tsidp_issuer_url(config: dict[str, Any]) -> dict[str, Any]:
     issuer_url = running_tsidp_issuer_url(config)
     current = str(config.get("auth", {}).get("issuer_url", "")).strip().rstrip("/")
@@ -263,7 +375,7 @@ def ensure_product_stack_started(config: dict[str, Any] | None = None) -> subpro
 def bootstrap_product_oidc_client(config: dict[str, Any] | None = None) -> dict[str, Any]:
     product_config = initialize_product_stack(config or load_product_config())
     ensure_product_stack_started(product_config)
-    wait_for_tsidp_ready(product_config, READY_TIMEOUT_SECONDS)
+    wait_for_local_tsidp_ready(product_config, READY_TIMEOUT_SECONDS)
     auth = product_config.get("auth", {})
     client_id = str(auth.get("client_id", "")).strip()
     client_secret_ref = str(auth.get("client_secret_ref", "")).strip()
@@ -272,7 +384,7 @@ def bootstrap_product_oidc_client(config: dict[str, Any] | None = None) -> dict[
         bootstrap_product_tailscale_oidc_client(product_config)
         product_config = load_product_config()
     settings = load_product_oidc_client_settings(product_config)
-    metadata = discover_product_oidc_provider_metadata(settings)
+    metadata = running_tsidp_provider_metadata(product_config)
     return {
         "client_id": settings.client_id,
         "issuer_url": settings.issuer_url,
@@ -302,7 +414,7 @@ def tailscale_oidc_registration_payload(config: dict[str, Any]) -> dict[str, Any
 def bootstrap_product_tailscale_oidc_client(config: dict[str, Any] | None = None) -> dict[str, Any]:
     product_config = initialize_product_stack(config or load_product_config())
     ensure_product_stack_started(product_config)
-    wait_for_tsidp_ready(product_config, READY_TIMEOUT_SECONDS)
+    wait_for_local_tsidp_ready(product_config, READY_TIMEOUT_SECONDS)
     auth = product_config.setdefault("auth", {})
     client_id = str(auth.get("client_id", "")).strip()
     client_secret_ref = str(auth.get("client_secret_ref", "")).strip()
@@ -311,7 +423,7 @@ def bootstrap_product_tailscale_oidc_client(config: dict[str, Any] | None = None
 
     if client_id and client_secret_ref and saved_client_secret:
         settings = load_product_oidc_client_settings(product_config)
-        metadata = discover_product_oidc_provider_metadata(settings)
+        metadata = running_tsidp_provider_metadata(product_config)
         return {
             "client_id": settings.client_id,
             "client_secret": settings.client_secret,
@@ -321,7 +433,7 @@ def bootstrap_product_tailscale_oidc_client(config: dict[str, Any] | None = None
             "created": False,
         }
 
-    metadata = discover_product_oidc_provider_metadata_by_issuer(issuer_url)
+    metadata = running_tsidp_provider_metadata(product_config)
     registration_endpoint = str(metadata.registration_endpoint or "").strip()
     if not registration_endpoint:
         raise RuntimeError(
@@ -329,32 +441,7 @@ def bootstrap_product_tailscale_oidc_client(config: dict[str, Any] | None = None
         )
 
     payload = tailscale_oidc_registration_payload(product_config)
-    try:
-        with httpx.Client(timeout=15.0) as client:
-            response = client.post(
-                registration_endpoint,
-                json=payload,
-                headers={
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                },
-            )
-            response.raise_for_status()
-            registration = response.json()
-    except httpx.HTTPStatusError as exc:
-        detail = ""
-        try:
-            detail_payload = exc.response.json()
-            if isinstance(detail_payload, dict):
-                detail = str(detail_payload.get("error_description") or detail_payload.get("error") or "").strip()
-        except ValueError:
-            detail = (exc.response.text or "").strip()
-        message = "Automatic tsidp OIDC client registration failed"
-        if detail:
-            message = f"{message}: {detail}"
-        raise RuntimeError(message) from exc
-    except httpx.HTTPError as exc:
-        raise RuntimeError("Automatic tsidp OIDC client registration failed") from exc
+    registration = register_tsidp_oidc_client_locally(product_config, payload)
 
     if not isinstance(registration, dict):
         raise RuntimeError("Automatic tsidp OIDC client registration returned an unexpected payload.")

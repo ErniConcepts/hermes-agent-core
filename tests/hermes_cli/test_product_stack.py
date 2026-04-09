@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import yaml
-import httpx
 
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_stack_bootstrap import tailscale_oidc_registration_payload
@@ -138,36 +137,31 @@ def test_bootstrap_product_tailscale_oidc_client_registers_and_saves_client(tmp_
     monkeypatch.setenv("HERMES_PRODUCT_TAILSCALE_AUTH_KEY", "tskey-auth-kv")
     saved: dict[str, str] = {}
     monkeypatch.setattr("hermes_cli.product_stack_bootstrap.ensure_product_stack_started", lambda config=None: None)
-    monkeypatch.setattr("hermes_cli.product_stack_bootstrap.wait_for_tsidp_ready", lambda config, timeout: None)
+    monkeypatch.setattr(
+        "hermes_cli.product_stack_bootstrap.wait_for_local_tsidp_ready",
+        lambda config, timeout: {"registration_endpoint": "https://idp.tail5fd7a5.ts.net/register"},
+    )
     monkeypatch.setattr(
         "hermes_cli.product_stack_bootstrap.save_env_value_secure",
         lambda key, value: saved.setdefault(key, value),
     )
 
-    class _FakeClient:
-        def __init__(self, timeout=15.0):
-            self.timeout = timeout
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, json=None, headers=None):
-            assert url == "https://idp.tail5fd7a5.ts.net/register"
-            assert json["redirect_uris"] == ["https://device.tail5fd7a5.ts.net/api/auth/oidc/callback"]
-            return httpx.Response(
-                201,
-                json={"client_id": "auto-client", "client_secret": "auto-secret"},
-                request=httpx.Request("POST", url),
-            )
-
     monkeypatch.setattr(
-        "hermes_cli.product_stack_bootstrap.discover_product_oidc_provider_metadata_by_issuer",
-        lambda issuer_url: type("Metadata", (), {"registration_endpoint": "https://idp.tail5fd7a5.ts.net/register"})(),
+        "hermes_cli.product_stack_bootstrap.running_tsidp_provider_metadata",
+        lambda config: type(
+            "Metadata",
+            (),
+            {
+                "registration_endpoint": "https://idp.tail5fd7a5.ts.net/register",
+                "authorization_endpoint": "https://idp.tail5fd7a5.ts.net/authorize",
+                "token_endpoint": "https://idp.tail5fd7a5.ts.net/token",
+            },
+        )(),
     )
-    monkeypatch.setattr("hermes_cli.product_stack_bootstrap.httpx.Client", _FakeClient)
+    monkeypatch.setattr(
+        "hermes_cli.product_stack_bootstrap.register_tsidp_oidc_client_locally",
+        lambda config, payload: {"client_id": "auto-client", "client_secret": "auto-secret"},
+    )
 
     result = bootstrap_product_tailscale_oidc_client(_config())
 
@@ -186,13 +180,38 @@ def test_bootstrap_product_tailscale_oidc_client_keeps_existing_client(tmp_path,
     config = _config()
     config["auth"]["client_id"] = "saved-client"
     monkeypatch.setattr("hermes_cli.product_stack_bootstrap.ensure_product_stack_started", lambda config=None: None)
-    monkeypatch.setattr("hermes_cli.product_stack_bootstrap.wait_for_tsidp_ready", lambda config, timeout: None)
     monkeypatch.setattr(
-        "hermes_cli.product_stack_bootstrap.discover_product_oidc_provider_metadata",
-        lambda settings: type("Metadata", (), {"registration_endpoint": "https://idp.tail5fd7a5.ts.net/register"})(),
+        "hermes_cli.product_stack_bootstrap.wait_for_local_tsidp_ready",
+        lambda config, timeout: {"registration_endpoint": "https://idp.tail5fd7a5.ts.net/register"},
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_stack_bootstrap.running_tsidp_provider_metadata",
+        lambda config: type(
+            "Metadata",
+            (),
+            {
+                "registration_endpoint": "https://idp.tail5fd7a5.ts.net/register",
+                "authorization_endpoint": "https://idp.tail5fd7a5.ts.net/authorize",
+                "token_endpoint": "https://idp.tail5fd7a5.ts.net/token",
+            },
+        )(),
     )
 
     result = bootstrap_product_tailscale_oidc_client(config)
 
     assert result["created"] is False
     assert result["client_id"] == "saved-client"
+
+
+def test_local_tsidp_registration_endpoint_converts_running_metadata_to_loopback(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "hermes_cli.product_stack_bootstrap.running_tsidp_metadata",
+        lambda config: {"registration_endpoint": "https://idp.tail5fd7a5.ts.net/register?foo=bar"},
+    )
+
+    from hermes_cli.product_stack_bootstrap import local_tsidp_registration_endpoint
+
+    endpoint = local_tsidp_registration_endpoint(_config())
+
+    assert endpoint == "http://127.0.0.1:8080/register?foo=bar"
