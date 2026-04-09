@@ -126,6 +126,43 @@ def test_discover_product_oidc_provider_metadata_by_issuer_uses_registration_end
     assert metadata.registration_endpoint == "https://idp.corpnet.ts.net/register"
 
 
+def test_discover_product_oidc_provider_metadata_by_issuer_falls_back_to_local_tsidp_metadata(monkeypatch):
+    clear_product_oidc_provider_metadata_cache()
+
+    class _FailingClient:
+        def get(self, url):
+            raise httpx.ConnectTimeout("timeout")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "hermes_cli.product_oidc.load_product_config",
+        lambda: {
+            "auth": {"issuer_url": "https://idp.corpnet.ts.net"},
+            "services": {"tsidp": {"container_name": "hermes-tsidp"}},
+        },
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_oidc._local_tsidp_metadata_payload",
+        lambda container_name: {
+            "issuer": "https://idp.corpnet.ts.net",
+            "authorization_endpoint": "https://idp.corpnet.ts.net/authorize",
+            "token_endpoint": "https://idp.corpnet.ts.net/token",
+            "registration_endpoint": "https://idp.corpnet.ts.net/register",
+        },
+    )
+
+    metadata = discover_product_oidc_provider_metadata_by_issuer(
+        "https://idp.corpnet.ts.net",
+        client=_FailingClient(),
+    )
+
+    assert metadata.authorization_endpoint == "https://idp.corpnet.ts.net/authorize"
+    assert metadata.token_endpoint == "https://idp.corpnet.ts.net/token"
+    assert metadata.registration_endpoint == "https://idp.corpnet.ts.net/register"
+
+
 def test_create_oidc_login_request_uses_pkce_and_standard_scopes(monkeypatch):
     clear_product_oidc_provider_metadata_cache()
     monkeypatch.setattr("hermes_cli.product_oidc.secrets.token_urlsafe", lambda _n=0: "fixed-token")

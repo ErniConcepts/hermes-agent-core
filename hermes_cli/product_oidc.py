@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -58,9 +59,14 @@ def discover_product_oidc_provider_metadata_by_issuer(
     owns_client = client is None
     http_client = client or httpx.Client(timeout=10.0)
     try:
-        response = http_client.get(well_known_url)
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            response = http_client.get(well_known_url)
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPError:
+            payload = _try_local_tsidp_metadata(cache_key)
+            if payload is None:
+                raise
     finally:
         if owns_client:
             http_client.close()
@@ -94,6 +100,36 @@ def discover_product_oidc_provider_metadata_by_issuer(
     if client is None:
         _OIDC_METADATA_CACHE[cache_key] = (time.monotonic() + _OIDC_METADATA_CACHE_TTL_SECONDS, metadata)
     return metadata
+
+
+def _local_tsidp_metadata_payload(container_name: str) -> dict[str, Any]:
+    command = [
+        "docker",
+        "exec",
+        container_name,
+        "wget",
+        "-qO-",
+        "http://127.0.0.1:8080/.well-known/openid-configuration",
+    ]
+    result = subprocess.run(command, check=True, capture_output=True, text=True)
+    payload = httpx.Response(200, text=(result.stdout or "")).json()
+    if not isinstance(payload, dict):
+        raise RuntimeError("tsidp local metadata did not return a JSON object")
+    return payload
+
+
+def _try_local_tsidp_metadata(cache_key: str) -> dict[str, Any] | None:
+    product_config = load_product_config()
+    configured_issuer = str(product_config.get("auth", {}).get("issuer_url", "")).strip().rstrip("/")
+    if not configured_issuer or configured_issuer != cache_key:
+        return None
+    container_name = str(
+        product_config.get("services", {}).get("tsidp", {}).get("container_name", "hermes-tsidp")
+    ).strip() or "hermes-tsidp"
+    try:
+        return _local_tsidp_metadata_payload(container_name)
+    except Exception:
+        return None
 
 
 def _required_string(value: str, field_name: str) -> str:
