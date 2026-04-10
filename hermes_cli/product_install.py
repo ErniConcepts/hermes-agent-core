@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import pwd
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from hermes_cli.config import get_env_path
-from hermes_cli.product_config import get_product_config_path, get_product_storage_root
+from hermes_cli.product_config import DEFAULT_PRODUCT_CONFIG, get_product_config_path, get_product_storage_root
 from hermes_cli.product_install_cleanup import (
     build_product_runtime_image as _build_product_runtime_image_impl,
     perform_product_cleanup as _perform_product_cleanup_impl,
@@ -367,6 +368,38 @@ def _remove_runsc_registration_if_managed() -> bool:
     )
 
 
+def _product_runtime_owner() -> str:
+    if getattr(os, "geteuid", lambda: 1)() == 0:
+        sudo_user = str(os.environ.get("SUDO_USER", "")).strip()
+        if sudo_user and sudo_user != "root":
+            return sudo_user
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
+def _repair_product_path_ownership() -> None:
+    if not _is_linux():
+        return
+    owner = _product_runtime_owner()
+    hermes_home = Path(os.environ.get("HERMES_HOME", "")).expanduser().resolve() if os.environ.get("HERMES_HOME") else None
+    managed_paths = [
+        get_product_storage_root(hermes_home, config=DEFAULT_PRODUCT_CONFIG),
+        get_product_config_path(),
+        get_env_path(),
+    ]
+    for path in managed_paths:
+        if not path.exists():
+            continue
+        try:
+            stat_result = path.stat()
+        except OSError:
+            continue
+        current_owner = pwd.getpwuid(stat_result.st_uid).pw_name
+        if current_owner == owner:
+            continue
+        command = ["chown", "-R", f"{owner}:{owner}", str(path)] if path.is_dir() else ["chown", f"{owner}:{owner}", str(path)]
+        _run(command, sudo=True)
+
+
 def build_product_runtime_image() -> None:
     _build_product_runtime_image_impl(
         product_runtime_dockerfile_fn=product_runtime_dockerfile,
@@ -442,6 +475,7 @@ def run_product_install(args: Any) -> None:
     docker_ready, docker_message = _docker_readiness_probe()
     if not docker_ready:
         raise SystemExit(docker_message)
+    _repair_product_path_ownership()
     networking = ensure_product_runtime_networking()
     _record_runtime_management_state(managed_runsc_registration=changed, networking=networking)
     build_product_runtime_image()

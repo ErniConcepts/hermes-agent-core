@@ -1,5 +1,6 @@
 import shlex
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from hermes_cli.product_install import (
     ensure_product_runtime_networking,
     ensure_product_app_service_started,
     run_product_install,
+    _repair_product_path_ownership,
 )
 from hermes_cli.product_install_host import runsc_runtime_matches
 
@@ -115,3 +117,33 @@ def test_ensure_product_runtime_networking_uses_bridge_network_and_firewall(monk
 
     assert result == {"created_network": True, "updated_firewall": True}
     assert seen["firewall_port"] == 8080
+
+
+def test_repair_product_path_ownership_chowns_non_owned_managed_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    product_root = tmp_path / "product"
+    product_root.mkdir(parents=True)
+    product_config = tmp_path / "product.yaml"
+    product_config.write_text("{}", encoding="utf-8")
+    env_path = tmp_path / ".env"
+    env_path.write_text("", encoding="utf-8")
+
+    current_owner = "alice"
+    root_pwd = type("_Pwd", (), {"pw_name": "root"})()
+
+    monkeypatch.setattr("hermes_cli.product_install._is_linux", lambda: True)
+    monkeypatch.setattr("hermes_cli.product_install._product_runtime_owner", lambda: current_owner)
+    monkeypatch.setattr("hermes_cli.product_install.get_product_storage_root", lambda *args, **kwargs: product_root)
+    monkeypatch.setattr("hermes_cli.product_install.get_product_config_path", lambda: product_config)
+    monkeypatch.setattr("hermes_cli.product_install.get_env_path", lambda: env_path)
+    monkeypatch.setattr("pwd.getpwuid", lambda uid: root_pwd)
+    calls = []
+    monkeypatch.setattr("hermes_cli.product_install._run", lambda command, **kwargs: calls.append((command, kwargs)))
+
+    _repair_product_path_ownership()
+
+    assert calls == [
+        (["chown", "-R", "alice:alice", str(product_root)], {"sudo": True}),
+        (["chown", "alice:alice", str(product_config)], {"sudo": True}),
+        (["chown", "alice:alice", str(env_path)], {"sudo": True}),
+    ]
