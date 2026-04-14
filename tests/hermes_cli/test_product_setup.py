@@ -91,34 +91,23 @@ def test_run_product_setup_full_wizard_restarts_app_service_after_branding(tmp_p
 
 def test_setup_product_runtime_backend_saves_policy(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    choices = iter([2, 0])
+    choices = iter([2])
     monkeypatch.setattr("hermes_cli.product_setup_sections.prompt_choice", lambda *args, **kwargs: next(choices))
-    monkeypatch.setattr("hermes_cli.product_setup_sections._managed_tool_call_parsers", lambda: ["hermes", "qwen", "qwen3_coder"])
 
     setup_product_runtime_backend()
 
     config = load_product_config()
     assert config["runtime"]["backend_policy"] == "managed"
-    assert config["runtime"]["tool_call_parser"] == "hermes"
 
 
-def test_setup_product_runtime_backend_skips_parser_for_standard_mode(tmp_path, monkeypatch):
+def test_setup_product_runtime_backend_saves_standard_policy(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setattr("hermes_cli.product_setup_sections.prompt_choice", lambda *args, **kwargs: 1)
-    called = {"value": False}
-
-    def _list_parsers():
-        called["value"] = True
-        return ["hermes", "qwen"]
-
-    monkeypatch.setattr("hermes_cli.product_setup_sections._managed_tool_call_parsers", _list_parsers)
 
     setup_product_runtime_backend()
 
     config = load_product_config()
     assert config["runtime"]["backend_policy"] == "standard"
-    assert config["runtime"]["tool_call_parser"] == "hermes"
-    assert called["value"] is False
 
 
 

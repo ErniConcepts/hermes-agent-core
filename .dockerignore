@@ -1,12 +1,21 @@
+# Git
 .git
+.gitignore
+.gitmodules
 .github
+
+# Dependencies and caches
+node_modules
+.venv
 .pytest_cache
 .pytest-*
-.venv
 __pycache__
 *.pyc
 *.pyo
 *.pyd
+
+# Local/test runtime state
+.env
 .tmp-*
 .tmp-hermes-home
 .tmp-runtime-home
@@ -14,5 +23,10 @@ __pycache__
 .plans
 artifacts
 .noncode_files.txt
+
+# Fork-local Docker artifacts
 Dockerfile.product-local
 uv.lock
+
+# Documentation is not needed in runtime images
+*.md

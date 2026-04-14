@@ -19,7 +19,6 @@ from hermes_cli.product_config import (
     resolve_hermes_runtime_toolsets,
     runtime_backend_policy,
     runtime_host_access_host,
-    runtime_tool_call_parser,
 )
 from hermes_cli.product_runtime_common import (
     ProductRuntimeLaunchSettings,
@@ -376,16 +375,6 @@ def resolve_runtime_backend_mode(
     return "standard"
 
 
-def resolve_runtime_tool_parser(
-    product_config: dict[str, object],
-    *,
-    backend: str,
-) -> str | None:
-    if backend != "managed":
-        return None
-    return runtime_tool_call_parser(product_config)
-
-
 def resolve_runtime_launch_settings(product_config: dict[str, object]) -> ProductRuntimeLaunchSettings:
     try:
         model_cfg = resolve_hermes_model_config()
@@ -420,7 +409,6 @@ def resolve_runtime_launch_settings(product_config: dict[str, object]) -> Produc
         provider=provider,
         base_url=adjusted_base_url,
     )
-    tool_call_parser = resolve_runtime_tool_parser(product_config, backend=backend)
 
     return ProductRuntimeLaunchSettings(
         model=model,
@@ -430,7 +418,6 @@ def resolve_runtime_launch_settings(product_config: dict[str, object]) -> Produc
         api_key=api_key,
         toolsets=runtime_toolsets(product_config),
         backend=backend,
-        tool_call_parser=tool_call_parser,
     )
 
 
@@ -463,7 +450,6 @@ def runtime_environment(
         "HERMES_PRODUCT_PROVIDER": settings.provider,
         "HERMES_PRODUCT_API_MODE": settings.api_mode,
         "HERMES_PRODUCT_MODEL": settings.model,
-        "HERMES_PRODUCT_TOOL_CALL_PARSER": settings.tool_call_parser or "",
         "HERMES_PRODUCT_PROFILE": profile_name,
         "HERMES_PRODUCT_TEMPLATE_VERSION": template_version,
         "HERMES_PRODUCT_RUNTIME_TOKEN": auth_token,
@@ -587,7 +573,6 @@ def stage_product_runtime(user: dict[str, object], *, config: dict[str, object] 
             manifest_file=str(manifest_path(product_config, stable_user_id)),
             auth_token=auth_token,
             backend=launch_settings.backend,
-            tool_call_parser=launch_settings.tool_call_parser,
             status="staged",
         )
         write_runtime_record(record)
