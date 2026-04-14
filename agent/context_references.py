@@ -13,10 +13,28 @@ from typing import Awaitable, Callable
 
 from agent.model_metadata import estimate_tokens_rough
 
+_QUOTED_REFERENCE_VALUE = r'(?:`[^`\n]+`|"[^"\n]+"|\'[^\'\n]+\')'
 REFERENCE_PATTERN = re.compile(
-    r"(?<![\w/])@(?:(?P<simple>diff|staged)\b|(?P<kind>file|folder|git|url):(?P<value>\S+))"
+    rf"(?<![\w/])@(?:(?P<simple>diff|staged)\b|(?P<kind>file|folder|git|url):(?P<value>{_QUOTED_REFERENCE_VALUE}(?::\d+(?:-\d+)?)?|\S+))"
 )
 TRAILING_PUNCTUATION = ",.;!?"
+_SENSITIVE_HOME_DIRS = (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".config/gh")
+_SENSITIVE_HERMES_DIRS = (Path("skills") / ".hub",)
+_SENSITIVE_HOME_FILES = (
+    Path(".ssh") / "authorized_keys",
+    Path(".ssh") / "id_rsa",
+    Path(".ssh") / "id_ed25519",
+    Path(".ssh") / "config",
+    Path(".bashrc"),
+    Path(".zshrc"),
+    Path(".profile"),
+    Path(".bash_profile"),
+    Path(".zprofile"),
+    Path(".netrc"),
+    Path(".pgpass"),
+    Path(".npmrc"),
+    Path(".pypirc"),
+)
 
 
 @dataclass(frozen=True)
@@ -64,14 +82,10 @@ def parse_context_references(message: str) -> list[ContextReference]:
         value = _strip_trailing_punctuation(match.group("value") or "")
         line_start = None
         line_end = None
-        target = value
+        target = _strip_reference_wrappers(value)
 
         if kind == "file":
-            range_match = re.match(r"^(?P<path>.+?):(?P<start>\d+)(?:-(?P<end>\d+))?$", value)
-            if range_match:
-                target = range_match.group("path")
-                line_start = int(range_match.group("start"))
-                line_end = int(range_match.group("end") or range_match.group("start"))
+            target, line_start, line_end = _parse_file_reference_value(value)
 
         refs.append(
             ContextReference(
@@ -128,7 +142,11 @@ async def preprocess_context_references_async(
         return ContextReferenceResult(message=message, original_message=message)
 
     cwd_path = Path(cwd).expanduser().resolve()
-    allowed_root_path = Path(allowed_root).expanduser().resolve() if allowed_root is not None else None
+    # Default to the current working directory so @ references cannot escape
+    # the active workspace unless a caller explicitly widens the root.
+    allowed_root_path = (
+        Path(allowed_root).expanduser().resolve() if allowed_root is not None else cwd_path
+    )
     warnings: list[str] = []
     blocks: list[str] = []
     injected_tokens = 0
@@ -222,6 +240,7 @@ def _expand_file_reference(
     allowed_root: Path | None = None,
 ) -> tuple[str | None, str | None]:
     path = _resolve_path(cwd, ref.target, allowed_root=allowed_root)
+    _ensure_reference_path_allowed(path)
     if not path.exists():
         return f"{ref.raw}: file not found", None
     if not path.is_file():
@@ -248,6 +267,7 @@ def _expand_folder_reference(
     allowed_root: Path | None = None,
 ) -> tuple[str | None, str | None]:
     path = _resolve_path(cwd, ref.target, allowed_root=allowed_root)
+    _ensure_reference_path_allowed(path)
     if not path.exists():
         return f"{ref.raw}: folder not found", None
     if not path.is_dir():
@@ -263,12 +283,16 @@ def _expand_git_reference(
     args: list[str],
     label: str,
 ) -> tuple[str | None, str | None]:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return f"{ref.raw}: git command timed out (30s)", None
     if result.returncode != 0:
         stderr = (result.stderr or "").strip() or "git command failed"
         return f"{ref.raw}: {stderr}", None
@@ -315,6 +339,27 @@ def _resolve_path(cwd: Path, target: str, *, allowed_root: Path | None = None) -
     return resolved
 
 
+def _ensure_reference_path_allowed(path: Path) -> None:
+    from hermes_constants import get_hermes_home
+    home = Path(os.path.expanduser("~")).resolve()
+    hermes_home = get_hermes_home().resolve()
+
+    blocked_exact = {home / rel for rel in _SENSITIVE_HOME_FILES}
+    blocked_exact.add(hermes_home / ".env")
+    blocked_dirs = [home / rel for rel in _SENSITIVE_HOME_DIRS]
+    blocked_dirs.extend(hermes_home / rel for rel in _SENSITIVE_HERMES_DIRS)
+
+    if path in blocked_exact:
+        raise ValueError("path is a sensitive credential file and cannot be attached")
+
+    for blocked_dir in blocked_dirs:
+        try:
+            path.relative_to(blocked_dir)
+        except ValueError:
+            continue
+        raise ValueError("path is a sensitive credential or internal Hermes path and cannot be attached")
+
+
 def _strip_trailing_punctuation(value: str) -> str:
     stripped = value.rstrip(TRAILING_PUNCTUATION)
     while stripped.endswith((")", "]", "}")):
@@ -325,6 +370,38 @@ def _strip_trailing_punctuation(value: str) -> str:
             continue
         break
     return stripped
+
+
+def _strip_reference_wrappers(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "`\"'":
+        return value[1:-1]
+    return value
+
+
+def _parse_file_reference_value(value: str) -> tuple[str, int | None, int | None]:
+    quoted_match = re.match(
+        r'^(?P<quote>`|"|\')(?P<path>.+?)(?P=quote)(?::(?P<start>\d+)(?:-(?P<end>\d+))?)?$',
+        value,
+    )
+    if quoted_match:
+        line_start = quoted_match.group("start")
+        line_end = quoted_match.group("end")
+        return (
+            quoted_match.group("path"),
+            int(line_start) if line_start is not None else None,
+            int(line_end or line_start) if line_start is not None else None,
+        )
+
+    range_match = re.match(r"^(?P<path>.+?):(?P<start>\d+)(?:-(?P<end>\d+))?$", value)
+    if range_match:
+        line_start = int(range_match.group("start"))
+        return (
+            range_match.group("path"),
+            line_start,
+            int(range_match.group("end") or range_match.group("start")),
+        )
+
+    return _strip_reference_wrappers(value), None, None
 
 
 def _remove_reference_tokens(message: str, refs: list[ContextReference]) -> str:
@@ -404,8 +481,11 @@ def _rg_files(path: Path, cwd: Path, limit: int) -> list[Path] | None:
             cwd=cwd,
             capture_output=True,
             text=True,
+            timeout=10,
         )
     except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
         return None
     if result.returncode != 0:
         return None

@@ -6,7 +6,6 @@ from pathlib import Path
 from hermes_cli.product_config import (
     load_product_config,
     runtime_backend_policy,
-    runtime_tool_call_parser,
     save_product_config,
 )
 from hermes_cli.product_stack import first_admin_bootstrap_completed, load_first_admin_enrollment_state
@@ -14,29 +13,10 @@ from hermes_cli.setup import print_header, print_info, print_warning, prompt, pr
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
-_MANAGED_TOOL_CALL_PARSERS = [
-    "hermes",
-    "deepseek_v3",
-    "deepseek_v3_1",
-    "glm45",
-    "glm47",
-    "kimi_k2",
-    "llama3_json",
-    "longcat_flash",
-    "mistral",
-    "qwen",
-    "qwen3_coder",
-]
-
-
 def _sanitize_prompt_text(value: str) -> str:
     cleaned = _ANSI_ESCAPE_RE.sub("", value or "")
     cleaned = _CONTROL_CHAR_RE.sub("", cleaned)
     return cleaned.strip()
-
-
-def _managed_tool_call_parsers() -> list[str]:
-    return list(_MANAGED_TOOL_CALL_PARSERS)
 
 
 def setup_product_branding() -> None:
@@ -105,10 +85,9 @@ def setup_product_storage() -> None:
 def setup_product_runtime_backend() -> None:
     product_config = load_product_config()
     current_policy = runtime_backend_policy(product_config)
-    current_parser = runtime_tool_call_parser(product_config)
     print_header("Local Model Backend")
     print_info("Choose how product runtimes should handle local/custom model endpoints.")
-    print_info("Managed backend uses Hermes tool-call parsing and is recommended for local models.")
+    print_info("Use the managed backend only when the selected model endpoint exposes a compatible tool-calling API.")
     choices = [
         "Managed backend for local models (recommended)",
         "Standard backend always",
@@ -126,20 +105,8 @@ def setup_product_runtime_backend() -> None:
         2: "managed",
     }[selected]
     product_config.setdefault("runtime", {})["backend_policy"] = backend_policy
-    if backend_policy != "standard":
-        parser_choices = _managed_tool_call_parsers()
-        if current_parser not in parser_choices:
-            parser_choices.append(current_parser)
-        parser_choices = sorted(dict.fromkeys(parser_choices))
-        default_parser = current_parser if current_parser in parser_choices else "hermes"
-        default_parser_idx = parser_choices.index(default_parser)
-        print_info("Choose the tool-call parser for managed local-model runtimes.")
-        print_info("Hermes is the recommended default unless you are testing a model-specific format.")
-        parser_idx = prompt_choice("Managed tool-call parser:", parser_choices, default_parser_idx)
-        product_config.setdefault("runtime", {})["tool_call_parser"] = parser_choices[parser_idx]
     save_product_config(product_config)
     print_info(f"  Runtime backend policy: {backend_policy}")
-    print_info(f"  Managed tool-call parser: {runtime_tool_call_parser(product_config)}")
 
 
 def setup_product_bootstrap_identity() -> bool:

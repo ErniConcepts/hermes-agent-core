@@ -66,7 +66,6 @@ DEFAULT_PRODUCT_CONFIG: Dict[str, Any] = {
         "host_access_host": "host.docker.internal",
         "pids_limit": 256,
         "backend_policy": "auto_local_managed",
-        "tool_call_parser": "hermes",
     },
     "storage": {
         "root": "product",
@@ -240,10 +239,3 @@ def runtime_backend_policy(config: Dict[str, Any] | None = None) -> str:
     return configured
 
 
-def runtime_tool_call_parser(config: Dict[str, Any] | None = None) -> str:
-    product_config = config or load_product_config()
-    runtime_cfg = product_config.get("runtime", {})
-    configured = str(runtime_cfg.get("tool_call_parser", "hermes")).strip()
-    if not configured:
-        raise ValueError("product runtime.tool_call_parser must not be empty")
-    return configured

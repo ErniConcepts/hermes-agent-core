@@ -6,7 +6,13 @@ description: "Authoritative reference for Hermes built-in tools, grouped by tool
 
 # Built-in Tools Reference
 
-This page documents the built-in Hermes tool registry as it exists in code. Availability can still vary by platform, credentials, and enabled toolsets.
+This page documents all 47 built-in tools in the Hermes tool registry, grouped by toolset. Availability varies by platform, credentials, and enabled toolsets.
+
+**Quick counts:** 10 browser tools, 4 file tools, 10 RL tools, 4 Home Assistant tools, 2 terminal tools, 2 web tools, and 15 standalone tools across other toolsets.
+
+:::tip MCP Tools
+In addition to built-in tools, Hermes can load tools dynamically from MCP servers. MCP tools appear with a server-name prefix (e.g., `github_create_issue` for the `github` MCP server). See [MCP Integration](/docs/user-guide/features/mcp) for configuration.
+:::
 
 ## `browser` toolset
 
@@ -14,7 +20,6 @@ This page documents the built-in Hermes tool registry as it exists in code. Avai
 |------|-------------|----------------------|
 | `browser_back` | Navigate back to the previous page in browser history. Requires browser_navigate to be called first. | — |
 | `browser_click` | Click on an element identified by its ref ID from the snapshot (e.g., '@e5'). The ref IDs are shown in square brackets in the snapshot output. Requires browser_navigate and browser_snapshot to be called first. | — |
-| `browser_close` | Close the browser session and release resources. Call this when done with browser tasks to free up Browserbase session quota. | — |
 | `browser_console` | Get browser console output and JavaScript errors from the current page. Returns console.log/warn/error/info messages and uncaught JS exceptions. Use this to detect silent JavaScript errors, failed API calls, and application warnings. Requi… | — |
 | `browser_get_images` | Get a list of all images on the current page with their URLs and alt text. Useful for finding images to analyze with the vision tool. Requires browser_navigate to be called first. | — |
 | `browser_navigate` | Navigate to a URL in the browser. Initializes the session and loads the page. Must be called before other browser tools. For simple information retrieval, prefer web_search or web_extract (faster, cheaper). Use browser tools when you need… | — |
@@ -66,14 +71,9 @@ This page documents the built-in Hermes tool registry as it exists in code. Avai
 | `ha_list_entities` | List Home Assistant entities. Optionally filter by domain (light, switch, climate, sensor, binary_sensor, cover, fan, etc.) or by area name (living room, kitchen, bedroom, etc.). | — |
 | `ha_list_services` | List available Home Assistant services (actions) for device control. Shows what actions can be performed on each device type and what parameters they accept. Use this to discover how to control devices found via ha_list_entities. | — |
 
-## `honcho` toolset
-
-| Tool | Description | Requires environment |
-|------|-------------|----------------------|
-| `honcho_conclude` | Write a conclusion about the user back to Honcho's memory. Conclusions are persistent facts that build the user's profile — preferences, corrections, clarifications, project context, or anything the user tells you that should be remembered… | — |
-| `honcho_context` | Ask Honcho a natural language question and get a synthesized answer. Uses Honcho's LLM (dialectic reasoning) — higher cost than honcho_profile or honcho_search. Can query about any peer: the user (default), the AI assistant, or any named p… | — |
-| `honcho_profile` | Retrieve the user's peer card from Honcho — a curated list of key facts about them (name, role, preferences, communication style, patterns). Fast, no LLM reasoning, minimal cost. Use this at conversation start or when you need a quick fact… | — |
-| `honcho_search` | Semantic search over Honcho's stored context about the user. Returns raw excerpts ranked by relevance to your query — no LLM synthesis. Cheaper and faster than honcho_context. Good when you want to find specific past facts and reason over… | — |
+:::note
+**Honcho tools** (`honcho_conclude`, `honcho_context`, `honcho_profile`, `honcho_search`) are no longer built-in. They are available via the Honcho memory provider plugin at `plugins/memory/honcho/`. See [Plugins](../user-guide/features/plugins.md) for installation and usage.
+:::
 
 ## `image_gen` toolset
 
@@ -133,7 +133,7 @@ This page documents the built-in Hermes tool registry as it exists in code. Avai
 | Tool | Description | Requires environment |
 |------|-------------|----------------------|
 | `process` | Manage background processes started with terminal(background=true). Actions: 'list' (show all), 'poll' (check status + new output), 'log' (full output with pagination), 'wait' (block until done or timeout), 'kill' (terminate), 'write' (sen… | — |
-| `terminal` | Execute shell commands on a Linux environment. Filesystem persists between calls. Do NOT use cat/head/tail to read files — use read_file instead. Do NOT use grep/rg/find to search — use search_files instead. Do NOT use ls to list directori… | — |
+| `terminal` | Execute shell commands on a Linux environment. Filesystem persists between calls. Set `background=true` for long-running servers. Set `notify_on_complete=true` (with `background=true`) to get an automatic notification when the process finishes — no polling needed. Do NOT use cat/head/tail — use read_file. Do NOT use grep/rg/find — use search_files. | — |
 
 ## `todo` toolset
 
@@ -151,8 +151,8 @@ This page documents the built-in Hermes tool registry as it exists in code. Avai
 
 | Tool | Description | Requires environment |
 |------|-------------|----------------------|
-| `web_search` | Search the web for information on any topic. Returns up to 5 relevant results with titles, URLs, and descriptions. | PARALLEL_API_KEY or FIRECRAWL_API_KEY or TAVILY_API_KEY |
-| `web_extract` | Extract content from web page URLs. Returns page content in markdown format. Also works with PDF URLs — pass the PDF link directly and it converts to markdown text. Pages under 5000 chars return full markdown; larger pages are LLM-summarized. | PARALLEL_API_KEY or FIRECRAWL_API_KEY or TAVILY_API_KEY |
+| `web_search` | Search the web for information on any topic. Returns up to 5 relevant results with titles, URLs, and descriptions. | EXA_API_KEY or PARALLEL_API_KEY or FIRECRAWL_API_KEY or TAVILY_API_KEY |
+| `web_extract` | Extract content from web page URLs. Returns page content in markdown format. Also works with PDF URLs — pass the PDF link directly and it converts to markdown text. Pages under 5000 chars return full markdown; larger pages are LLM-summarized. | EXA_API_KEY or PARALLEL_API_KEY or FIRECRAWL_API_KEY or TAVILY_API_KEY |
 
 ## `tts` toolset
 
@@ -160,15 +160,4 @@ This page documents the built-in Hermes tool registry as it exists in code. Avai
 |------|-------------|----------------------|
 | `text_to_speech` | Convert text to speech audio. Returns a MEDIA: path that the platform delivers as a voice message. On Telegram it plays as a voice bubble, on Discord/WhatsApp as an audio attachment. In CLI mode, saves to ~/voice-memos/. Voice and provider… | — |
 
-## `vision` toolset
 
-| Tool | Description | Requires environment |
-|------|-------------|----------------------|
-| `vision_analyze` | Analyze images using AI vision. Provides a comprehensive description and answers a specific question about the image content. | — |
-
-## `web` toolset
-
-| Tool | Description | Requires environment |
-|------|-------------|----------------------|
-| `web_extract` | Extract content from web page URLs. Returns page content in markdown format. Also works with PDF URLs (arxiv papers, documents, etc.) — pass the PDF link directly and it converts to markdown text. Pages under 5000 chars return full markdow… | FIRECRAWL_API_KEY |
-| `web_search` | Search the web for information on any topic. Returns up to 5 relevant results with titles, URLs, and descriptions. | FIRECRAWL_API_KEY |

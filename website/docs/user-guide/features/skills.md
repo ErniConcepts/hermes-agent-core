@@ -8,7 +8,9 @@ description: "On-demand knowledge documents — progressive disclosure, agent-ma
 
 Skills are on-demand knowledge documents the agent can load when needed. They follow a **progressive disclosure** pattern to minimize token usage and are compatible with the [agentskills.io](https://agentskills.io/specification) open standard.
 
-All skills live in **`~/.hermes/skills/`** — a single directory that serves as the source of truth. On fresh install, bundled skills are copied from the repo. Hub-installed and agent-created skills also go here. The agent can modify or delete any skill.
+All skills live in **`~/.hermes/skills/`** — the primary directory and source of truth. On fresh install, bundled skills are copied from the repo. Hub-installed and agent-created skills also go here. The agent can modify or delete any skill.
+
+You can also point Hermes at **external skill directories** — additional folders scanned alongside the local one. See [External Skill Directories](#external-skill-directories) below.
 
 See also:
 
@@ -65,6 +67,11 @@ metadata:
     category: devops
     fallback_for_toolsets: [web]    # Optional — conditional activation (see below)
     requires_toolsets: [terminal]   # Optional — conditional activation (see below)
+    config:                          # Optional — config.yaml settings
+      - key: my.setting
+        description: "What this controls"
+        default: "value"
+        prompt: "Prompt for setup"
 ---
 
 # Skill Title
@@ -138,6 +145,26 @@ required_environment_variables:
 
 When a missing value is encountered, Hermes asks for it securely only when the skill is actually loaded in the local CLI. You can skip setup and keep using the skill. Messaging surfaces never ask for secrets in chat — they tell you to use `hermes setup` or `~/.hermes/.env` locally instead.
 
+Once set, declared env vars are **automatically passed through** to `execute_code` and `terminal` sandboxes — the skill's scripts can use `$TENOR_API_KEY` directly. For non-skill env vars, use the `terminal.env_passthrough` config option. See [Environment Variable Passthrough](/docs/user-guide/security#environment-variable-passthrough) for details.
+
+### Skill Config Settings
+
+Skills can also declare non-secret config settings (paths, preferences) stored in `config.yaml`:
+
+```yaml
+metadata:
+  hermes:
+    config:
+      - key: wiki.path
+        description: Path to the wiki directory
+        default: "~/wiki"
+        prompt: Wiki directory path
+```
+
+Settings are stored under `skills.config` in your config.yaml. `hermes config migrate` prompts for unconfigured settings, and `hermes config show` displays them. When a skill loads, its resolved config values are injected into the context so the agent knows the configured values automatically.
+
+See [Skill Settings](/docs/user-guide/configuration#skill-settings) and [Creating Skills — Config Settings](/docs/developer-guide/creating-skills#config-settings-configyaml) for details.
+
 ## Skill Directory Structure
 
 ```text
@@ -161,6 +188,47 @@ When a missing value is encountered, Hermes asks for it securely only when the s
 │   └── audit.log
 └── .bundled_manifest              # Tracks seeded bundled skills
 ```
+
+## External Skill Directories
+
+If you maintain skills outside of Hermes — for example, a shared `~/.agents/skills/` directory used by multiple AI tools — you can tell Hermes to scan those directories too.
+
+Add `external_dirs` under the `skills` section in `~/.hermes/config.yaml`:
+
+```yaml
+skills:
+  external_dirs:
+    - ~/.agents/skills
+    - /home/shared/team-skills
+    - ${SKILLS_REPO}/skills
+```
+
+Paths support `~` expansion and `${VAR}` environment variable substitution.
+
+### How it works
+
+- **Read-only**: External dirs are only scanned for skill discovery. When the agent creates or edits a skill, it always writes to `~/.hermes/skills/`.
+- **Local precedence**: If the same skill name exists in both the local dir and an external dir, the local version wins.
+- **Full integration**: External skills appear in the system prompt index, `skills_list`, `skill_view`, and as `/skill-name` slash commands — no different from local skills.
+- **Non-existent paths are silently skipped**: If a configured directory doesn't exist, Hermes ignores it without errors. Useful for optional shared directories that may not be present on every machine.
+
+### Example
+
+```text
+~/.hermes/skills/               # Local (primary, read-write)
+├── devops/deploy-k8s/
+│   └── SKILL.md
+└── mlops/axolotl/
+    └── SKILL.md
+
+~/.agents/skills/               # External (read-only, shared)
+├── my-custom-workflow/
+│   └── SKILL.md
+└── team-conventions/
+    └── SKILL.md
+```
+
+All four skills appear in your skill index. If you create a new skill called `my-custom-workflow` locally, it shadows the external version.
 
 ## Agent-Managed Skills (skill_manage tool)
 
@@ -275,9 +343,12 @@ hermes skills install well-known:https://mintlify.com/docs/.well-known/skills/mi
 
 Hermes can install directly from GitHub repositories and GitHub-based taps. This is useful when you already know the repo/path or want to add your own custom source repo.
 
-- OpenAI skills: [openai/skills](https://github.com/openai/skills)
-- Anthropic skills: [anthropics/skills](https://github.com/anthropics/skills)
-- Example community tap source: [VoltAgent/awesome-agent-skills](https://github.com/VoltAgent/awesome-agent-skills)
+Default taps (browsable without any setup):
+- [openai/skills](https://github.com/openai/skills)
+- [anthropics/skills](https://github.com/anthropics/skills)
+- [VoltAgent/awesome-agent-skills](https://github.com/VoltAgent/awesome-agent-skills)
+- [garrytan/gstack](https://github.com/garrytan/gstack)
+
 - Example:
 
 ```bash
@@ -354,6 +425,10 @@ hermes skills update react   # Update one specific installed hub skill
 ```
 
 This uses the stored source identifier plus the current upstream bundle content hash to detect drift.
+
+:::tip GitHub rate limits
+Skills hub operations use the GitHub API, which has a rate limit of 60 requests/hour for unauthenticated users. If you see rate-limit errors during install or search, set `GITHUB_TOKEN` in your `.env` file to increase the limit to 5,000 requests/hour. The error message includes an actionable hint when this happens.
+:::
 
 ### Slash commands (inside chat)
 

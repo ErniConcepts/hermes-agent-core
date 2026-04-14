@@ -131,15 +131,13 @@ Single-task delegation runs directly without thread pool overhead.
 
 ## Model Override
 
-You can use a different model for subagents — useful for delegating simple tasks to cheaper/faster models:
+You can configure a different model for subagents via `config.yaml` — useful for delegating simple tasks to cheaper/faster models:
 
-```python
-delegate_task(
-    goal="Summarize this README file",
-    context="File at /project/README.md",
-    toolsets=["file"],
-    model="google/gemini-flash-2.0"  # Cheaper model for simple tasks
-)
+```yaml
+# In ~/.hermes/config.yaml
+delegation:
+  model: "google/gemini-flash-2.0"    # Cheaper model for subagents
+  provider: "openrouter"              # Optional: route subagents to a different provider
 ```
 
 If omitted, subagents use the same model as the parent.
@@ -186,7 +184,7 @@ Delegation has a **depth limit of 2** — a parent (depth 0) can spawn children 
 - Subagents **cannot** call: `delegate_task`, `clarify`, `memory`, `send_message`, `execute_code`
 - **Interrupt propagation** — interrupting the parent interrupts all active children
 - Only the final summary enters the parent's context, keeping token usage efficient
-- Subagents inherit the parent's **API key and provider configuration**
+- Subagents inherit the parent's **API key, provider configuration, and credential pool** (enabling key rotation on rate limits)
 
 ## Delegation vs execute_code
 
