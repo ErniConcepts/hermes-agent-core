@@ -9,6 +9,7 @@ from hermes_cli.product_stack import (
     _build_tsidp_env_file,
     bootstrap_first_admin_enrollment,
     bootstrap_product_tailscale_oidc_client,
+    ensure_product_stack_started,
     get_tsidp_compose_path,
     get_tsidp_env_path,
     initialize_product_stack,
@@ -35,6 +36,18 @@ def test_resolve_product_urls_returns_tailnet_only_values(tmp_path, monkeypatch)
     urls = resolve_product_urls(_config())
 
     assert urls["app_base_url"] == "https://device.tail5fd7a5.ts.net"
+    assert urls["issuer_url"] == "https://idp.tail5fd7a5.ts.net"
+
+
+def test_resolve_product_urls_can_use_separate_browser_app_device(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = _config()
+    config["network"]["tailscale"]["app_device_name"] = "windows-device"
+    config["network"]["tailscale"]["app_command_path"] = "/mnt/c/Program Files/Tailscale/tailscale.exe"
+
+    urls = resolve_product_urls(config)
+
+    assert urls["app_base_url"] == "https://windows-device.tail5fd7a5.ts.net"
     assert urls["issuer_url"] == "https://idp.tail5fd7a5.ts.net"
 
 
@@ -104,6 +117,60 @@ def test_build_tsidp_compose_spec_inherits_host_route_mtu(tmp_path, monkeypatch)
     compose = _build_tsidp_compose_spec(_config())
 
     assert compose["networks"]["default"]["driver_opts"]["com.docker.network.driver.mtu"] == "1280"
+
+
+def test_ensure_product_stack_started_waits_for_public_tsidp_issuer(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("HERMES_PRODUCT_TAILSCALE_AUTH_KEY", "tskey-auth-kv")
+    calls: list[str] = []
+
+    monkeypatch.setattr("hermes_cli.product_stack_bootstrap.ensure_product_tsidp_started", lambda config: calls.append("tsidp") or None)
+    monkeypatch.setattr(
+        "hermes_cli.product_stack_bootstrap.sync_running_tsidp_issuer_url",
+        lambda config: calls.append("issuer") or config,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_stack_bootstrap.ensure_product_tailnet_started",
+        lambda config, include_app=True: calls.append(f"tailnet:{include_app}") or [],
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_stack_bootstrap.wait_for_tsidp_ready",
+        lambda config, timeout: calls.append(f"public:{timeout}"),
+    )
+
+    ensure_product_stack_started(_config())
+
+    assert calls == ["tsidp", "issuer", "tailnet:True", "public:45.0"]
+
+
+def test_ensure_product_tailnet_started_uses_browser_app_command(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = _config()
+    config["network"]["tailscale"]["command_path"] = "tailscale"
+    config["network"]["tailscale"]["app_command_path"] = "/mnt/c/Program Files/Tailscale/tailscale.exe"
+    commands: list[list[str]] = []
+
+    def fake_run(command, check, capture_output, text):
+        commands.append(command)
+        return object()
+
+    monkeypatch.setattr("hermes_cli.product_stack_tailscale.subprocess.run", fake_run)
+
+    from hermes_cli.product_stack import ensure_product_tailnet_started
+
+    ensure_product_tailnet_started(config)
+
+    assert commands == [
+        [
+            "/mnt/c/Program Files/Tailscale/tailscale.exe",
+            "serve",
+            "--bg",
+            "--https=443",
+            "http://127.0.0.1:8086",
+        ]
+    ]
+
 
 def test_bootstrap_first_admin_enrollment_creates_one_time_link(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))

@@ -85,22 +85,20 @@ def complete_first_admin_bootstrap(state: dict[str, object]) -> dict[str, object
     if first_admin_bootstrap_completed(current_state):
         return current_state
 
-    while True:
-        print()
-        print_header("Open Bootstrap Link")
-        print_info("Open the one-time bootstrap URL below in your browser.")
-        print_info("Sign in with Tailscale there to create the first admin account.")
-        print_info(f"  Bootstrap URL: {current_state['setup_url']}")
-        prompt("Press Enter after the bootstrap link shows you as signed in")
-        refreshed_state = load_first_admin_enrollment_state() or current_state
-        if first_admin_bootstrap_completed(refreshed_state):
-            claimed_login = str(refreshed_state.get("tailscale_login", "")).strip()
-            if claimed_login:
-                print_success(f"First admin bootstrap completed for {claimed_login}.")
-            else:
-                print_success("First admin bootstrap completed.")
-            return refreshed_state
-        print_warning("Bootstrap is not complete yet. Finish the sign-in flow, then try again.")
+    print()
+    print_header("Open Bootstrap Link")
+    print_info("Open the one-time bootstrap URL below in your browser.")
+    print_info("Sign in with Tailscale there to create the first admin account.")
+    print_info(f"  Bootstrap URL: {current_state['setup_url']}")
+    print_info("After sign-in, return to the Tailnet app URL. Setup does not need to stay open.")
+    return current_state
+
+
+def _pending_bootstrap_url(enrollment_state: dict[str, object], urls: dict[str, str]) -> str:
+    token = str(enrollment_state.get("bootstrap_token", "")).strip()
+    if token:
+        return f"{urls['app_base_url'].rstrip('/')}/bootstrap/{token}"
+    return str(enrollment_state.get("bootstrap_url") or urls["app_base_url"])
 
 
 def print_product_setup_summary() -> None:
@@ -134,7 +132,7 @@ def print_product_setup_summary() -> None:
             print_info("First admin bootstrap:   needs repair")
         else:
             print_info("First admin bootstrap:   pending")
-        print_info(f"First admin sign-in URL: {enrollment_state.get('bootstrap_url') or urls['app_base_url']}")
+        print_info(f"First admin sign-in URL: {_pending_bootstrap_url(enrollment_state, urls)}")
     print_info(f"SOUL template:           {soul_template}")
     print_info(f"Workspace cap:           {workspace_limit_mb / 1024:.1f} GB per user")
     print_info("Hermes agent setup:")

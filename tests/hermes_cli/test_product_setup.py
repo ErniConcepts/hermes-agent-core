@@ -3,8 +3,9 @@ import json
 from argparse import Namespace
 import pytest
 
-from hermes_cli.product_config import load_product_config
+from hermes_cli.product_config import load_product_config, save_product_config
 from hermes_cli.product_setup_tailscale import detect_tailscale_identity
+from hermes_cli.product_setup_bootstrap import _pending_bootstrap_url
 from hermes_cli.product_setup import (
     _configure_tsidp_client_credentials,
     complete_first_admin_bootstrap,
@@ -36,7 +37,7 @@ def test_setup_product_branding_uses_default_name_for_blank_input(tmp_path, monk
     assert config["product"]["brand"]["name"] == "Hermes Core"
 
 
-def test_run_product_setup_branding_section_restarts_app_service(tmp_path, monkeypatch):
+def test_run_product_setup_branding_section_restarts_app_service_without_full_summary(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     calls: list[str] = []
 
@@ -50,7 +51,7 @@ def test_run_product_setup_branding_section_restarts_app_service(tmp_path, monke
 
     run_product_setup_wizard(run_args)
 
-    assert calls == ["branding", "reload", "summary"]
+    assert calls == ["branding", "reload"]
 
 
 def test_run_product_setup_full_wizard_restarts_app_service_after_branding(tmp_path, monkeypatch):
@@ -118,6 +119,8 @@ def test_setup_product_runtime_backend_skips_parser_for_standard_mode(tmp_path, 
     assert config["runtime"]["backend_policy"] == "standard"
     assert config["runtime"]["tool_call_parser"] == "hermes"
     assert called["value"] is False
+
+
 
 
 def test_setup_product_bootstrap_identity_does_not_require_manual_login_value(tmp_path, monkeypatch):
@@ -304,40 +307,88 @@ def test_setup_product_tailscale_keeps_existing_secrets_on_blank_input(tmp_path,
     assert config["network"]["tailscale"]["command_path"] == "tailscale"
 
 
-def test_detect_tailscale_identity_falls_back_to_windows_tailscale_in_wsl(monkeypatch):
+def test_setup_product_tailscale_uses_windows_browser_endpoint_in_wsl(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
-    monkeypatch.setattr("hermes_cli.product_setup_tailscale.os.path.exists", lambda path: True)
+    prompts = iter(["tskey-auth-kv", "tskey-api-kv"])
+    seen: dict[str, str] = {}
+    config = load_product_config()
+    config["network"]["tailscale"]["command_path"] = "/mnt/c/Program Files/Tailscale/tailscale.exe"
+    save_product_config(config)
+
+    def fake_detect(command_path):
+        seen["command_path"] = command_path
+        return {
+            "device_name": "laptop",
+            "tailnet_name": "tail5fd7a5",
+            "api_tailnet_name": "example.github",
+            "command_path": command_path,
+        }
+
+    monkeypatch.setattr("hermes_cli.product_setup_tailscale.detect_tailscale_identity", fake_detect)
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_tailscale._detect_wsl_browser_tailscale_identity",
+        lambda saved_command_path: {
+            "device_name": "windows-laptop",
+            "tailnet_name": "tail5fd7a5",
+            "api_tailnet_name": "example.github",
+            "command_path": saved_command_path,
+        },
+    )
+    monkeypatch.setattr("hermes_cli.product_setup_tailscale.prompt", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr("hermes_cli.product_setup_tailscale.save_env_value_secure", lambda key, value: None)
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_tailscale.ensure_tsidp_policy",
+        lambda config=None: {"changed": False, "backup_path": "", "tailnet": "example.github"},
+    )
+
+    setup_product_tailscale()
+
+    assert seen["command_path"] == "tailscale"
+    config = load_product_config()
+    assert config["network"]["tailscale"]["command_path"] == "tailscale"
+    assert config["network"]["tailscale"]["app_command_path"] == "/mnt/c/Program Files/Tailscale/tailscale.exe"
+    assert config["network"]["tailscale"]["app_device_name"] == "windows-laptop"
+    assert config["network"]["tailscale"]["browser_host_mode"] == "windows_tailscale"
+
+
+def test_detect_tailscale_identity_does_not_fall_back_to_windows_tailscale_in_wsl(monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    calls: list[str] = []
 
     linux_status = {
         "Self": {"HostName": "LaptopJannis", "DNSName": ""},
         "CurrentTailnet": None,
         "MagicDNSSuffix": "",
     }
-    windows_status = {
-        "Self": {"HostName": "LaptopJannis", "DNSName": "laptopjannis.cheetah-vernier.ts.net."},
-        "CurrentTailnet": {"Name": "jannis-cmd.github"},
-        "MagicDNSSuffix": "cheetah-vernier.ts.net",
-    }
 
     def fake_run(args, check, capture_output, text):
         command = args[0]
-        payload = linux_status if command == "tailscale" else windows_status
+        calls.append(command)
 
         class Result:
-            stdout = json.dumps(payload)
+            stdout = json.dumps(linux_status)
 
         return Result()
 
     monkeypatch.setattr("hermes_cli.product_setup_tailscale.subprocess.run", fake_run)
 
-    detected = detect_tailscale_identity("tailscale")
+    with pytest.raises(RuntimeError) as exc_info:
+        detect_tailscale_identity("tailscale")
 
-    assert detected == {
-        "device_name": "laptopjannis",
-        "tailnet_name": "cheetah-vernier",
-        "api_tailnet_name": "jannis-cmd.github",
-        "command_path": "/mnt/c/Program Files/Tailscale/tailscale.exe",
-    }
+    assert calls == ["tailscale"]
+    assert "CurrentTailnet" in str(exc_info.value)
+
+
+def test_detect_tailscale_identity_rejects_explicit_windows_tailscale_in_wsl(monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        detect_tailscale_identity("/mnt/c/Program Files/Tailscale/tailscale.exe")
+
+    message = str(exc_info.value)
+    assert "must use the Tailscale daemon inside WSL" in message
+    assert "sudo tailscale up" in message
 
 
 def test_setup_product_tailscale_reports_missing_tailscale_cleanly(tmp_path, monkeypatch):
@@ -373,29 +424,12 @@ def test_first_admin_bootstrap_completed_requires_active_admin(tmp_path, monkeyp
     assert first_admin_bootstrap_completed() is False
 
 
-def test_complete_first_admin_bootstrap_waits_until_admin_exists(monkeypatch):
+def test_complete_first_admin_bootstrap_prints_link_without_waiting(monkeypatch):
     prompts: list[tuple[str, str | None]] = []
-    states = iter(
-        [
-            {
-                "setup_url": "https://device.tail5fd7a5.ts.net/bootstrap/token-1",
-                "first_admin_login_seen": False,
-            },
-            {
-                "setup_url": "https://device.tail5fd7a5.ts.net/bootstrap/token-1",
-                "first_admin_login_seen": True,
-                "tailscale_login": "admin@example.com",
-            },
-        ]
-    )
 
     monkeypatch.setattr(
         "hermes_cli.product_setup_bootstrap.prompt",
         lambda question, default=None, password=False: prompts.append((question, default)) or "",
-    )
-    monkeypatch.setattr(
-        "hermes_cli.product_setup_bootstrap.load_first_admin_enrollment_state",
-        lambda: next(states),
     )
     monkeypatch.setattr(
         "hermes_cli.product_setup_bootstrap.first_admin_bootstrap_completed",
@@ -409,5 +443,17 @@ def test_complete_first_admin_bootstrap_waits_until_admin_exists(monkeypatch):
         }
     )
 
-    assert final_state["tailscale_login"] == "admin@example.com"
-    assert prompts == [("Press Enter after the bootstrap link shows you as signed in", None), ("Press Enter after the bootstrap link shows you as signed in", None)]
+    assert final_state["setup_url"] == "https://device.tail5fd7a5.ts.net/bootstrap/token-1"
+    assert prompts == []
+
+
+def test_pending_bootstrap_url_uses_current_app_url_for_saved_token():
+    url = _pending_bootstrap_url(
+        {
+            "bootstrap_token": "token-1",
+            "bootstrap_url": "https://old-device.tail5fd7a5.ts.net/bootstrap/token-1",
+        },
+        {"app_base_url": "https://new-device.tail5fd7a5.ts.net"},
+    )
+
+    assert url == "https://new-device.tail5fd7a5.ts.net/bootstrap/token-1"

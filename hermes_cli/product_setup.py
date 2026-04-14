@@ -82,7 +82,6 @@ def run_product_setup_wizard(args: Any) -> None:
         else:
             raise SystemExit(f"Unknown product setup section: {section}")
         _reload_app_after_setup()
-        _print_product_setup_summary()
         return
     if getattr(args, "from_install", False):
         _print_install_handoff()

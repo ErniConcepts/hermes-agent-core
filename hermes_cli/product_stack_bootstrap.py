@@ -369,6 +369,7 @@ def ensure_product_stack_started(config: dict[str, Any] | None = None) -> subpro
     result = ensure_product_tsidp_started(product_config)
     product_config = sync_running_tsidp_issuer_url(product_config)
     ensure_product_tailnet_started(product_config, include_app=True)
+    wait_for_tsidp_ready(product_config, READY_TIMEOUT_SECONDS)
     return result if result is not None else subprocess.CompletedProcess([], 0, "", "")
 
 
