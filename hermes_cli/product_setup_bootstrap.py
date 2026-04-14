@@ -142,6 +142,12 @@ def print_product_setup_summary() -> None:
     print()
     print_header("Next Steps")
     print_info(f"{product_name} is now installed and reachable on your tailnet.")
+    if first_admin_bootstrap_completed(enrollment_state):
+        print_info("First admin bootstrap is complete.")
+    else:
+        print_info("First, create the first admin account:")
+        print_info(f"  Open bootstrap URL: {_pending_bootstrap_url(enrollment_state, urls)}")
+        print_info("  Sign in with Tailscale. The first authenticated account becomes admin.")
     print_info("To finish the full Hermes setup, prepare these items first:")
     print_info("  a model endpoint and model name")
     print_info("  any API keys your chosen model provider needs")

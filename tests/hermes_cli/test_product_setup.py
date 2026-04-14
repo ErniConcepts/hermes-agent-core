@@ -5,7 +5,7 @@ import pytest
 
 from hermes_cli.product_config import load_product_config, save_product_config
 from hermes_cli.product_setup_tailscale import detect_tailscale_identity
-from hermes_cli.product_setup_bootstrap import _pending_bootstrap_url
+from hermes_cli.product_setup_bootstrap import _pending_bootstrap_url, print_product_setup_summary
 from hermes_cli.product_setup import (
     _configure_tsidp_client_credentials,
     complete_first_admin_bootstrap,
@@ -457,3 +457,30 @@ def test_pending_bootstrap_url_uses_current_app_url_for_saved_token():
     )
 
     assert url == "https://new-device.tail5fd7a5.ts.net/bootstrap/token-1"
+
+def test_product_setup_summary_starts_next_steps_with_bootstrap_link(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_bootstrap.resolve_product_urls",
+        lambda config=None: {
+            "app_base_url": "https://device.tail5fd7a5.ts.net",
+            "issuer_url": "https://idp.tail5fd7a5.ts.net",
+        },
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_setup_bootstrap.load_first_admin_enrollment_state",
+        lambda: {
+            "bootstrap_token": "token-1",
+            "bootstrap_url": "https://old-device.tail5fd7a5.ts.net/bootstrap/token-1",
+            "first_admin_login_seen": False,
+        },
+    )
+    monkeypatch.setattr("hermes_cli.product_setup_bootstrap.first_admin_bootstrap_completed", lambda state=None: False)
+
+    print_product_setup_summary()
+
+    output = capsys.readouterr().out
+    next_steps = output.split("Next Steps", 1)[1]
+    assert "First, create the first admin account:" in next_steps
+    assert "Open bootstrap URL: https://device.tail5fd7a5.ts.net/bootstrap/token-1" in next_steps
+    assert next_steps.index("Open bootstrap URL") < next_steps.index("hermes setup model")
