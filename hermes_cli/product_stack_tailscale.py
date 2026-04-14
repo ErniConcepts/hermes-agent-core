@@ -39,6 +39,15 @@ def tailscale_host(config: dict[str, object]) -> str:
     return f"{required_tailnet_value(config, 'device_name')}.{required_tailnet_value(config, 'tailnet_name')}.ts.net"
 
 
+def tailscale_app_device_name(config: dict[str, object]) -> str:
+    value = str(tailscale_config(config).get("app_device_name", "")).strip().lower()
+    return value or required_tailnet_value(config, "device_name")
+
+
+def tailscale_app_host(config: dict[str, object]) -> str:
+    return f"{tailscale_app_device_name(config)}.{required_tailnet_value(config, 'tailnet_name')}.ts.net"
+
+
 def tailscale_https_port(config: dict[str, object], key: str, default: int) -> int:
     raw_value = tailscale_config(config).get(key, default)
     try:
@@ -96,8 +105,17 @@ def tailscale_command_path(config: dict[str, object]) -> str:
     return configured
 
 
-def tailscale_serve_command(config: dict[str, object], *, https_port: int, target_url: str) -> list[str]:
-    return [tailscale_command_path(config), "serve", "--bg", f"--https={https_port}", target_url]
+def tailscale_app_command_path(config: dict[str, object]) -> str:
+    configured = str(tailscale_config(config).get("app_command_path", "")).strip()
+    if configured:
+        return configured
+    return tailscale_command_path(config)
+
+
+def tailscale_serve_command(
+    config: dict[str, object], *, https_port: int, target_url: str, command_path: str | None = None
+) -> list[str]:
+    return [command_path or tailscale_command_path(config), "serve", "--bg", f"--https={https_port}", target_url]
 
 
 def format_tailscale_serve_error(exc: subprocess.CalledProcessError, *, command: list[str]) -> str:
@@ -121,7 +139,7 @@ def ensure_product_tailnet_stopped(config: dict[str, object] | None = None) -> l
     product_config = config or load_product_config()
     if not tailscale_enabled(product_config):
         return []
-    command = [tailscale_command_path(product_config), "serve", "reset"]
+    command = [tailscale_app_command_path(product_config), "serve", "reset"]
     try:
         return [subprocess.run(command, check=True, capture_output=True, text=True)]
     except subprocess.CalledProcessError as exc:
@@ -134,7 +152,7 @@ def resolve_product_urls(config: dict[str, object] | None = None) -> dict[str, s
         raise ValueError("Tailscale must be enabled for this product install")
     network = product_config.get("network", {})
     app_port = int(network.get("app_port", 8086))
-    tailnet_host = tailscale_host(product_config)
+    tailnet_host = tailscale_app_host(product_config)
     app_https_port = tailscale_https_port(product_config, "app_https_port", 443)
     tailnet_app_base_url = format_https_url(tailnet_host, app_https_port)
     tailnet_issuer_url = configured_tsidp_issuer_url(product_config)
@@ -170,7 +188,12 @@ def ensure_product_tailnet_started(
     commands: list[list[str]] = []
     if include_app:
         commands.append(
-            tailscale_serve_command(product_config, https_port=app_https_port, target_url=f"http://127.0.0.1:{app_port}")
+            tailscale_serve_command(
+                product_config,
+                https_port=app_https_port,
+                target_url=f"http://127.0.0.1:{app_port}",
+                command_path=tailscale_app_command_path(product_config),
+            )
         )
     results: list[subprocess.CompletedProcess[str]] = []
     for command in commands:

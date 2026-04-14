@@ -93,6 +93,26 @@ Hermes-native configuration remains on the upstream CLI surface:
 - Invited users claim accounts through one-time invite links on the Tailnet URL.
 - No localhost or LAN login surface is part of the product contract.
 
+### WSL Browser Mode Contract
+
+WSL installs remain Linux service installs. The WSL distro's Tailscale daemon is the authoritative service identity for setup, policy detection, and server-side product behavior.
+
+When setup is running under WSL and the Windows Tailscale CLI is available on the same tailnet, the product may record a separate browser-facing app endpoint:
+
+- `network.tailscale.device_name` and `command_path` stay tied to the WSL Tailscale node.
+- `network.tailscale.app_device_name` and `app_command_path` may point to the Windows Tailscale node.
+- `network.tailscale.browser_host_mode: windows_tailscale` enables WSL browser compatibility behavior.
+
+In that mode:
+
+- app URLs, bootstrap URLs, invite URLs, and OIDC redirect URIs use the Windows Tailscale app device
+- app `tailscale serve` is configured through the Windows Tailscale CLI
+- `auth.issuer_url` remains the real `tsidp` issuer
+- server-side OIDC discovery, token exchange, userinfo, and token validation still use the real issuer
+- only the browser-facing OIDC authorization surface is proxied through the app at `/_hermes/tsidp/...`
+
+This proxy is a WSL compatibility path, not a general alternative issuer or LAN auth surface. Normal Linux installs should not set `browser_host_mode`.
+
 ## Admin User Management Contract
 
 - Product users are fork-managed records keyed to Tailscale identity.

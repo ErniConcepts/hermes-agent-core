@@ -66,6 +66,27 @@ def _oidc_metadata():
     )
 
 
+def _wsl_browser_product_config():
+    config = _product_config()
+    config["auth"]["issuer_url"] = "https://idp-2.tail5fd7a5.ts.net"
+    config["network"]["tailscale"]["device_name"] = "wsl-device"
+    config["network"]["tailscale"]["app_device_name"] = "windows-device"
+    config["network"]["tailscale"]["app_command_path"] = "/mnt/c/Program Files/Tailscale/tailscale.exe"
+    config["network"]["tailscale"]["browser_host_mode"] = "windows_tailscale"
+    return config
+
+
+def _wsl_browser_urls():
+    urls = _urls()
+    urls["app_base_url"] = "https://windows-device.tail5fd7a5.ts.net"
+    urls["oidc_callback_url"] = "https://windows-device.tail5fd7a5.ts.net/api/auth/oidc/callback"
+    urls["tailnet_host"] = "windows-device.tail5fd7a5.ts.net"
+    urls["tailnet_app_base_url"] = "https://windows-device.tail5fd7a5.ts.net"
+    urls["issuer_url"] = "https://idp-2.tail5fd7a5.ts.net"
+    urls["tailnet_issuer_url"] = "https://idp-2.tail5fd7a5.ts.net"
+    return urls
+
+
 def _configure_app(monkeypatch, tmp_path, claims):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("HERMES_PRODUCT_SESSION_SECRET", "session-secret")
@@ -104,6 +125,63 @@ def _configure_app(monkeypatch, tmp_path, claims):
             "tailscale_login": tailscale_login,
             "first_admin_login_seen": True,
         },
+    )
+
+
+def test_product_app_login_proxies_tsidp_authorize_for_wsl_browser_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_PRODUCT_SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("HERMES_PRODUCT_TSIDP_OIDC_CLIENT_SECRET", "oidc-secret")
+    monkeypatch.setattr("hermes_cli.product_app_support.enforce_product_auth_rate_limit", lambda *args, **kwargs: None)
+    monkeypatch.setattr("hermes_cli.product_app_support.load_product_config", _wsl_browser_product_config)
+    monkeypatch.setattr("hermes_cli.product_app_support.resolve_product_urls", lambda config=None: _wsl_browser_urls())
+    monkeypatch.setattr(
+        "hermes_cli.product_app_support.load_product_oidc_client_settings",
+        lambda config=None: ProductOIDCClientSettings(
+            issuer_url="https://idp-2.tail5fd7a5.ts.net",
+            client_id="hermes-core",
+            client_secret="secret",
+            redirect_uri="https://windows-device.tail5fd7a5.ts.net/api/auth/oidc/callback",
+            scopes=("openid", "profile", "email"),
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.product_app_support.discover_product_oidc_provider_metadata",
+        lambda settings: ProductOIDCProviderMetadata(
+            issuer="https://idp-2.tail5fd7a5.ts.net",
+            authorization_endpoint="https://idp-2.tail5fd7a5.ts.net/authorize",
+            token_endpoint="https://idp-2.tail5fd7a5.ts.net/token",
+            userinfo_endpoint="https://idp-2.tail5fd7a5.ts.net/userinfo",
+            jwks_uri="https://idp-2.tail5fd7a5.ts.net/jwks",
+        ),
+    )
+    from hermes_cli.product_app import create_product_app
+
+    client = TestClient(create_product_app(), base_url="https://windows-device.tail5fd7a5.ts.net")
+    response = client.get("/api/auth/login", follow_redirects=False)
+
+    assert response.status_code == 307
+    location = response.headers["location"]
+    assert location.startswith("https://windows-device.tail5fd7a5.ts.net/_hermes/tsidp/authorize?")
+    assert "redirect_uri=https%3A%2F%2Fwindows-device.tail5fd7a5.ts.net%2Fapi%2Fauth%2Foidc%2Fcallback" in location
+
+
+def test_tsidp_browser_proxy_rewrites_relative_redirects(monkeypatch):
+    monkeypatch.setattr("hermes_cli.product_app_support.resolve_product_urls", lambda config=None: _wsl_browser_urls())
+    from hermes_cli.product_app_support import _rewrite_tsidp_browser_location
+
+    assert (
+        _rewrite_tsidp_browser_location("/login", _wsl_browser_product_config())
+        == "https://windows-device.tail5fd7a5.ts.net/_hermes/tsidp/login"
+    )
+
+
+def test_tsidp_browser_proxy_strips_upstream_cookie_domain():
+    from hermes_cli.product_app_support import _rewrite_tsidp_set_cookie
+
+    assert (
+        _rewrite_tsidp_set_cookie("sid=1; Path=/; Domain=idp-2.tail5fd7a5.ts.net; HttpOnly")
+        == "sid=1; Path=/; HttpOnly"
     )
 
 

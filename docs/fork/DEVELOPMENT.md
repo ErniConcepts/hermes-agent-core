@@ -125,6 +125,16 @@ Current `tsidp` setup behavior:
 - setup keeps the saved client on reruns by default
 - setup falls back to the manual `tsidp` UI prompt only when automatic registration is unavailable or rejected
 
+Current WSL setup behavior:
+
+- service detection must use the WSL distro's Linux `tailscale` CLI
+- setup must not silently replace the WSL service identity with the Windows Tailscale identity
+- when Windows Tailscale is available on the same tailnet, setup may store it separately as the browser-facing app endpoint
+- `resolve_product_urls()` should use the optional app device only for browser-facing app URLs and OIDC redirect URIs
+- app `tailscale serve` should use the optional app command only when configured
+- browser OIDC authorization may be proxied through `/_hermes/tsidp/...` in `browser_host_mode: windows_tailscale`
+- server-side OIDC discovery, registration, token exchange, userinfo, and validation should continue to use the real `tsidp` issuer
+
 ## Maintainer Workflow
 
 For any change:

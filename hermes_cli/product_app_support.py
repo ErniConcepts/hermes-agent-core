@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from ipaddress import ip_address
 import logging
 import secrets
@@ -10,8 +10,9 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from hermes_cli.config import get_env_value
@@ -27,6 +28,7 @@ from hermes_cli.product_chat_transport import (
 from hermes_cli.product_config import load_product_config
 from hermes_cli.product_invites import list_pending_product_signup_invites
 from hermes_cli.product_oidc import (
+    ProductOIDCProviderMetadata,
     create_oidc_login_request,
     discover_product_oidc_provider_metadata,
     exchange_product_oidc_code,
@@ -68,6 +70,17 @@ logger = logging.getLogger(__name__)
 _SESSION_REFRESH_TTL_SECONDS = 30
 _AUTH_RATE_LIMIT_WINDOW_SECONDS = 300.0
 _AUTH_RATE_LIMIT_MAX_REQUESTS = 10
+_TSIDP_BROWSER_PROXY_PREFIX = "/_hermes/tsidp"
+_HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
 
 
 @dataclass(frozen=True)
@@ -183,6 +196,97 @@ def _validate_product_oidc_id_token(*args, **kwargs):
 
 def _fetch_product_oidc_userinfo(*args, **kwargs):
     return fetch_product_oidc_userinfo(*args, **kwargs)
+
+
+def _tsidp_browser_proxy_enabled(config: dict[str, Any]) -> bool:
+    tailscale = config.get("network", {}).get("tailscale", {})
+    if not isinstance(tailscale, dict):
+        return False
+    return str(tailscale.get("browser_host_mode", "")).strip() == "windows_tailscale"
+
+
+def _tsidp_browser_proxy_base_url(config: dict[str, Any]) -> str:
+    return resolve_product_urls(config)["app_base_url"].rstrip("/") + _TSIDP_BROWSER_PROXY_PREFIX
+
+
+def _tsidp_browser_proxy_url_for_endpoint(endpoint_url: str, config: dict[str, Any]) -> str:
+    issuer_url = str(config.get("auth", {}).get("issuer_url", "")).strip().rstrip("/")
+    endpoint = str(endpoint_url or "").strip()
+    if not issuer_url:
+        return endpoint
+    if endpoint == issuer_url:
+        suffix = "/"
+    elif endpoint.startswith(f"{issuer_url}/"):
+        suffix = endpoint[len(issuer_url) :]
+    else:
+        return endpoint
+    if not suffix.startswith("/"):
+        suffix = f"/{suffix}"
+    return f"{_tsidp_browser_proxy_base_url(config)}{suffix}"
+
+
+def _metadata_for_browser_login(
+    metadata: ProductOIDCProviderMetadata,
+    config: dict[str, Any],
+) -> ProductOIDCProviderMetadata:
+    if not _tsidp_browser_proxy_enabled(config):
+        return metadata
+    return replace(
+        metadata,
+        authorization_endpoint=_tsidp_browser_proxy_url_for_endpoint(metadata.authorization_endpoint, config),
+    )
+
+
+def _rewrite_tsidp_browser_location(location: str, config: dict[str, Any]) -> str:
+    if str(location or "").startswith("/"):
+        return f"{_tsidp_browser_proxy_base_url(config)}{location}"
+    rewritten = _tsidp_browser_proxy_url_for_endpoint(location, config)
+    return rewritten or location
+
+
+def _rewrite_tsidp_set_cookie(value: str) -> str:
+    parts = [part for part in str(value or "").split(";") if not part.strip().lower().startswith("domain=")]
+    return ";".join(parts)
+
+
+def _tsidp_proxy_target_url(config: dict[str, Any], path: str, query: str) -> str:
+    issuer_url = str(config.get("auth", {}).get("issuer_url", "")).strip().rstrip("/")
+    if not issuer_url:
+        raise HTTPException(status_code=404, detail="tsidp issuer is not configured")
+    clean_path = "/" + str(path or "").lstrip("/")
+    target_url = f"{issuer_url}{clean_path}"
+    if query:
+        target_url = f"{target_url}?{query}"
+    return target_url
+
+
+async def _proxy_tsidp_browser_request(request: Request, path: str) -> Response:
+    product_config = load_product_config()
+    if not _tsidp_browser_proxy_enabled(product_config):
+        raise HTTPException(status_code=404, detail="tsidp browser proxy is not enabled")
+
+    target_url = _tsidp_proxy_target_url(product_config, path, request.url.query)
+    request_headers = {
+        key: value
+        for key, value in request.headers.items()
+        if key.lower() not in _HOP_BY_HOP_HEADERS and key.lower() not in {"host", "content-length"}
+    }
+    request_headers["host"] = urlparse(str(product_config.get("auth", {}).get("issuer_url", ""))).netloc
+    body = await request.body()
+    async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
+        upstream = await client.request(request.method, target_url, headers=request_headers, content=body)
+
+    response = Response(content=upstream.content, status_code=upstream.status_code)
+    for key, value in upstream.headers.multi_items():
+        lowered = key.lower()
+        if lowered in _HOP_BY_HOP_HEADERS or lowered in {"content-length", "content-encoding"}:
+            continue
+        if lowered == "location":
+            value = _rewrite_tsidp_browser_location(value, product_config)
+        elif lowered == "set-cookie":
+            value = _rewrite_tsidp_set_cookie(value)
+        response.raw_headers.append((key.lower().encode("latin-1"), value.encode("latin-1")))
+    return response
 
 
 def _session_secret() -> str:
@@ -582,6 +686,7 @@ def _session_response_payload(request: Request) -> ProductSessionResponse:
 def _start_tsidp_login(request: Request, context: ProductAppContext) -> RedirectResponse:
     settings = load_product_oidc_client_settings(config=context.product_config)
     metadata = discover_product_oidc_provider_metadata(settings)
+    metadata = _metadata_for_browser_login(metadata, context.product_config)
     login_request = create_oidc_login_request(settings, metadata)
     request.session["oidc_pending"] = {
         "state": login_request["state"],

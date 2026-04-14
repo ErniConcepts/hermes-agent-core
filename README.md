@@ -72,8 +72,37 @@ Current deployment assumptions:
 - Docker is used for bundled `tsidp` and per-user runtimes
 - `runsc` is the preferred runtime isolation path
 - Tailscale is required
+- WSL installs use Tailscale inside the WSL distro for services; when Windows Tailscale is available, setup can use it only as the browser-facing app endpoint
 - the Tailnet URL is the only supported browser/login origin
 - `tsidp` is the only product auth provider
+
+## WSL Browser Mode
+
+Normal Linux installs use the Linux host's Tailscale client for service detection, `tailscale serve`, and the Tailnet app URL. The browser reaches that app URL and the bundled `tsidp` tsnet node directly on the tailnet.
+
+WSL is different because Windows browsers can fail to complete HTTPS handshakes against Tailscale Serve endpoints hosted inside the WSL distro, even when the WSL distro itself can reach those endpoints. To keep Linux behavior unchanged while making the Windows browser flow work, setup uses a split WSL mode when both Tailscale clients are available:
+
+- WSL Tailscale remains the service identity.
+  - `hermes-core setup` detects the WSL node with the Linux `tailscale` CLI.
+  - The bundled `tsidp` service still joins the tailnet as its own tsnet node.
+  - Server-side OIDC discovery, token exchange, and userinfo validation still target the real `tsidp` issuer.
+- Windows Tailscale becomes only the browser-facing app endpoint.
+  - Setup records `network.tailscale.app_device_name`, `app_command_path`, and `browser_host_mode: windows_tailscale`.
+  - The Tailnet app URL and first-admin bootstrap links use the Windows Tailscale device name.
+  - `tailscale serve` for the app is configured through the Windows Tailscale CLI and proxies to the WSL app port.
+- Browser OIDC authorization is proxied through the app host.
+  - The browser is sent to `https://<windows-device>.<tailnet>.ts.net/_hermes/tsidp/...`.
+  - The product app forwards that narrow browser login surface to the real `tsidp` issuer.
+  - Callback, token exchange, and identity validation continue to use the normal product OIDC flow.
+
+Operationally, WSL setup still requires Tailscale to be installed, running, and signed in inside the WSL distro:
+
+```bash
+sudo systemctl enable --now tailscaled || sudo service tailscaled start
+sudo tailscale up
+```
+
+Windows Tailscale is optional. If it is not available or is signed into a different tailnet, setup falls back to the normal Linux-style WSL app URL.
 
 ## Quick Install
 

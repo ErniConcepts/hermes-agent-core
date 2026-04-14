@@ -17,6 +17,7 @@ from hermes_cli.product_app_support import (
     _pending_bootstrap_token,
     _pending_invite_identity,
     _pending_invite_token,
+    _proxy_tsidp_browser_request,
     _provider_user_session_payload,
     _require_csrf,
     _resolve_session_user,
@@ -36,6 +37,11 @@ from hermes_cli.product_users import claim_product_user_from_invite
 
 
 def register_auth_routes(app: FastAPI, context: object) -> None:
+    @app.api_route("/_hermes/tsidp", methods=["GET", "POST", "OPTIONS", "HEAD"])
+    @app.api_route("/_hermes/tsidp/{path:path}", methods=["GET", "POST", "OPTIONS", "HEAD"])
+    async def tsidp_browser_proxy(request: Request, path: str = "") -> object:
+        return await _proxy_tsidp_browser_request(request, path)
+
     @app.get("/api/auth/login")
     def auth_login(request: Request) -> RedirectResponse:
         _enforce_auth_rate_limit(request, "login")
